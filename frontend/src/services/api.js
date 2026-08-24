@@ -1,6 +1,6 @@
 const API_URL = import.meta.env.VITE_API_URL !== undefined 
   ? import.meta.env.VITE_API_URL 
-  : (import.meta.env.PROD ? "" : "http://127.0.0.1:8000")
+  : (import.meta.env.PROD ? "" : "https://mplads-ai-optimized.onrender.com")
 
 async function request(endpoint, options = {}) {
   const url = `${API_URL}${endpoint}`
