@@ -8,6 +8,7 @@ function TopBar({
   searchQuery,
   onSearchChange,
   onSearchSubmit,
+  isMobile,
 }) {
   const navigation = [
     "Overview",
@@ -21,25 +22,14 @@ function TopBar({
 
   return (
     <header
-      className="
-        fixed left-0 right-0 top-0 z-40
-        h-[78px]
-        border-b border-[#c5c6ce]
-        bg-[#f9f9ff]
-        text-[#151c27]
-        dark:border-[#374151]
-        dark:bg-[#111827]
-        dark:text-[#f3f4f6]
-        transition-colors duration-300
-      "
+      className="fixed left-0 right-0 top-0 z-40 h-[64px] lg:h-[78px] border-b border-[#c5c6ce] bg-[#f9f9ff] text-[#151c27] dark:border-[#374151] dark:bg-[#111827] dark:text-[#f3f4f6] transition-colors duration-300"
     >
 
       <div
         className={`
-          flex h-full items-center gap-5
-          px-5
-          transition-all duration-300
-          ${collapsed ? "pl-16" : "pl-60"}
+flex h-full items-center gap-2 sm:gap-5 px-3 sm:px-5 transition-all duration-300 ${
+          isMobile ? "pl-3" : collapsed ? "pl-16" : "pl-60"
+        }
         `}
       >
 
@@ -63,7 +53,7 @@ function TopBar({
         </button>
 
         {/* NAVIGATION */}
-        <nav className="hidden items-center gap-7 lg:flex">
+        <nav className="hidden items-center gap-5 xl:gap-7 xl:flex">
 
           {navigation.map((item) => {
 
@@ -128,7 +118,7 @@ function TopBar({
 
           <input
             type="text"
-            placeholder="Search by ID, name, state, or district..."
+            placeholder={isMobile ? "Search..." : "Search by ID, name, state, or district..."}
             value={searchQuery}
             onChange={(e) => onSearchChange && onSearchChange(e.target.value)}
             onKeyDown={(e) => {
@@ -199,8 +189,7 @@ function TopBar({
               onSearchSubmit && onSearchSubmit(searchQuery.trim())
             }
           }}
-          className=
-            "flex h-10 items-center gap-2 whitespace-nowrap rounded bg-[#031632] px-4 text-xs font-bold text-white transition hover:bg-[#1a2b48] dark:bg-blue-600 dark:hover:bg-blue-700"
+          className="flex h-10 shrink-0 items-center gap-2 whitespace-nowrap rounded bg-[#031632] px-3 sm:px-4 text-xs font-bold text-white transition hover:bg-[#1a2b48] dark:bg-blue-600 dark:hover:bg-blue-700"
           title="Search"
         >
           🔍
@@ -233,17 +222,7 @@ function TopBar({
 
         {/* NOTIFICATION */}
         <button
-          className="
-            flex h-9 w-9 shrink-0
-            items-center justify-center
-            rounded-full
-            text-lg
-            transition
-
-            hover:bg-[#e2e8f8]
-
-            dark:hover:bg-[#1f2937]
-          "
+          className="hidden sm:flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-lg transition hover:bg-[#e2e8f8] dark:hover:bg-[#1f2937]"
           aria-label="Notifications"
         >
           🔔

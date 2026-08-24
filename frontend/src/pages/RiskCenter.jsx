@@ -123,8 +123,8 @@ function RiskCenter({ drillDownParams, onClearDrillDown }) {
   const totalPages = Math.max(1, Math.ceil(totalCount / rowsPerPage))
 
   return (
-    <div className="min-h-screen bg-[#f9f9ff] p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-[#f3f4f6]">
-      <div className="mx-auto max-w-[1440px] space-y-6">
+    <div className="min-h-screen bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-[#f3f4f6]">
+      <div className="mx-auto max-w-[1440px] space-y-4 sm:space-y-6">
 
         {/* HEADER */}
         <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
@@ -267,8 +267,8 @@ function RiskCenter({ drillDownParams, onClearDrillDown }) {
         </div>
 
         {/* SORT ROW */}
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Sort by:</span>
+        <div className="flex flex-wrap items-center gap-1.5 sm:gap-3">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Sort:</span>
           {[
             { value: "risk_score", label: "Risk Score" },
             { value: "sanctioned_amount", label: "Sanctioned" },
@@ -315,7 +315,8 @@ function RiskCenter({ drillDownParams, onClearDrillDown }) {
             </div>
           ) : (
             <>
-              <div className="overflow-x-auto">
+              {/* DESKTOP TABLE */}
+              <div className="hidden lg:block overflow-x-auto">
                 <table className="w-full min-w-[900px]">
                   <thead>
                     <tr className="border-b border-gray-200 bg-gray-50 text-left text-xs font-bold uppercase tracking-wider text-gray-700 dark:border-gray-700 dark:bg-[#172033] dark:text-gray-300">
@@ -335,48 +336,50 @@ function RiskCenter({ drillDownParams, onClearDrillDown }) {
                       <tr key={a.project_id} className="cursor-pointer transition hover:bg-blue-50/40 dark:hover:bg-[#253247]" onClick={() => handleOpenDetail(a)}>
                         <td className="p-4">
                           <span className="font-mono text-xs font-bold text-gray-400">#{a.project_id}</span>
-                          <p className="max-w-[250px] truncate text-sm font-semibold text-gray-900 dark:text-white" title={a.project_name}>
-                            {a.project_name || "Unnamed"}
-                          </p>
+                          <p className="max-w-[250px] truncate text-sm font-semibold text-gray-900 dark:text-white" title={a.project_name}>{a.project_name || "Unnamed"}</p>
                           <p className="text-xs text-gray-500">{a.project_type || "General"}</p>
                         </td>
-                        <td className="p-4 text-xs">
-                          <p className="font-semibold">{a.state || "N/A"}</p>
-                          <p className="text-gray-500">{a.district || "N/A"}</p>
-                        </td>
+                        <td className="p-4 text-xs"><p className="font-semibold">{a.state || "N/A"}</p><p className="text-gray-500">{a.district || "N/A"}</p></td>
                         <td className="p-4 text-right font-mono text-xs">{formatMoney(a.sanctioned_amount)}</td>
                         <td className="p-4 text-right font-mono text-xs">{formatMoney(a.expenditure)}</td>
                         <td className="p-4 text-center font-mono text-xs font-bold">{a.completion_percentage}%</td>
                         <td className="p-4 text-center">
-                          <span className={`rounded px-2 py-0.5 text-xs font-bold ${
-                            a.risk_level === "High" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
-                            : a.risk_level === "Medium" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
-                            : a.risk_level === "Low" ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300"
-                            : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300"
-                          }`}>
-                            {a.risk_level}
-                          </span>
+                          <span className={`rounded px-2 py-0.5 text-xs font-bold ${a.risk_level === "High" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300" : a.risk_level === "Medium" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300" : a.risk_level === "Low" ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300" : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300"}`}>{a.risk_level}</span>
                         </td>
                         <td className="p-4 text-center font-mono text-sm font-bold">{a.risk_score}</td>
-                        <td className="p-4 text-center">
-                          {a.ml_anomaly ? (
-                            <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">ML</span>
-                          ) : (
-                            <span className="text-gray-300">—</span>
-                          )}
-                        </td>
-                        <td className="p-4 text-center">
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleOpenDetail(a) }}
-                            className="rounded p-1 text-gray-600 hover:bg-gray-200 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700"
-                          >
-                            👁
-                          </button>
-                        </td>
+                        <td className="p-4 text-center">{a.ml_anomaly ? <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">ML</span> : <span className="text-gray-300">—</span>}</td>
+                        <td className="p-4 text-center"><button onClick={(e) => { e.stopPropagation(); handleOpenDetail(a) }} className="rounded p-1 text-gray-600 hover:bg-gray-200 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700">👁</button></td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+              </div>
+
+              {/* MOBILE CARD VIEW */}
+              <div className="lg:hidden divide-y divide-gray-200 dark:divide-gray-700/60">
+                {anomalies.map((a) => (
+                  <div key={a.project_id} className="p-4 cursor-pointer transition hover:bg-blue-50/40 dark:hover:bg-[#253247]" onClick={() => handleOpenDetail(a)}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-mono text-[10px] font-bold text-gray-400">#{a.project_id}</span>
+                          <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${a.risk_level === "High" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300" : a.risk_level === "Medium" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300" : "bg-gray-100 text-gray-600 dark:bg-gray-700"}`}>{a.risk_level}</span>
+                          {a.ml_anomaly && <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">ML</span>}
+                        </div>
+                        <p className="mt-1 truncate font-semibold text-sm text-gray-900 dark:text-white" title={a.project_name}>{a.project_name || "Unnamed"}</p>
+                        <p className="text-[11px] text-gray-500">{a.state || "N/A"}{a.district ? `, ${a.district}` : ""}</p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="font-mono text-sm font-bold">Score {a.risk_score}</p>
+                      </div>
+                    </div>
+                    <div className="mt-2 grid grid-cols-3 gap-x-3 gap-y-1 text-xs">
+                      <div className="flex justify-between"><span className="text-gray-500">Sanctioned</span><span className="font-mono font-semibold">{formatMoney(a.sanctioned_amount)}</span></div>
+                      <div className="flex justify-between"><span className="text-gray-500">Spent</span><span className="font-mono font-semibold">{formatMoney(a.expenditure)}</span></div>
+                      <div className="flex justify-between"><span className="text-gray-500">Progress</span><span className="font-mono font-semibold">{a.completion_percentage}%</span></div>
+                    </div>
+                  </div>
+                ))}
               </div>
               <div className="flex flex-wrap items-center justify-between gap-4 border-t border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#172033]">
                 <span className="text-xs text-gray-600 dark:text-gray-400">
@@ -409,8 +412,8 @@ function RiskCenter({ drillDownParams, onClearDrillDown }) {
 
       {/* DETAIL MODAL */}
       {selectedAnomaly && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-2xs" onClick={() => setSelectedAnomaly(null)}>
-          <div onClick={(e) => e.stopPropagation()} className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-[#1f2937]">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 sm:p-4 backdrop-blur-2xs" onClick={() => setSelectedAnomaly(null)}>
+          <div onClick={(e) => e.stopPropagation()} className="flex max-h-[90vh] sm:max-h-[85vh] w-full sm:max-w-2xl flex-col rounded-t-2xl sm:rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-[#1f2937]">
             <div className="flex items-start justify-between border-b border-gray-200 p-5 dark:border-gray-700">
               <div>
                 <div className="flex items-center gap-2">

@@ -1,3 +1,38 @@
 @import "tailwindcss";
 
 @custom-variant dark (&:where(.dark, .dark *));
+
+/* Responsive utilities */
+html {
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Smooth scrolling on mobile */
+@media (max-width: 1023px) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+/* Ensure adequate tap targets on mobile inputs/buttons */
+@media (max-width: 1023px) {
+  input, select, textarea {
+    min-height: 40px;
+  }
+}
+
+/* Prevent text overflow in tables */
+table td, table th {
+  white-space: nowrap;
+}
+table td:first-child, table td:nth-child(2) {
+  white-space: normal;
+}
+
+/* Ensure modals don't overflow on small screens */
+@media (max-width: 639px) {
+  .max-h-\[85vh\] {
+    max-height: 90vh;
+  }
+}

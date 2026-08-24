@@ -92,8 +92,8 @@ function Overview({ darkMode, onDrillDown }) {
 
   if (loading) {
     return (
-      <div className={`min-h-screen p-6 ${pageClasses}`}>
-        <h1 className="text-3xl font-bold">Executive Overview</h1>
+      <div className={`min-h-screen p-4 sm:p-6 ${pageClasses}`}>
+        <h1 className="text-xl sm:text-2xl md:text-3xl font-bold">Executive Overview</h1>
         <div className={`mt-6 rounded-xl border p-12 text-center ${cardClasses}`}>
           <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent" />
           <p className={`mt-3 font-medium ${mutedText}`}>Loading live MPLADS intelligence from backend...</p>
@@ -103,24 +103,24 @@ function Overview({ darkMode, onDrillDown }) {
   }
 
   return (
-    <div className={`min-h-screen p-6 transition-colors duration-200 ${pageClasses}`}>
+    <div className={`min-h-screen p-4 sm:p-6 transition-colors duration-200 ${pageClasses}`}>
       {/* HEADER */}
-      <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+      <div className="mb-4 sm:mb-6 flex flex-col gap-3 sm:gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Executive Overview</h1>
-          <p className={`mt-2 text-base ${mutedText}`}>
+          <h1 className="text-xl sm:text-2xl md:text-3xl font-bold">Executive Overview</h1>
+          <p className={`mt-1 sm:mt-2 text-sm sm:text-base ${mutedText}`}>
             AI-driven monitoring of MPLADS allocations, physical progress, and financial anomalies.
           </p>
         </div>
 
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-2 sm:gap-3">
           <button
             onClick={() => window.print()}
-            className={`rounded-lg border px-5 py-2.5 text-sm font-semibold transition hover:opacity-80 ${cardClasses}`}
+            className={`rounded-lg border px-3 sm:px-5 py-2 sm:py-2.5 text-xs sm:text-sm font-semibold transition hover:opacity-80 ${cardClasses}`}
           >
             ↓ Export Overview
           </button>
-          <div className="flex items-center gap-2 rounded-lg bg-blue-500/10 px-4 py-2 text-xs font-bold text-blue-600 dark:text-blue-300">
+          <div className="flex items-center gap-2 rounded-lg bg-blue-500/10 px-3 sm:px-4 py-1.5 sm:py-2 text-xs font-bold text-blue-600 dark:text-blue-300">
             <span>●</span> Live Backend Data
           </div>
         </div>
@@ -174,7 +174,7 @@ function Overview({ darkMode, onDrillDown }) {
               <p className={`text-xs font-bold uppercase tracking-wider ${mutedText}`}>
                 TOTAL MONITORED WORKS
               </p>
-              <h2 className="mt-3 text-3xl font-bold font-mono">
+              <h2 className="mt-3 text-2xl sm:text-3xl font-bold font-mono">
                 {totalWorks.toLocaleString("en-IN")}
               </h2>
             </div>
@@ -194,8 +194,8 @@ function Overview({ darkMode, onDrillDown }) {
               <p className={`text-xs font-bold uppercase tracking-wider ${mutedText}`}>
                 SANCTIONED ALLOCATION
               </p>
-              <h2 className="mt-3 text-3xl font-bold font-mono">
-                ₹{formatCrore(sanctionedAmount)} <span className="text-base font-sans text-gray-500 font-normal">Cr</span>
+              <h2 className="mt-3 text-xl sm:text-2xl md:text-3xl font-bold font-mono">
+                ₹{formatCrore(sanctionedAmount)} <span className="text-sm sm:text-base font-sans text-gray-500 font-normal">Cr</span>
               </h2>
             </div>
             <div className="rounded-xl bg-amber-500/10 p-3 text-2xl">
@@ -214,8 +214,8 @@ function Overview({ darkMode, onDrillDown }) {
               <p className={`text-xs font-bold uppercase tracking-wider ${mutedText}`}>
                 CUMULATIVE EXPENDITURE
               </p>
-              <h2 className="mt-3 text-3xl font-bold font-mono">
-                ₹{formatCrore(expenditure)} <span className="text-base font-sans text-gray-500 font-normal">Cr</span>
+              <h2 className="mt-3 text-xl sm:text-2xl md:text-3xl font-bold font-mono">
+                ₹{formatCrore(expenditure)} <span className="text-sm sm:text-base font-sans text-gray-500 font-normal">Cr</span>
               </h2>
             </div>
             <div className="rounded-xl bg-purple-500/10 p-3 text-2xl">
@@ -234,7 +234,7 @@ function Overview({ darkMode, onDrillDown }) {
               <p className={`text-xs font-bold uppercase tracking-wider ${mutedText}`}>
                 HIGH-RISK ANOMALIES
               </p>
-              <h2 className="mt-3 text-3xl font-bold font-mono text-red-500">
+              <h2 className="mt-3 text-2xl sm:text-3xl font-bold font-mono text-red-500">
                 {highRiskWorks.toLocaleString("en-IN")}
               </h2>
             </div>
@@ -269,11 +269,11 @@ function Overview({ darkMode, onDrillDown }) {
               const pct = (st.total_projects / maxProjectsInState) * 100
               return (
                 <div key={st.state} className="rounded-lg p-2 transition hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer" onClick={() => onDrillDown && onDrillDown("Projects", { state: st.state })}>
-                  <div className="mb-1.5 flex items-center justify-between text-xs">
+                  <div className="mb-1.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 text-xs">
                     <span className="font-bold text-gray-900 dark:text-white">
                       #{idx + 1} {st.state}
                     </span>
-                    <div className="flex items-center gap-4 font-mono">
+                    <div className="flex items-center gap-3 sm:gap-4 font-mono flex-wrap">
                       <span>₹{formatCrore(st.total_sanctioned_amount)} Cr</span>
                       <span className="font-bold text-blue-600 dark:text-blue-400">
                         {st.total_projects.toLocaleString("en-IN")} works

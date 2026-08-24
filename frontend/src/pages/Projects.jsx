@@ -223,8 +223,8 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
   }
 
   return (
-    <div className="min-h-screen bg-[#f9f9ff] p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-gray-100">
-      <div className="mx-auto max-w-[1440px] space-y-6">
+    <div className="min-h-screen bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-gray-100">
+      <div className="mx-auto max-w-[1440px] space-y-4 sm:space-y-6">
 
         {/* GLOBAL SEARCH CONTEXT BANNER */}
         {globalSearchApplied && keyword && (
@@ -346,8 +346,8 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
           </div>
 
           {/* SORT ROW */}
-          <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-gray-100 pt-3 dark:border-gray-700/60">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Sort by:</span>
+          <div className="mt-4 flex flex-wrap items-center gap-1.5 sm:gap-3 border-t border-gray-100 pt-3 dark:border-gray-700/60">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Sort:</span>
             {[
               { value: "", label: "Default" },
               { value: "id", label: "Project ID" },
@@ -396,14 +396,14 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
             <div className="flex gap-2">
               <button
                 type="submit"
-                className="rounded-lg bg-[#031632] px-5 py-2 text-xs font-bold uppercase tracking-wider text-white shadow-2xs transition hover:bg-[#1a2b48] dark:bg-blue-600 dark:hover:bg-blue-700"
+                className="rounded-lg bg-[#031632] px-4 sm:px-5 py-2 text-xs font-bold uppercase tracking-wider text-white shadow-2xs transition hover:bg-[#1a2b48] dark:bg-blue-600 dark:hover:bg-blue-700"
               >
-                Search Projects
+                Search
               </button>
               <button
                 type="button"
                 onClick={handleResetFilters}
-                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-xs font-bold uppercase tracking-wider text-gray-700 shadow-2xs transition hover:bg-gray-50 dark:border-gray-600 dark:bg-[#111827] dark:text-gray-200 dark:hover:bg-gray-800"
+                className="rounded-lg border border-gray-300 bg-white px-3 sm:px-4 py-2 text-xs font-bold uppercase tracking-wider text-gray-700 shadow-2xs transition hover:bg-gray-50 dark:border-gray-600 dark:bg-[#111827] dark:text-gray-200 dark:hover:bg-gray-800"
               >
                 Reset
               </button>
@@ -429,6 +429,8 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
           ) : (
             <>
               <div className="overflow-x-auto">
+                {/* DESKTOP TABLE */}
+                <div className="hidden lg:block overflow-x-auto">
                 <table className="w-full min-w-[900px]">
                   <thead>
                     <tr className="border-b border-gray-200 bg-gray-50 text-left text-xs font-bold uppercase tracking-wider text-gray-700 dark:border-gray-700 dark:bg-[#172033] dark:text-gray-300">
@@ -509,19 +511,71 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
                         </tr>
                       )
                     })}
-
-                    {projects.length === 0 && (
-                      <tr>
-                        <td colSpan="9" className="p-12 text-center text-xs text-gray-500 dark:text-gray-400">
-                          No projects matched the search filters.
-                        </td>
-                      </tr>
-                    )}
                   </tbody>
                 </table>
+                </div>
+
+                {/* MOBILE CARD VIEW */}
+                <div className="lg:hidden divide-y divide-gray-200 dark:divide-gray-700/60">
+                  {projects.map((proj) => {
+                    const riskBadge = getRiskScoreBadge(proj)
+                    return (
+                      <div
+                        key={proj.id}
+                        onClick={() => handleOpenDetail(proj)}
+                        className="p-4 cursor-pointer transition hover:bg-blue-50/40 dark:hover:bg-[#253247]"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-mono text-[10px] font-bold text-gray-400">#{proj.id}</span>
+                              <span className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-bold ${riskBadge.badge}`}>
+                                {riskBadge.icon} {riskBadge.label}
+                              </span>
+                              <span className="rounded-md border border-gray-200 bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200">
+                                {proj.status || "Ongoing"}
+                              </span>
+                            </div>
+                            <p className="mt-1 truncate font-semibold text-sm text-gray-900 dark:text-white" title={proj.project_name}>
+                              {proj.project_name || "Unnamed Project"}
+                            </p>
+                            <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                              {proj.district || ""}{proj.district && proj.state ? ", " : ""}{proj.state || "N/A"} • {proj.project_type || "General"}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <input
+                              type="checkbox"
+                              checked={compareIds.includes(proj.id)}
+                              onChange={(e) => handleToggleCompare(e, proj.id)}
+                              onClick={(e) => e.stopPropagation()}
+                              className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            />
+                          </div>
+                        </div>
+                        <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                          <div className="flex justify-between">
+                            <span className="text-gray-500 dark:text-gray-400">Sanctioned</span>
+                            <span className="font-mono font-semibold text-gray-900 dark:text-gray-200">{formatMoney(proj.sanctioned_amount)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-500 dark:text-gray-400">Spent</span>
+                            <span className="font-mono font-semibold text-gray-900 dark:text-gray-200">{formatMoney(proj.expenditure)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {projects.length === 0 && (
+                  <div className="p-12 text-center text-xs text-gray-500 dark:text-gray-400">
+                    No projects matched the search filters.
+                  </div>
+                )}
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-4 border-t border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#172033]">
+              <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-4 border-t border-gray-200 bg-gray-50 p-3 sm:p-4 dark:border-gray-700 dark:bg-[#172033]">
                 <div className="flex items-center gap-3">
                   <span className="text-xs text-gray-600 dark:text-gray-400">
                   Showing <strong>{totalCount === 0 ? 0 : (currentPage - 1) * rowsPerPage + 1}</strong> to{" "}
@@ -605,8 +659,8 @@ function ComparisonModal({ projectIds, onClose, onRemove }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-2xs" onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} className="flex max-h-[85vh] w-full max-w-4xl flex-col rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-[#1f2937]">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 sm:p-4 backdrop-blur-2xs" onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} className="flex max-h-[90vh] sm:max-h-[85vh] w-full sm:max-w-4xl flex-col rounded-t-2xl sm:rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-[#1f2937]">
         <div className="flex items-start justify-between border-b border-gray-200 p-5 dark:border-gray-700">
           <div>
             <h3 className="text-lg font-bold text-gray-900 dark:text-white">Project Comparison</h3>

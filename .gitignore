@@ -6,3 +6,6 @@ frontend/.env
 .freebuff/
 __pycache__/
 *.pyc
+*.db-shm
+*.db-wal
+*.db-journal

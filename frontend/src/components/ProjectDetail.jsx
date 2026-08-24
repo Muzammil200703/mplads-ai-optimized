@@ -122,7 +122,7 @@ function ProjectDetail({ projectId, onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-2xs transition-opacity" onClick={onClose}>
-      <div className="absolute right-0 top-0 h-full w-[560px] max-w-[92vw] overflow-y-auto border-l border-gray-200 bg-white p-6 text-gray-900 shadow-2xl dark:border-gray-700 dark:bg-[#1f2937] dark:text-white" onClick={(e) => e.stopPropagation()}>
+      <div className="absolute right-0 top-0 h-full w-full sm:w-[560px] max-w-[92vw] overflow-y-auto border-l border-gray-200 bg-white p-4 sm:p-6 text-gray-900 shadow-2xl dark:border-gray-700 dark:bg-[#1f2937] dark:text-white" onClick={(e) => e.stopPropagation()}>
 
         {/* Header */}
         <div className="flex items-start justify-between">

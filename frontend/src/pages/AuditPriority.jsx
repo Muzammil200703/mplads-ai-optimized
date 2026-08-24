@@ -88,8 +88,8 @@ function AuditPriority() {
   const totalPages = Math.max(1, Math.ceil(totalCount / rowsPerPage))
 
   return (
-    <div className="min-h-screen bg-[#f9f9ff] p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-[#f3f4f6]">
-      <div className="mx-auto max-w-[1440px] space-y-6">
+    <div className="min-h-screen bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-[#f3f4f6]">
+      <div className="mx-auto max-w-[1440px] space-y-4 sm:space-y-6">
         <div>
           <h2 className="text-2xl font-bold text-[#031632] dark:text-white">Audit Priority Queue</h2>
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
@@ -178,7 +178,8 @@ function AuditPriority() {
             <div className="p-16 text-center text-sm text-gray-500">No audit priorities match the current filters.</div>
           ) : (
             <>
-              <div className="overflow-x-auto">
+              {/* DESKTOP TABLE */}
+              <div className="hidden lg:block overflow-x-auto">
                 <table className="w-full min-w-[1000px]">
                   <thead>
                     <tr className="border-b border-gray-200 bg-gray-50 text-left text-xs font-bold uppercase tracking-wider text-gray-700 dark:border-gray-700 dark:bg-[#172033] dark:text-gray-300">
@@ -227,7 +228,36 @@ function AuditPriority() {
                   </tbody>
                 </table>
               </div>
-              <div className="flex flex-wrap items-center justify-between gap-4 border-t border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#172033]">
+
+              {/* MOBILE CARD VIEW */}
+              <div className="lg:hidden divide-y divide-gray-200 dark:divide-gray-700/60">
+                {priorities.map((p) => (
+                  <div key={p.project_id} className="p-4 cursor-pointer transition hover:bg-blue-50/40 dark:hover:bg-[#253247]" onClick={() => handleOpenDetail(p)}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[10px] font-bold text-gray-400">#{p.priority_rank}</span>
+                          <span className="font-mono text-[10px] font-bold text-gray-400">#{p.project_id}</span>
+                          <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${p.risk_level === "High" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300" : p.risk_level === "Medium" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300" : "bg-gray-100 text-gray-600 dark:bg-gray-700"}`}>{p.risk_level}</span>
+                        </div>
+                        <p className="mt-1 truncate font-semibold text-sm" title={p.project_name}>{p.project_name || "Unnamed"}</p>
+                        <p className="text-[11px] text-gray-500">{p.state || "N/A"}{p.district ? `, ${p.district}` : ""}</p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="font-mono text-sm font-bold">{p.risk_score}</p>
+                        <p className="text-[10px] text-red-600 dark:text-red-400 font-semibold">{p.primary_anomaly}</p>
+                      </div>
+                    </div>
+                    <div className="mt-2 grid grid-cols-3 gap-x-3 gap-y-1 text-xs">
+                      <div className="flex justify-between"><span className="text-gray-500">Sanctioned</span><span className="font-mono font-semibold">{formatMoney(p.sanctioned_amount)}</span></div>
+                      <div className="flex justify-between"><span className="text-gray-500">Spent</span><span className="font-mono font-semibold">{formatMoney(p.expenditure)}</span></div>
+                      <div className="flex justify-between"><span className="text-gray-500">Progress</span><span className="font-mono font-semibold">{p.completion_percentage}%</span></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-4 border-t border-gray-200 bg-gray-50 p-3 sm:p-4 dark:border-gray-700 dark:bg-[#172033]">
                 <span className="text-xs text-gray-600 dark:text-gray-400">
                   Showing {totalCount === 0 ? 0 : (currentPage - 1) * rowsPerPage + 1} to {Math.min(currentPage * rowsPerPage, totalCount)} of <strong>{totalCount.toLocaleString("en-IN")}</strong>
                 </span>

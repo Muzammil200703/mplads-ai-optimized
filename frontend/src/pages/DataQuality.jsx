@@ -95,8 +95,8 @@ function DataQuality() {
   const categories = [...new Set(issues.map((i) => i.category))]
 
   return (
-    <div className="min-h-screen bg-[#f9f9ff] p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-[#f3f4f6]">
-      <div className="mx-auto max-w-[1440px] space-y-6">
+    <div className="min-h-screen bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-[#f3f4f6]">
+      <div className="mx-auto max-w-[1440px] space-y-4 sm:space-y-6">
 
         {/* HEADER */}
         <div>
@@ -215,8 +215,8 @@ function DataQuality() {
 
       {/* INSPECT MODAL */}
       {selectedIssue && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-2xs" onClick={() => setSelectedIssue(null)}>
-          <div onClick={(e) => e.stopPropagation()} className="flex max-h-[80vh] w-full max-w-3xl flex-col rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-[#1f2937]">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 sm:p-4 backdrop-blur-2xs" onClick={() => setSelectedIssue(null)}>
+          <div onClick={(e) => e.stopPropagation()} className="flex max-h-[90vh] sm:max-h-[80vh] w-full sm:max-w-3xl flex-col rounded-t-2xl sm:rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-[#1f2937]">
             <div className="flex items-start justify-between border-b border-gray-200 p-5 dark:border-gray-700">
               <div>
                 <h3 className="text-lg font-bold text-gray-900 dark:text-white">

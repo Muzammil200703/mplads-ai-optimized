@@ -84,8 +84,8 @@ function StateIntelligence({ onNavigateToProjects }) {
   ]
 
   return (
-    <div className="min-h-screen bg-[#f9f9ff] p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-[#f3f4f6]">
-      <div className="mx-auto max-w-[1440px] space-y-6">
+    <div className="min-h-screen bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-[#f3f4f6]">
+      <div className="mx-auto max-w-[1440px] space-y-4 sm:space-y-6">
         <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
           <div>
             <h2 className="text-2xl font-bold text-[#031632] dark:text-white">State Intelligence</h2>
@@ -97,7 +97,7 @@ function StateIntelligence({ onNavigateToProjects }) {
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="Search state..."
-            className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 md:w-64 dark:border-gray-600 dark:bg-[#1f2937] dark:text-white"
+            className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 sm:w-64 dark:border-gray-600 dark:bg-[#1f2937] dark:text-white"
           />
         </div>
 
@@ -106,8 +106,8 @@ function StateIntelligence({ onNavigateToProjects }) {
         )}
 
         {/* Sort Controls */}
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Sort by:</span>
+        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Sort:</span>
           {[
             { value: "total_projects", label: "Works" },
             { value: "total_sanctioned_amount", label: "Sanctioned" },
@@ -134,7 +134,8 @@ function StateIntelligence({ onNavigateToProjects }) {
 
         {/* Table */}
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xs dark:border-gray-700 dark:bg-[#1f2937]">
-          <div className="overflow-x-auto">
+          {/* DESKTOP TABLE */}
+          <div className="hidden lg:block overflow-x-auto">
             <table className="w-full min-w-[1100px]">
               <thead>
                 <tr className="border-b border-gray-200 bg-gray-50 text-left text-xs font-bold uppercase tracking-wider text-gray-700 dark:border-gray-700 dark:bg-[#172033] dark:text-gray-300">
@@ -176,9 +177,36 @@ function StateIntelligence({ onNavigateToProjects }) {
                       ) : <span className="text-gray-300">0</span>}
                     </td>
                   </tr>
-                ))}
+                )                )}
               </tbody>
             </table>
+          </div>
+
+          {/* MOBILE CARD VIEW */}
+          <div className="lg:hidden divide-y divide-gray-200 dark:divide-gray-700/60">
+            {filteredStates.map((s) => (
+              <div
+                key={s.state}
+                className="p-4 cursor-pointer transition hover:bg-blue-50/40 dark:hover:bg-[#253247]"
+                onClick={() => onNavigateToProjects && onNavigateToProjects(s.state)}
+              >
+                <div className="flex items-start justify-between">
+                  <p className="font-semibold text-sm">{s.state}</p>
+                  <div className="flex items-center gap-1.5">
+                    {s.high_risk_projects > 0 && <span className="rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-red-700 dark:bg-red-950 dark:text-red-300">{s.high_risk_projects} High</span>}
+                    {s.ml_anomaly_projects > 0 && <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">{s.ml_anomaly_projects} ML</span>}
+                  </div>
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                  <div className="flex justify-between"><span className="text-gray-500">Works</span><span className="font-mono font-bold">{s.total_projects.toLocaleString("en-IN")}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">Completed</span><span className="font-mono font-bold text-green-600 dark:text-green-400">{s.completed_projects.toLocaleString("en-IN")}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">Sanctioned</span><span className="font-mono font-semibold">{formatMoney(s.total_sanctioned_amount)}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">Expenditure</span><span className="font-mono font-semibold">{formatMoney(s.total_expenditure)}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">Utilization</span><span className="font-mono font-bold">{s.utilization_percentage}%</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">Avg Progress</span><span className="font-mono">{s.average_completion_percentage}%</span></div>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 

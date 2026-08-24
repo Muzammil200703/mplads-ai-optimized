@@ -119,8 +119,8 @@ function Reports() {
   }
 
   return (
-    <div className="min-h-screen bg-[#f9f9ff] p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-[#f3f4f6]">
-      <div className="mx-auto max-w-[1440px] space-y-6">
+    <div className="min-h-screen bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-[#f3f4f6]">
+      <div className="mx-auto max-w-[1440px] space-y-4 sm:space-y-6">
         <div>
           <h2 className="text-2xl font-bold text-[#031632] dark:text-white">
             Audit Reports & Data Export
