@@ -34,7 +34,7 @@ function TopBar({
 
   return (
     <header
-      className="fixed left-0 right-0 top-0 z-40 h-[64px] lg:h-[72px] border-b border-[#c5c6ce] bg-[#f9f9ff] text-[#151c27] dark:border-[#374151] dark:bg-[#111827] dark:text-[#f3f4f6] transition-colors duration-300 overflow-hidden"
+      className="fixed left-0 right-0 top-0 z-[70] h-[64px] lg:h-[72px] border-b border-[#c5c6ce] bg-[#f9f9ff] text-[#151c27] dark:border-[#374151] dark:bg-[#111827] dark:text-[#f3f4f6] transition-colors duration-300 overflow-hidden"
     >
 
       <div

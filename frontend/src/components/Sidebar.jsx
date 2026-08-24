@@ -68,7 +68,7 @@ function Sidebar({
   return (
     <aside
       className={`
-        fixed left-0 top-0 z-50 hidden h-screen flex-col overflow-hidden
+        fixed left-0 top-0 z-30 hidden h-screen flex-col overflow-hidden
         border-r border-[#c5c6ce]
         bg-[#f9f9ff] text-[#151c27]
         dark:border-[#374151] dark:bg-[#111827] dark:text-[#f3f4f6]
