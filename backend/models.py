@@ -14,10 +14,12 @@ class Project(Base):
     expenditure = Column(Float, index=True)
     completion_percentage = Column(Float, index=True)
     status = Column(String, index=True)
+    fy = Column(String, index=True)
 
     __table_args__ = (
         Index("idx_project_state_dist", "state", "district"),
         Index("idx_project_state_status", "state", "status"),
+        Index("idx_proj_fy", "fy"),
     )
 
 

@@ -8,7 +8,7 @@ function formatMoney(value) {
   return `₹${number.toLocaleString("en-IN")}`
 }
 
-function StateIntelligence({ onNavigateToProjects }) {
+function StateIntelligence({ onNavigateToProjects, fy }) {
   const [states, setStates] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
@@ -20,7 +20,7 @@ function StateIntelligence({ onNavigateToProjects }) {
     async function load() {
       try {
         setLoading(true)
-        const data = await getStateIntelligence()
+        const data = await getStateIntelligence(fy ? { fy } : {})
         if (Array.isArray(data)) setStates(data)
       } catch (err) {
         console.error("State intelligence error:", err)
@@ -30,7 +30,7 @@ function StateIntelligence({ onNavigateToProjects }) {
       }
     }
     load()
-  }, [])
+  }, [fy])
 
   const filteredStates = useMemo(() => {
     let result = [...states]
@@ -60,7 +60,7 @@ function StateIntelligence({ onNavigateToProjects }) {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#f9f9ff] p-6 dark:bg-[#111827]">
+      <div className="min-h-screen bg-[#f9f9ff] p-4 sm:p-6 dark:bg-[#111827]">
         <h1 className="text-2xl font-bold text-[#031632] dark:text-white">State Intelligence</h1>
         <div className="mt-6 rounded-xl border border-gray-200 bg-white p-16 text-center dark:border-gray-700 dark:bg-[#1f2937]">
           <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent" />
@@ -133,7 +133,7 @@ function StateIntelligence({ onNavigateToProjects }) {
         </div>
 
         {/* Table */}
-        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xs dark:border-gray-700 dark:bg-[#1f2937]">
+        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
           {/* DESKTOP TABLE */}
           <div className="hidden lg:block overflow-x-auto">
             <table className="w-full min-w-[1100px]">

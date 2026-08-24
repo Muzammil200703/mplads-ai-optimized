@@ -3,7 +3,7 @@ import {
   getProjects,
   searchProjects,
   getStates,
-  getDistricts,
+  getConstituencies,
   getProjectDetail,
 } from "../services/api"
 import ProjectDetail from "../components/ProjectDetail"
@@ -58,18 +58,18 @@ function getRiskScoreBadge(project) {
   }
 }
 
-function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDrillDown }) {
+function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDrillDown, fy }) {
   const [projects, setProjects] = useState([])
   const [totalCount, setTotalCount] = useState(0)
   const [states, setStates] = useState([])
-  const [districts, setDistricts] = useState([])
+  const [constituencies, setConstituencies] = useState([])
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
 
   const [keyword, setKeyword] = useState("")
   const [state, setState] = useState("")
-  const [district, setDistrict] = useState("")
+  const [constituency, setConstituency] = useState("")
   const [status, setStatus] = useState("")
   const [sortBy, setSortBy] = useState("")
   const [sortDir, setSortDir] = useState("desc")
@@ -97,7 +97,7 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
   useEffect(() => {
     if (drillDownParams) {
       if (drillDownParams.state) setState(drillDownParams.state)
-      if (drillDownParams.district) setDistrict(drillDownParams.district)
+      if (drillDownParams.constituency) setConstituency(drillDownParams.constituency)
       if (drillDownParams.status) setStatus(drillDownParams.status)
       if (drillDownParams.keyword) setKeyword(drillDownParams.keyword)
       setCurrentPage(1)
@@ -118,20 +118,20 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
   }, [])
 
   useEffect(() => {
-    async function loadDistrictsList() {
+    async function loadConstituenciesList() {
       if (!state) {
-        setDistricts([])
-        setDistrict("")
+        setConstituencies([])
+        setConstituency("")
         return
       }
       try {
-        const data = await getDistricts(state)
-        if (Array.isArray(data)) setDistricts(data)
+        const data = await getConstituencies(state)
+        if (Array.isArray(data)) setConstituencies(data)
       } catch (err) {
-        console.error("Failed to load districts:", err)
+        console.error("Failed to load constituencies:", err)
       }
     }
-    loadDistrictsList()
+    loadConstituenciesList()
   }, [state])
 
   const fetchProjectsData = useCallback(async () => {
@@ -146,7 +146,8 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
         response = await searchProjects({
           q: keyword.trim(),
           state: state || undefined,
-          district: district || undefined,
+          constituency: constituency || undefined,
+          fy: fy || undefined,
           status: status || undefined,
           sort_by: sortBy || undefined,
           sort_dir: sortBy ? sortDir : undefined,
@@ -161,7 +162,8 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
         const [projList, searchCount] = await Promise.all([
           getProjects({
             state: state || undefined,
-            district: district || undefined,
+            constituency: constituency || undefined,
+            fy: fy || undefined,
             status: status || undefined,
             sort_by: sortBy || undefined,
             sort_dir: sortBy ? sortDir : undefined,
@@ -170,7 +172,8 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
           }),
           searchProjects({
             state: state || undefined,
-            district: district || undefined,
+            constituency: constituency || undefined,
+            fy: fy || undefined,
             status: status || undefined,
             limit: 1,
           }),
@@ -184,7 +187,7 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
     } finally {
       setLoading(false)
     }
-  }, [keyword, state, district, status, currentPage, sortBy, sortDir])
+  }, [keyword, state, constituency, fy, status, currentPage, sortBy, sortDir])
 
   useEffect(() => {
     fetchProjectsData()
@@ -214,7 +217,7 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
   const handleResetFilters = () => {
     setKeyword("")
     setState("")
-    setDistrict("")
+    setConstituency("")
     setStatus("")
     setSortBy("")
     setSortDir("desc")
@@ -268,7 +271,7 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
           </div>
         </div>
 
-        <form onSubmit={handleApplySearch} className="rounded-xl border border-gray-200 bg-white p-5 shadow-xs transition-colors dark:border-gray-700/80 dark:bg-[#1f2937]">
+        <form onSubmit={handleApplySearch} className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-colors dark:border-gray-700/80 dark:bg-[#1f2937]">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-200">
@@ -277,7 +280,7 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
               <input
                 value={keyword}
                 onChange={(e) => setKeyword(e.target.value)}
-                placeholder="Search by keywords..."
+                placeholder="Search by ID, name, state, constituency, MP name, or type..."
                 className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white"
               />
             </div>
@@ -305,21 +308,21 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
 
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-200">
-                District
+                Constituency
               </label>
               <select
-                value={district}
+                value={constituency}
                 disabled={!state}
                 onChange={(e) => {
-                  setDistrict(e.target.value)
+                  setConstituency(e.target.value)
                   setCurrentPage(1)
                 }}
                 className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 dark:border-gray-600 dark:bg-[#111827] dark:text-white"
               >
-                <option value="">{state ? "All Districts" : "Select State First"}</option>
-                {districts.map((d) => (
-                  <option key={d} value={d}>
-                    {d}
+                <option value="">{state ? "All Constituencies" : "Select State First"}</option>
+                {constituencies.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
                   </option>
                 ))}
               </select>
@@ -420,7 +423,7 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
           </div>
         )}
 
-        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xs transition-colors dark:border-gray-700/80 dark:bg-[#1f2937]">
+        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm transition-colors dark:border-gray-700/80 dark:bg-[#1f2937]">
           {loading ? (
             <div className="p-16 text-center text-gray-500 dark:text-gray-400">
               <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent" />
@@ -433,29 +436,29 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
                 <div className="hidden lg:block overflow-x-auto">
                 <table className="w-full min-w-[900px]">
                   <thead>
-                    <tr className="border-b border-gray-200 bg-gray-50 text-left text-xs font-bold uppercase tracking-wider text-gray-700 dark:border-gray-700 dark:bg-[#172033] dark:text-gray-300">
-                      <th className="p-4 w-8"></th>
-                      <th className="p-4">ID</th>
-                      <th className="p-4">Work Name & Category</th>
-                      <th className="p-4">Location</th>
-                      <th className="p-4 text-right">Sanctioned</th>
-                      <th className="p-4 text-right">Expenditure</th>
-                      <th className="p-4 text-center">Status</th>
-                      <th className="p-4 text-center">AI Risk Flag</th>
-                      <th className="p-4 text-center">Details</th>
+                    <tr className="border-b-2 border-gray-200 bg-gray-50 text-left text-[10px] font-bold uppercase tracking-widest text-gray-500 dark:border-gray-700 dark:bg-[#172033] dark:text-gray-400">
+                      <th className="px-3 py-3 w-10"></th>
+                      <th className="px-3 py-3 w-20">ID</th>
+                      <th className="px-3 py-3">Work Name & Category</th>
+                      <th className="px-3 py-3 w-36">Location</th>
+                      <th className="px-3 py-3 w-28 text-right">Sanctioned</th>
+                      <th className="px-3 py-3 w-28 text-right">Expenditure</th>
+                      <th className="px-3 py-3 w-24 text-center">Status</th>
+                      <th className="px-3 py-3 w-24 text-center">Risk</th>
+                      <th className="px-3 py-3 w-14 text-center"></th>
                     </tr>
                   </thead>
 
-                  <tbody className="divide-y divide-gray-200 dark:divide-gray-700/60">
+                  <tbody>
                     {projects.map((proj) => {
                       const riskBadge = getRiskScoreBadge(proj)
                       return (
                         <tr
                           key={proj.id}
                           onClick={() => handleOpenDetail(proj)}
-                          className="cursor-pointer transition hover:bg-blue-50/40 dark:hover:bg-[#253247]"
+                          className="cursor-pointer transition-colors duration-100 hover:bg-blue-50/60 dark:hover:bg-[#253247]/80"
                         >
-                          <td className="p-4">
+                          <td className="px-3 py-2.5">
                             <input
                               type="checkbox"
                               checked={compareIds.includes(proj.id)}
@@ -464,27 +467,27 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
                               className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                             />
                           </td>
-                          <td className="p-4 font-mono text-xs font-bold text-gray-500 dark:text-gray-400">
+                          <td className="px-3 py-2.5 font-mono text-[11px] font-bold text-gray-500 dark:text-gray-400">
                             #{proj.id}
                           </td>
-                          <td className="max-w-[320px] p-4">
+                          <td className="px-3 py-2.5 max-w-[280px]">
                             <p className="truncate font-semibold text-gray-900 dark:text-white" title={proj.project_name}>
                               {proj.project_name || "Unnamed Project"}
                             </p>
-                            <p className="truncate text-xs text-gray-500 dark:text-gray-400">
+                            <p className="mt-0.5 truncate text-[11px] text-gray-400 dark:text-gray-500">
                               {proj.project_type || "General"}
                             </p>
                           </td>
-                          <td className="p-4 text-xs">
-                            <p className="font-semibold text-gray-900 dark:text-gray-200">
-                              {proj.district || proj.state || "N/A"}
+                          <td className="px-3 py-2.5 text-xs">
+                            <p className="font-medium text-gray-800 dark:text-gray-200 truncate">
+                              {proj.constituency || proj.state || "N/A"}
                             </p>
-                            <p className="text-gray-500 dark:text-gray-400">{proj.state}</p>
+                            <p className="mt-0.5 text-[11px] text-gray-400 dark:text-gray-500 truncate">{proj.state}</p>
                           </td>
-                          <td className="p-4 text-right font-mono text-xs font-semibold text-gray-900 dark:text-gray-200">
+                          <td className="px-3 py-2.5 text-right font-mono text-xs font-semibold tabular-nums text-gray-800 dark:text-gray-200">
                             {formatMoney(proj.sanctioned_amount)}
                           </td>
-                          <td className="p-4 text-right font-mono text-xs font-semibold text-gray-900 dark:text-gray-200">
+                          <td className="px-3 py-2.5 text-right font-mono text-xs font-semibold tabular-nums text-gray-800 dark:text-gray-200">
                             {formatMoney(proj.expenditure)}
                           </td>
                           <td className="p-4 text-center">
@@ -493,7 +496,7 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
                             </span>
                           </td>
                           <td className="p-4 text-center">
-                            <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-bold ${riskBadge.badge}`}>
+                            <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${riskBadge.badge}`}>
                               {riskBadge.icon} {riskBadge.label}
                             </span>
                           </td>
@@ -503,9 +506,10 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
                                 e.stopPropagation()
                                 handleOpenDetail(proj)
                               }}
-                              className="rounded p-1 text-gray-600 hover:bg-gray-200 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+                              className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-gray-500 transition-all duration-100 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600 dark:border-gray-600 dark:bg-gray-700/50 dark:text-gray-400 dark:hover:border-blue-600 dark:hover:bg-blue-900/40 dark:hover:text-blue-400"
+                              title="View project details"
                             >
-                              👁
+                              View
                             </button>
                           </td>
                         </tr>
@@ -516,14 +520,14 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
                 </div>
 
                 {/* MOBILE CARD VIEW */}
-                <div className="lg:hidden divide-y divide-gray-200 dark:divide-gray-700/60">
+                <div className="lg:hidden border-t border-gray-100 dark:border-gray-700/40">
                   {projects.map((proj) => {
                     const riskBadge = getRiskScoreBadge(proj)
                     return (
                       <div
                         key={proj.id}
                         onClick={() => handleOpenDetail(proj)}
-                        className="p-4 cursor-pointer transition hover:bg-blue-50/40 dark:hover:bg-[#253247]"
+                        className="px-4 py-3.5 cursor-pointer transition-colors duration-100 hover:bg-blue-50/60 dark:hover:bg-[#253247]/80"
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0 flex-1">
@@ -539,8 +543,8 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
                             <p className="mt-1 truncate font-semibold text-sm text-gray-900 dark:text-white" title={proj.project_name}>
                               {proj.project_name || "Unnamed Project"}
                             </p>
-                            <p className="text-[11px] text-gray-500 dark:text-gray-400">
-                              {proj.district || ""}{proj.district && proj.state ? ", " : ""}{proj.state || "N/A"} • {proj.project_type || "General"}
+                            <p className="mt-0.5 text-[11px] text-gray-400 dark:text-gray-500">
+                              {proj.constituency || ""}{proj.constituency && proj.state ? ", " : ""}{proj.state || "N/A"} • {proj.project_type || "General"}
                             </p>
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
@@ -553,14 +557,14 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
                             />
                           </div>
                         </div>
-                        <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-                          <div className="flex justify-between">
-                            <span className="text-gray-500 dark:text-gray-400">Sanctioned</span>
-                            <span className="font-mono font-semibold text-gray-900 dark:text-gray-200">{formatMoney(proj.sanctioned_amount)}</span>
+                        <div className="mt-2.5 grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+                          <div className="flex items-center justify-between rounded-md bg-gray-50 dark:bg-gray-700/40 px-2.5 py-1.5">
+                            <span className="text-gray-400 dark:text-gray-500">Sanctioned</span>
+                            <span className="font-mono font-bold text-gray-800 dark:text-gray-200">{formatMoney(proj.sanctioned_amount)}</span>
                           </div>
                           <div className="flex justify-between">
                             <span className="text-gray-500 dark:text-gray-400">Spent</span>
-                            <span className="font-mono font-semibold text-gray-900 dark:text-gray-200">{formatMoney(proj.expenditure)}</span>
+                            <span className="font-mono font-bold text-gray-800 dark:text-gray-200">{formatMoney(proj.expenditure)}</span>
                           </div>
                         </div>
                       </div>
@@ -569,15 +573,17 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
                 </div>
 
                 {projects.length === 0 && (
-                  <div className="p-12 text-center text-xs text-gray-500 dark:text-gray-400">
-                    No projects matched the search filters.
+                  <div className="px-6 py-16 text-center">
+                    <div className="text-3xl mb-3">📋</div>
+                    <p className="text-sm font-semibold text-gray-500 dark:text-gray-400">No projects matched the search filters.</p>
+                    <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">Try adjusting your search criteria or resetting filters.</p>
                   </div>
                 )}
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-4 border-t border-gray-200 bg-gray-50 p-3 sm:p-4 dark:border-gray-700 dark:bg-[#172033]">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-200 bg-gray-50/80 px-4 py-3 sm:px-5 sm:py-3.5 dark:border-gray-700 dark:bg-[#172033]">
                 <div className="flex items-center gap-3">
-                  <span className="text-xs text-gray-600 dark:text-gray-400">
+                  <span className="text-xs text-gray-500 dark:text-gray-400">
                   Showing <strong>{totalCount === 0 ? 0 : (currentPage - 1) * rowsPerPage + 1}</strong> to{" "}
                   <strong>{Math.min(currentPage * rowsPerPage, totalCount)}</strong> of <strong>{totalCount.toLocaleString("en-IN")}</strong> records
                   </span>
@@ -693,7 +699,7 @@ function ComparisonModal({ projectIds, onClose, onRemove }) {
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-700/60">
                   {[
                     { label: "State", key: "state" },
-                    { label: "District", key: "district" },
+                    { label: "Constituency", key: "constituency" },
                     { label: "Category", key: "project_type" },
                     { label: "Status", key: "status" },
                     { label: "Sanctioned", key: "sanctioned_amount", money: true },

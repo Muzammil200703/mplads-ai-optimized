@@ -143,7 +143,7 @@ function ProjectDetail({ projectId, onClose }) {
 
         {/* Location */}
         <div className="mt-2 grid grid-cols-2 gap-2">
-          <span className="text-xs text-gray-500">📍 {proj.state || "N/A"}, {proj.district || "N/A"}</span>
+          <span className="text-xs text-gray-500">📍 {proj.state || "N/A"}</span>
           <span className="text-xs text-gray-500">🏛 {proj.constituency || "N/A"}</span>
         </div>
 
@@ -183,7 +183,6 @@ function ProjectDetail({ projectId, onClose }) {
             <>
               <InfoGrid items={[
                 { label: "State", value: proj.state || "Not available" },
-                { label: "District", value: proj.district || "Not available" },
                 { label: "Constituency", value: proj.constituency || "Not available" },
                 { label: "Category", value: proj.project_type || "Not available" },
                 { label: "Status", value: proj.status || "Not available" },
@@ -362,7 +361,7 @@ function ProjectDetail({ projectId, onClose }) {
                         <div>
                           <span className="font-mono text-[10px] font-bold text-gray-400">#{sp.id}</span>
                           <p className="text-xs font-semibold">{sp.project_name}</p>
-                          <p className="text-[10px] text-gray-500">{sp.district || "N/A"}</p>
+                          <p className="text-[10px] text-gray-500">{sp.constituency || "N/A"}</p>
                         </div>
                         <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
                           sp.risk_level === "High" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"

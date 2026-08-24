@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react"
-import { getAnomalies, getAnomaliesSummary, getStates, getDistricts, getProjectDetail, getAnomalyAnalytics } from "../services/api"
+import { getAnomalies, getAnomaliesSummary, getStates, getConstituencies, getProjectDetail, getAnomalyAnalytics } from "../services/api"
 
 function formatMoney(value) {
   const number = Number(value || 0)
@@ -8,7 +8,7 @@ function formatMoney(value) {
   return `₹${number.toLocaleString("en-IN")}`
 }
 
-function RiskCenter({ drillDownParams, onClearDrillDown }) {
+function RiskCenter({ drillDownParams, onClearDrillDown, fy }) {
   const [summary, setSummary] = useState({ total_projects_checked: 0, high_risk: 0, medium_risk: 0, low_risk: 0, total_anomalies: 0 })
   const [anomalies, setAnomalies] = useState([])
   const [totalCount, setTotalCount] = useState(0)
@@ -17,9 +17,9 @@ function RiskCenter({ drillDownParams, onClearDrillDown }) {
 
   // Filters
   const [states, setStates] = useState([])
-  const [districts, setDistricts] = useState([])
+  const [constituencies, setConstituencies] = useState([])
   const [filterState, setFilterState] = useState("")
-  const [filterDistrict, setFilterDistrict] = useState("")
+  const [filterConstituency, setFilterConstituency] = useState("")
   const [filterSeverity, setFilterSeverity] = useState("")
   const [searchQuery, setSearchQuery] = useState("")
   const [sortBy, setSortBy] = useState("risk_score")
@@ -47,10 +47,10 @@ function RiskCenter({ drillDownParams, onClearDrillDown }) {
     getStates().then((s) => { if (Array.isArray(s)) setStates(s) }).catch(() => {})
   }, [])
 
-  // Load districts when state changes
+  // Load constituencies when state changes
   useEffect(() => {
-    if (!filterState) { setDistricts([]); setFilterDistrict(""); return }
-    getDistricts(filterState).then((d) => { if (Array.isArray(d)) setDistricts(d) }).catch(() => {})
+    if (!filterState) { setConstituencies([]); setFilterConstituency(""); return }
+    getConstituencies(filterState).then((d) => { if (Array.isArray(d)) setConstituencies(d) }).catch(() => {})
   }, [filterState])
 
   const [analytics, setAnalytics] = useState(null)
@@ -71,7 +71,8 @@ function RiskCenter({ drillDownParams, onClearDrillDown }) {
         limit: rowsPerPage,
       }
       if (filterState) params.state = filterState
-      if (filterDistrict) params.district = filterDistrict
+      if (filterConstituency) params.constituency = filterConstituency
+      if (fy) params.fy = fy
       if (filterSeverity) params.risk_level = filterSeverity
       if (searchQuery.trim()) params.q = searchQuery.trim()
       if (sortBy) {
@@ -88,14 +89,14 @@ function RiskCenter({ drillDownParams, onClearDrillDown }) {
     } finally {
       setLoading(false)
     }
-  }, [filterState, filterDistrict, filterSeverity, searchQuery, currentPage, sortBy, sortDir])
+  }, [filterState, filterConstituency, fy, filterSeverity, searchQuery, currentPage, sortBy, sortDir])
 
   useEffect(() => { fetchAnomalies() }, [fetchAnomalies])
 
   // Reset filters
   const handleReset = () => {
     setFilterState("")
-    setFilterDistrict("")
+    setFilterConstituency("")
     setSortBy("risk_score")
     setSortDir("desc")
     setFilterSeverity("")
@@ -146,7 +147,7 @@ function RiskCenter({ drillDownParams, onClearDrillDown }) {
             { label: "Medium Risk", value: summary.medium_risk, color: "amber" },
             { label: "Total Anomalies", value: summary.total_anomalies, color: "purple" },
           ].map((card) => (
-            <div key={card.label} className="rounded-xl border border-gray-200 bg-white p-4 shadow-xs dark:border-gray-700 dark:bg-[#1f2937]">
+            <div key={card.label} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
               <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{card.label}</p>
               <p className={`mt-1 font-mono text-2xl font-bold text-${card.color}-600 dark:text-${card.color}-400`}>
                 {card.value.toLocaleString("en-IN")}
@@ -159,7 +160,7 @@ function RiskCenter({ drillDownParams, onClearDrillDown }) {
         {analytics && (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             {/* Anomaly Types */}
-            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-xs dark:border-gray-700 dark:bg-[#1f2937]">
+            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
               <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-gray-400">Anomaly Type Distribution</h3>
               <div className="space-y-2">
                 {analytics.anomaly_types.slice(0, 6).map((at) => (
@@ -176,7 +177,7 @@ function RiskCenter({ drillDownParams, onClearDrillDown }) {
               </div>
             </div>
             {/* State Distribution */}
-            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-xs dark:border-gray-700 dark:bg-[#1f2937]">
+            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
               <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-gray-400">Top States by Anomaly Count</h3>
               <div className="space-y-2">
                 {analytics.state_distribution.slice(0, 6).map((sd, idx) => (
@@ -198,7 +199,7 @@ function RiskCenter({ drillDownParams, onClearDrillDown }) {
         )}
 
         {/* FILTERS */}
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-xs dark:border-gray-700 dark:bg-[#1f2937]">
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-5">
             <div>
               <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
@@ -219,7 +220,7 @@ function RiskCenter({ drillDownParams, onClearDrillDown }) {
               <select
                 value={filterSeverity}
                 onChange={(e) => { setFilterSeverity(e.target.value); setCurrentPage(1) }}
-                className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 dark:border-gray-600 dark:bg-[#111827] dark:text-white"
+                className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white"
               >
                 <option value="">All Severity</option>
                 <option value="High">High Risk</option>
@@ -235,7 +236,7 @@ function RiskCenter({ drillDownParams, onClearDrillDown }) {
               <select
                 value={filterState}
                 onChange={(e) => { setFilterState(e.target.value); setCurrentPage(1) }}
-                className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 dark:border-gray-600 dark:bg-[#111827] dark:text-white"
+                className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white"
               >
                 <option value="">All States</option>
                 {states.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -243,16 +244,16 @@ function RiskCenter({ drillDownParams, onClearDrillDown }) {
             </div>
             <div>
               <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                District
+                Constituency
               </label>
               <select
-                value={filterDistrict}
+                value={filterConstituency}
                 disabled={!filterState}
-                onChange={(e) => { setFilterDistrict(e.target.value); setCurrentPage(1) }}
+                onChange={(e) => { setFilterConstituency(e.target.value); setCurrentPage(1) }}
                 className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 disabled:opacity-50 dark:border-gray-600 dark:bg-[#111827] dark:text-white"
               >
-                <option value="">{filterState ? "All Districts" : "Select State"}</option>
-                {districts.map((d) => <option key={d} value={d}>{d}</option>)}
+                <option value="">{filterState ? "All Constituencies" : "Select State"}</option>
+                {constituencies.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
             <div className="flex items-end">
@@ -303,7 +304,7 @@ function RiskCenter({ drillDownParams, onClearDrillDown }) {
         </div>
 
         {/* ANOMALY TABLE */}
-        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xs dark:border-gray-700 dark:bg-[#1f2937]">
+        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
           {loading ? (
             <div className="p-16 text-center">
               <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent" />
@@ -321,7 +322,7 @@ function RiskCenter({ drillDownParams, onClearDrillDown }) {
                   <thead>
                     <tr className="border-b border-gray-200 bg-gray-50 text-left text-xs font-bold uppercase tracking-wider text-gray-700 dark:border-gray-700 dark:bg-[#172033] dark:text-gray-300">
                       <th className="p-4">Project</th>
-                      <th className="p-4">State / District</th>
+                      <th className="p-4">State / Constituency</th>
                       <th className="p-4 text-right">Sanctioned</th>
                       <th className="p-4 text-right">Expenditure</th>
                       <th className="p-4 text-center">Progress</th>
@@ -339,7 +340,7 @@ function RiskCenter({ drillDownParams, onClearDrillDown }) {
                           <p className="max-w-[250px] truncate text-sm font-semibold text-gray-900 dark:text-white" title={a.project_name}>{a.project_name || "Unnamed"}</p>
                           <p className="text-xs text-gray-500">{a.project_type || "General"}</p>
                         </td>
-                        <td className="p-4 text-xs"><p className="font-semibold">{a.state || "N/A"}</p><p className="text-gray-500">{a.district || "N/A"}</p></td>
+                        <td className="p-4 text-xs"><p className="font-semibold">{a.state || "N/A"}</p><p className="text-gray-500">{a.constituency || "N/A"}</p></td>
                         <td className="p-4 text-right font-mono text-xs">{formatMoney(a.sanctioned_amount)}</td>
                         <td className="p-4 text-right font-mono text-xs">{formatMoney(a.expenditure)}</td>
                         <td className="p-4 text-center font-mono text-xs font-bold">{a.completion_percentage}%</td>
@@ -367,7 +368,7 @@ function RiskCenter({ drillDownParams, onClearDrillDown }) {
                           {a.ml_anomaly && <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">ML</span>}
                         </div>
                         <p className="mt-1 truncate font-semibold text-sm text-gray-900 dark:text-white" title={a.project_name}>{a.project_name || "Unnamed"}</p>
-                        <p className="text-[11px] text-gray-500">{a.state || "N/A"}{a.district ? `, ${a.district}` : ""}</p>
+                        <p className="text-[11px] text-gray-500">{a.state || "N/A"}{a.constituency ? `, ${a.constituency}` : ""}</p>
                       </div>
                       <div className="text-right shrink-0">
                         <p className="font-mono text-sm font-bold">Score {a.risk_score}</p>
@@ -430,7 +431,7 @@ function RiskCenter({ drillDownParams, onClearDrillDown }) {
                   )}
                 </div>
                 <h3 className="mt-2 text-lg font-bold text-gray-900 dark:text-white">{selectedAnomaly.project_name}</h3>
-                <p className="text-xs text-gray-500">📍 {selectedAnomaly.district || "N/A"}, {selectedAnomaly.state || "N/A"} — {selectedAnomaly.constituency || "N/A"}</p>
+                <p className="text-xs text-gray-500">📍 {selectedAnomaly.state || "N/A"} — {selectedAnomaly.constituency || "N/A"}</p>
               </div>
               <button onClick={() => setSelectedAnomaly(null)} className="rounded p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">✕</button>
             </div>

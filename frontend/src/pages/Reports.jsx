@@ -136,17 +136,17 @@ function Reports() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+        <div className="grid grid-cols-1 gap-4 sm:gap-5 lg:grid-cols-12">
           {/* Settings Panel */}
           <div className="space-y-4 lg:col-span-4">
-            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-xs dark:border-gray-700 dark:bg-[#1f2937]">
+            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
               <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-gray-400">
                 Report Settings
               </h3>
               <div className="space-y-3">
                 <div>
-                  <label className="text-xs font-semibold">Report Type</label>
-                  <select value={reportType} onChange={(e) => setReportType(e.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-600 dark:bg-[#111827]">
+                  <label className="block text-[11px] font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">Report Type</label>
+                  <select value={reportType} onChange={(e) => setReportType(e.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
                     <option>Project Audit Report</option>
                     <option>Anomaly Summary Report</option>
                     <option>Regional Risk Report</option>
@@ -155,15 +155,15 @@ function Reports() {
                 </div>
 
                 <div>
-                  <label className="text-xs font-semibold">State Scope</label>
-                  <select value={selectedState} onChange={(e) => setSelectedState(e.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-600 dark:bg-[#111827]">
+                  <label className="block text-[11px] font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">State Scope</label>
+                  <select value={selectedState} onChange={(e) => setSelectedState(e.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
                     <option value="">All States (Nationwide)</option>
                     {states.map((s) => <option key={s} value={s}>{s}</option>)}
                   </select>
                 </div>
 
                 <div>
-                  <label className="text-xs font-semibold">District Scope</label>
+                  <label className="block text-[11px] font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">District Scope</label>
                   <select value={selectedDistrict} disabled={!selectedState} onChange={(e) => setSelectedDistrict(e.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm disabled:opacity-50 dark:border-gray-600 dark:bg-[#111827]">
                     <option value="">{selectedState ? "All Districts" : "Select State First"}</option>
                     {districts.map((d) => <option key={d} value={d}>{d}</option>)}
@@ -172,8 +172,8 @@ function Reports() {
 
                 {reportType === "Anomaly Summary Report" && (
                   <div>
-                    <label className="text-xs font-semibold">Risk Level</label>
-                    <select value={selectedRiskLevel} onChange={(e) => setSelectedRiskLevel(e.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-600 dark:bg-[#111827]">
+                    <label className="block text-[11px] font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">Risk Level</label>
+                    <select value={selectedRiskLevel} onChange={(e) => setSelectedRiskLevel(e.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
                       <option value="">All Risk Levels</option>
                       <option value="High">High Risk</option>
                       <option value="Medium">Medium Risk</option>
@@ -183,8 +183,8 @@ function Reports() {
                 )}
 
                 <div>
-                  <label className="text-xs font-semibold">Export Format</label>
-                  <select value={format} onChange={(e) => setFormat(e.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-600 dark:bg-[#111827]">
+                  <label className="block text-[11px] font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">Export Format</label>
+                  <select value={format} onChange={(e) => setFormat(e.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
                     <option>CSV Dataset (.csv)</option>
                     <option>JSON Report (.json)</option>
                     <option>Print / PDF View</option>
@@ -192,9 +192,9 @@ function Reports() {
                 </div>
 
                 <div>
-                  <label className="text-xs font-semibold">Sort By</label>
+                  <label className="block text-[11px] font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">Sort By</label>
                   <div className="mt-1 flex gap-2">
-                    <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className="flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-600 dark:bg-[#111827]">
+                    <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className="flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
                       <option value="">Default Order</option>
                       <option value="id">Project ID</option>
                       <option value="project_name">Project Name</option>
@@ -206,7 +206,7 @@ function Reports() {
                     <button
                       onClick={() => setSortDir((d) => d === "asc" ? "desc" : "asc")}
                       disabled={!sortBy}
-                      className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-bold disabled:opacity-40 dark:border-gray-600 dark:bg-[#111827]"
+                      className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-bold text-gray-700 shadow-2xs outline-none transition hover:bg-gray-50 disabled:opacity-40 dark:border-gray-600 dark:bg-[#111827] dark:text-gray-200"
                     >
                       {sortDir === "asc" ? "↑ Asc" : "↓ Desc"}
                     </button>
@@ -229,7 +229,7 @@ function Reports() {
                 <button
                   onClick={handleExport}
                   disabled={downloading || exportCount === 0}
-                  className="mt-4 w-full rounded-lg bg-[#031632] py-2.5 text-xs font-bold uppercase tracking-wider text-white shadow-xs transition hover:bg-[#1a2b48] disabled:opacity-50 dark:bg-blue-600 dark:hover:bg-blue-700"
+                  className="mt-4 w-full rounded-lg bg-[#031632] py-2.5 text-xs font-bold uppercase tracking-wider text-white shadow-sm transition hover:bg-[#1a2b48] disabled:opacity-50 dark:bg-blue-600 dark:hover:bg-blue-700"
                 >
                   {downloading ? "Generating Report..." : `Download Report${exportCount !== null ? ` (${exportCount.toLocaleString("en-IN")} records)` : ""}`}
                 </button>
@@ -245,7 +245,7 @@ function Reports() {
 
           {/* Preview Panel */}
           <div className="lg:col-span-8">
-            <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-xs dark:border-gray-700 dark:bg-[#1f2937]">
+            <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
               <div className="mb-4 border-b border-gray-100 pb-3 text-center dark:border-gray-700">
                 <h2 className="text-xl font-bold">{reportType}</h2>
                 <p className="text-xs text-gray-500 dark:text-gray-400">

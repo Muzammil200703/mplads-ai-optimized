@@ -47,17 +47,24 @@ export async function getStates() {
   return request("/filters/states")
 }
 
-export async function getDistricts(state) {
+export async function getConstituencies(state) {
   if (!state) return []
-  return request(`/filters/districts?state=${encodeURIComponent(state)}`)
+  return request(`/filters/constituencies?state=${encodeURIComponent(state)}`)
 }
+
+export async function getFYs() {
+  return request("/filters/fys")
+}
+
+// Keep backward-compatible alias
+export const getDistricts = getConstituencies
 
 export async function getCategories() {
   return request("/filters/categories")
 }
 
-export async function getDashboardOverview() {
-  return request("/dashboard/overview")
+export async function getDashboardOverview(params = {}) {
+  return request(`/dashboard/overview${buildQuery(params)}`)
 }
 
 export async function getDashboardStates() {
@@ -141,8 +148,8 @@ export async function getCompletedWorks(params = {}) {
   return request(`/completed-works${buildQuery(params)}`)
 }
 
-export async function getStateIntelligence() {
-  return request("/dashboard/state-intelligence")
+export async function getStateIntelligence(params = {}) {
+  return request(`/dashboard/state-intelligence${buildQuery(params)}`)
 }
 
 export async function getAuditPriority(params = {}) {

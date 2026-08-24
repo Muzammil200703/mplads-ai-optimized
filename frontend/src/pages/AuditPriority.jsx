@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react"
-import { getAuditPriority, getStates, getDistricts, getProjectDetail } from "../services/api"
+import { getAuditPriority, getStates, getConstituencies, getProjectDetail } from "../services/api"
 
 function formatMoney(value) {
   const number = Number(value || 0)
@@ -8,16 +8,16 @@ function formatMoney(value) {
   return `₹${number.toLocaleString("en-IN")}`
 }
 
-function AuditPriority() {
+function AuditPriority({ fy }) {
   const [priorities, setPriorities] = useState([])
   const [totalCount, setTotalCount] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const [states, setStates] = useState([])
-  const [districts, setDistricts] = useState([])
+  const [constituencies, setConstituencies] = useState([])
 
   const [filterState, setFilterState] = useState("")
-  const [filterDistrict, setFilterDistrict] = useState("")
+  const [filterConstituency, setFilterConstituency] = useState("")
   const [filterSeverity, setFilterSeverity] = useState("")
   const [searchQuery, setSearchQuery] = useState("")
   const [sortBy, setSortBy] = useState("risk_score")
@@ -34,8 +34,8 @@ function AuditPriority() {
   }, [])
 
   useEffect(() => {
-    if (!filterState) { setDistricts([]); setFilterDistrict(""); return }
-    getDistricts(filterState).then((d) => { if (Array.isArray(d)) setDistricts(d) }).catch(() => {})
+    if (!filterState) { setConstituencies([]); setFilterConstituency(""); return }
+    getConstituencies(filterState).then((d) => { if (Array.isArray(d)) setConstituencies(d) }).catch(() => {})
   }, [filterState])
 
   const fetchData = useCallback(async () => {
@@ -47,7 +47,8 @@ function AuditPriority() {
         limit: rowsPerPage,
       }
       if (filterState) params.state = filterState
-      if (filterDistrict) params.district = filterDistrict
+      if (filterConstituency) params.constituency = filterConstituency
+      if (fy) params.fy = fy
       if (filterSeverity) params.risk_level = filterSeverity
       if (searchQuery.trim()) params.q = searchQuery.trim()
       if (sortBy) { params.sort_by = sortBy; params.sort_dir = sortDir }
@@ -61,12 +62,12 @@ function AuditPriority() {
     } finally {
       setLoading(false)
     }
-  }, [filterState, filterDistrict, filterSeverity, searchQuery, currentPage, sortBy, sortDir])
+  }, [filterState, filterConstituency, fy, filterSeverity, searchQuery, currentPage, sortBy, sortDir])
 
   useEffect(() => { fetchData() }, [fetchData])
 
   const handleReset = () => {
-    setFilterState(""); setFilterDistrict(""); setFilterSeverity("")
+    setFilterState(""); setFilterConstituency(""); setFilterSeverity("")
     setSearchQuery(""); setSortBy("risk_score"); setSortDir("desc")
     setCurrentPage(1)
   }
@@ -105,19 +106,19 @@ function AuditPriority() {
         )}
 
         {/* Filters */}
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-xs dark:border-gray-700 dark:bg-[#1f2937]">
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-6">
             <div>
-              <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-400">Search</label>
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Search</label>
               <input value={searchQuery} onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1) }}
                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); fetchData() } }}
                 placeholder="Project name or ID..."
                 className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-blue-500 dark:border-gray-600 dark:bg-[#111827] dark:text-white" />
             </div>
             <div>
-              <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-400">Severity</label>
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Severity</label>
               <select value={filterSeverity} onChange={(e) => { setFilterSeverity(e.target.value); setCurrentPage(1) }}
-                className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
+                className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
                 <option value="">All Severity</option>
                 <option value="High">High Risk</option>
                 <option value="Medium">Medium Risk</option>
@@ -125,20 +126,20 @@ function AuditPriority() {
               </select>
             </div>
             <div>
-              <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-400">State</label>
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">State</label>
               <select value={filterState} onChange={(e) => { setFilterState(e.target.value); setCurrentPage(1) }}
-                className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
+                className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
                 <option value="">All States</option>
                 {states.map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
             <div>
-              <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-400">District</label>
-              <select value={filterDistrict} disabled={!filterState}
-                onChange={(e) => { setFilterDistrict(e.target.value); setCurrentPage(1) }}
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Constituency</label>
+              <select value={filterConstituency} disabled={!filterState}
+                onChange={(e) => { setFilterConstituency(e.target.value); setCurrentPage(1) }}
                 className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 disabled:opacity-50 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
-                <option value="">{filterState ? "All Districts" : "Select State"}</option>
-                {districts.map((d) => <option key={d} value={d}>{d}</option>)}
+                <option value="">{filterState ? "All Constituencies" : "Select State"}</option>
+                {constituencies.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
             <div className="flex items-end">
@@ -168,7 +169,7 @@ function AuditPriority() {
         </div>
 
         {/* Table */}
-        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xs dark:border-gray-700 dark:bg-[#1f2937]">
+        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
           {loading ? (
             <div className="p-16 text-center">
               <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent" />
@@ -185,7 +186,7 @@ function AuditPriority() {
                     <tr className="border-b border-gray-200 bg-gray-50 text-left text-xs font-bold uppercase tracking-wider text-gray-700 dark:border-gray-700 dark:bg-[#172033] dark:text-gray-300">
                       <th className="p-3 text-center">#</th>
                       <th className="p-3">Project</th>
-                      <th className="p-3">State / District</th>
+                      <th className="p-3">State / Constituency</th>
                       <th className="p-3 text-right">Sanctioned</th>
                       <th className="p-3 text-right">Expenditure</th>
                       <th className="p-3 text-center">Progress</th>
@@ -205,7 +206,7 @@ function AuditPriority() {
                         </td>
                         <td className="p-3 text-xs">
                           <p className="font-semibold">{p.state || "N/A"}</p>
-                          <p className="text-gray-500">{p.district || "N/A"}</p>
+                          <p className="text-gray-500">{p.constituency || "N/A"}</p>
                         </td>
                         <td className="p-3 text-right font-mono text-xs">{formatMoney(p.sanctioned_amount)}</td>
                         <td className="p-3 text-right font-mono text-xs">{formatMoney(p.expenditure)}</td>
@@ -241,7 +242,7 @@ function AuditPriority() {
                           <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${p.risk_level === "High" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300" : p.risk_level === "Medium" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300" : "bg-gray-100 text-gray-600 dark:bg-gray-700"}`}>{p.risk_level}</span>
                         </div>
                         <p className="mt-1 truncate font-semibold text-sm" title={p.project_name}>{p.project_name || "Unnamed"}</p>
-                        <p className="text-[11px] text-gray-500">{p.state || "N/A"}{p.district ? `, ${p.district}` : ""}</p>
+                        <p className="text-[11px] text-gray-500">{p.state || "N/A"}{p.constituency ? `, ${p.constituency}` : ""}</p>
                       </div>
                       <div className="text-right shrink-0">
                         <p className="font-mono text-sm font-bold">{p.risk_score}</p>
@@ -289,7 +290,7 @@ function AuditPriority() {
                   }`}>Priority #{selectedProject.priority_rank} — Score {selectedProject.risk_score}/100</span>
                 </div>
                 <h3 className="mt-2 text-lg font-bold text-gray-900 dark:text-white">{selectedProject.project_name}</h3>
-                <p className="text-xs text-gray-500">📍 {selectedProject.district || "N/A"}, {selectedProject.state || "N/A"}</p>
+                <p className="text-xs text-gray-500">📍 {selectedProject.state || "N/A"} — {selectedProject.constituency || "N/A"}</p>
               </div>
               <button onClick={() => setSelectedProject(null)} className="rounded p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">✕</button>
             </div>

@@ -26,11 +26,12 @@ function useIsMobile() {
 }
 
 function App() {
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(true)
   const [darkMode, setDarkMode] = useState(false)
   const [currentPage, setCurrentPage] = useState("Overview")
   const [searchQuery, setSearchQuery] = useState("")
   const [drillDownParams, setDrillDownParams] = useState(null)
+  const [selectedFY, setSelectedFY] = useState("")
 
   const isMobile = useIsMobile()
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false)
@@ -50,6 +51,32 @@ function App() {
 
   const closeMobileDrawer = () => setMobileDrawerOpen(false)
 
+  // Keyboard shortcut: Ctrl+B or [ to toggle sidebar
+  useEffect(() => {
+    const handler = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "b") {
+        e.preventDefault()
+        toggleSidebar()
+      }
+    }
+    window.addEventListener("keydown", handler)
+    return () => window.removeEventListener("keydown", handler)
+  }, [isMobile])
+
+  // Listen for navigate-to-project events from any component (e.g. RiskCenter modal)
+  useEffect(() => {
+    const handler = (e) => {
+      const query = e.detail?.query
+      if (query) {
+        setSearchQuery(query)
+        setCurrentPage("Projects")
+        if (isMobile) setMobileDrawerOpen(false)
+      }
+    }
+    window.addEventListener("navigate-to-project", handler)
+    return () => window.removeEventListener("navigate-to-project", handler)
+  }, [isMobile])
+
   const handleSearchSubmit = (query) => {
     setSearchQuery(query)
     setCurrentPage("Projects")
@@ -65,21 +92,21 @@ function App() {
   const renderPage = () => {
     switch (currentPage) {
       case "Overview":
-        return <Overview darkMode={darkMode} onDrillDown={handleDrillDown} />
+        return <Overview darkMode={darkMode} onDrillDown={handleDrillDown} fy={selectedFY} />
       case "Projects":
-        return <Projects globalSearchQuery={searchQuery} onClearSearch={() => setSearchQuery("")} drillDownParams={drillDownParams} onClearDrillDown={() => setDrillDownParams(null)} />
+        return <Projects globalSearchQuery={searchQuery} onClearSearch={() => setSearchQuery("")} drillDownParams={drillDownParams} onClearDrillDown={() => setDrillDownParams(null)} fy={selectedFY} />
       case "Risk Center":
-        return <RiskCenter drillDownParams={drillDownParams} onClearDrillDown={() => setDrillDownParams(null)} />
+        return <RiskCenter drillDownParams={drillDownParams} onClearDrillDown={() => setDrillDownParams(null)} fy={selectedFY} />
       case "Reports":
-        return <Reports />
+        return <Reports fy={selectedFY} />
       case "Data Quality":
         return <DataQuality />
       case "State Intelligence":
-        return <StateIntelligence onNavigateToProjects={(state) => handleDrillDown("Projects", { state })} />
+        return <StateIntelligence onNavigateToProjects={(state) => handleDrillDown("Projects", { state })} fy={selectedFY} />
       case "Audit Priority":
-        return <AuditPriority />
+        return <AuditPriority fy={selectedFY} />
       default:
-        return <Overview />
+        return <Overview fy={selectedFY} />
     }
   }
 
@@ -124,10 +151,12 @@ function App() {
         onSearchChange={setSearchQuery}
         onSearchSubmit={handleSearchSubmit}
         isMobile={isMobile}
+        selectedFY={selectedFY}
+        onFYChange={setSelectedFY}
       />
 
       <main
-        className={`min-h-screen pt-[64px] lg:pt-[78px] transition-all duration-300 ease-in-out ${getMainMargin()}`}
+        className={`min-h-screen pt-[64px] lg:pt-[72px] transition-all duration-300 ease-in-out ${getMainMargin()}`}
       >
         {renderPage()}
       </main>

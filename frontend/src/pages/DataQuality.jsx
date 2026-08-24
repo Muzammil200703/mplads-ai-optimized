@@ -70,7 +70,7 @@ function DataQuality() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#f9f9ff] p-6 dark:bg-[#111827]">
+      <div className="min-h-screen bg-[#f9f9ff] p-4 sm:p-6 dark:bg-[#111827]">
         <h1 className="text-2xl font-bold text-[#031632] dark:text-white">Data Quality Monitor</h1>
         <div className="mt-6 rounded-xl border border-gray-200 bg-white p-16 text-center dark:border-gray-700 dark:bg-[#1f2937]">
           <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent" />
@@ -82,7 +82,7 @@ function DataQuality() {
 
   if (error) {
     return (
-      <div className="min-h-screen bg-[#f9f9ff] p-6 dark:bg-[#111827]">
+      <div className="min-h-screen bg-[#f9f9ff] p-4 sm:p-6 dark:bg-[#111827]">
         <h1 className="text-2xl font-bold text-[#031632] dark:text-white">Data Quality Monitor</h1>
         <div className="mt-6 rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-medium text-red-700 dark:border-red-800/60 dark:bg-red-950/40 dark:text-red-300">
           ⚠ {error}
@@ -110,25 +110,25 @@ function DataQuality() {
 
         {/* SUMMARY CARDS */}
         <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-          <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-xs dark:border-gray-700 dark:bg-[#1f2937]">
+          <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
             <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Records Checked</p>
             <p className="mt-1 font-mono text-2xl font-bold text-blue-600">
               {dataQuality?.total_records_checked?.toLocaleString("en-IN") || 0}
             </p>
           </div>
-          <div className="rounded-xl border border-amber-200 bg-white p-4 shadow-xs dark:border-amber-900/40 dark:bg-[#1f2937]">
+          <div className="rounded-xl border border-amber-200 bg-white p-4 shadow-sm dark:border-amber-900/40 dark:bg-[#1f2937]">
             <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Records with Issues</p>
             <p className="mt-1 font-mono text-2xl font-bold text-amber-600">
               {dataQuality?.records_with_issues?.toLocaleString("en-IN") || 0}
             </p>
           </div>
-          <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-xs dark:border-gray-700 dark:bg-[#1f2937]">
+          <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
             <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Issue Categories</p>
             <p className="mt-1 font-mono text-2xl font-bold text-purple-600">
               {dataQuality?.issue_categories || 0}
             </p>
           </div>
-          <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-xs dark:border-gray-700 dark:bg-[#1f2937]">
+          <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
             <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">% Affected</p>
             <p className="mt-1 font-mono text-2xl font-bold text-red-600">
               {dataQuality?.percentage_affected || 0}%
@@ -167,7 +167,7 @@ function DataQuality() {
                 <div
                   key={idx}
                   onClick={() => handleViewRecords(issue)}
-                  className="relative cursor-pointer overflow-hidden rounded-xl border border-gray-200 bg-white p-4 shadow-2xs transition hover:-translate-y-0.5 hover:shadow-md dark:border-gray-700 dark:bg-[#1f2937]"
+                  className="relative cursor-pointer overflow-hidden rounded-xl border border-gray-200 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-gray-700 dark:bg-[#1f2937]"
                 >
                   <div className={`absolute left-0 top-0 h-full w-1.5 ${
                     issue.severity === "Critical" ? "bg-red-500" : "bg-amber-500"
@@ -247,7 +247,7 @@ function DataQuality() {
                         <div>
                           <span className="font-mono text-xs font-bold text-gray-400">#{rec.project_id}</span>
                           <p className="text-sm font-semibold text-gray-900 dark:text-white">{rec.project_name || "Unnamed"}</p>
-                          <p className="text-xs text-gray-500">{rec.state || "N/A"} — {rec.district || "N/A"}</p>
+                          <p className="text-xs text-gray-500">{rec.state || "N/A"} — {rec.constituency || "N/A"}</p>
                         </div>
                         <div className="text-right font-mono text-xs">
                           <p>Sanctioned: <strong>{rec.sanctioned_amount?.toLocaleString("en-IN") || 0}</strong></p>

@@ -95,6 +95,7 @@ _SORT_COLUMNS = {
     "expenditure": models.Project.expenditure,
     "completion_percentage": models.Project.completion_percentage,
     "status": models.Project.status,
+    "fy": models.Project.fy,
 }
 
 
@@ -170,6 +171,7 @@ def get_filter_districts(
     state: Optional[str] = Query(None, description="State name to filter districts"),
     db: Session = Depends(get_db)
 ):
+    """Backward-compatible: returns districts if available, else constituencies."""
     if not state:
         return []
 
@@ -178,15 +180,16 @@ def get_filter_districts(
     if cached is not None:
         return cached
 
+    # The dataset primarily uses the 'constituency' field
     districts = (
-        db.query(models.Project.district)
+        db.query(models.Project.constituency)
         .filter(
             models.Project.state == state,
-            models.Project.district.isnot(None),
-            models.Project.district != ""
+            models.Project.constituency.isnot(None),
+            models.Project.constituency != ""
         )
         .distinct()
-        .order_by(models.Project.district.asc())
+        .order_by(models.Project.constituency.asc())
         .all()
     )
     result = [d[0] for d in districts if d[0]]
@@ -194,7 +197,33 @@ def get_filter_districts(
     return result
 
 
-@app.get("/filters/categories", tags=["Filters"])
+@app.get("/filters/constituencies", tags=["Filters"])
+def get_filter_constituencies(
+    state: Optional[str] = Query(None, description="State name to filter constituencies"),
+    db: Session = Depends(get_db)
+):
+    if not state:
+        return []
+
+    cache_key = f"filter_constituencies_{state}"
+    cached = get_cached(cache_key, ttl_seconds=600)
+    if cached is not None:
+        return cached
+
+    constituencies = (
+        db.query(models.Project.constituency)
+        .filter(
+            models.Project.state == state,
+            models.Project.constituency.isnot(None),
+            models.Project.constituency != ""
+        )
+        .distinct()
+        .order_by(models.Project.constituency.asc())
+        .all()
+    )
+    result = [c[0] for c in constituencies if c[0]]
+    set_cached(cache_key, result)
+    return result
 def get_filter_categories(db: Session = Depends(get_db)):
     cached = get_cached("filter_categories", ttl_seconds=600)
     if cached is not None:
@@ -229,11 +258,34 @@ def create_project(
     return new_project
 
 
+@app.get("/filters/fys", tags=["Filters"])
+def get_filter_fys(db: Session = Depends(get_db)):
+    """Return available financial years with project counts."""
+    cached = get_cached("filter_fys", ttl_seconds=600)
+    if cached is not None:
+        return cached
+
+    rows = (
+        db.query(
+            models.Project.fy,
+            func.count(models.Project.id).label("count")
+        )
+        .filter(models.Project.fy.isnot(None), models.Project.fy != "")
+        .group_by(models.Project.fy)
+        .order_by(models.Project.fy.asc())
+        .all()
+    )
+    result = [{"fy": r.fy, "count": r.count} for r in rows]
+    set_cached("filter_fys", result)
+    return result
+
+
 @app.get("/projects", tags=["Projects"])
 def get_projects(
     state: Optional[str] = None,
     district: Optional[str] = None,
     constituency: Optional[str] = None,
+    fy: Optional[str] = Query(None, description="Filter by financial year: 2023-24, 2024-25, 2025-26, 2026-27"),
     project_type: Optional[str] = None,
     status: Optional[str] = None,
     min_sanctioned_amount: Optional[float] = None,
@@ -266,6 +318,8 @@ def get_projects(
         query = query.filter(models.Project.district == district)
     if constituency:
         query = query.filter(models.Project.constituency == constituency)
+    if fy:
+        query = query.filter(models.Project.fy == fy)
     if project_type:
         query = query.filter(models.Project.project_type == project_type)
     if status:
@@ -304,6 +358,7 @@ def search_projects(
     state: Optional[str] = None,
     district: Optional[str] = None,
     constituency: Optional[str] = None,
+    fy: Optional[str] = Query(None, description="Filter by financial year"),
     project_type: Optional[str] = None,
     status: Optional[str] = None,
     risk_level: Optional[str] = Query(None, description="Filter by risk level: High, Medium, Low, None"),
@@ -340,24 +395,48 @@ def search_projects(
         except (ValueError, TypeError):
             pass
 
+        # Subquery to get MP names for projects via mp_summaries (constituency+state join)
+        mp_name_subq = (
+            db.query(
+                models.MPSummary.constituency,
+                models.MPSummary.state,
+                models.MPSummary.mp_name
+            )
+            .filter(
+                models.MPSummary.mp_name.isnot(None),
+                models.MPSummary.mp_name != ""
+            )
+            .subquery()
+        )
+
         if id_match is not None:
-            # Prioritize exact ID match, but also include fuzzy text matches
-            query = query.filter(
+            # Prioritize exact ID match, but also include fuzzy text matches across all fields
+            query = query.outerjoin(
+                mp_name_subq,
+                (models.Project.constituency == mp_name_subq.c.constituency) &
+                (models.Project.state == mp_name_subq.c.state)
+            ).filter(
                 (models.Project.id == id_match) |
                 (models.Project.project_name.ilike(f"%{q_clean}%")) |
                 (models.Project.project_type.ilike(f"%{q_clean}%")) |
                 (models.Project.state.ilike(f"%{q_clean}%")) |
                 (models.Project.district.ilike(f"%{q_clean}%")) |
-                (models.Project.constituency.ilike(f"%{q_clean}%"))
+                (models.Project.constituency.ilike(f"%{q_clean}%")) |
+                (mp_name_subq.c.mp_name.ilike(f"%{q_clean}%"))
             )
         else:
-            # Text search across name, type, state, district, constituency
-            query = query.filter(
+            # Text search across name, type, state, district, constituency, MP name
+            query = query.outerjoin(
+                mp_name_subq,
+                (models.Project.constituency == mp_name_subq.c.constituency) &
+                (models.Project.state == mp_name_subq.c.state)
+            ).filter(
                 (models.Project.project_name.ilike(f"%{q_clean}%")) |
                 (models.Project.project_type.ilike(f"%{q_clean}%")) |
                 (models.Project.state.ilike(f"%{q_clean}%")) |
                 (models.Project.district.ilike(f"%{q_clean}%")) |
-                (models.Project.constituency.ilike(f"%{q_clean}%"))
+                (models.Project.constituency.ilike(f"%{q_clean}%")) |
+                (mp_name_subq.c.mp_name.ilike(f"%{q_clean}%"))
             )
 
     if state:
@@ -366,6 +445,8 @@ def search_projects(
         query = query.filter(models.Project.district == district)
     if constituency:
         query = query.filter(models.Project.constituency == constituency)
+    if fy:
+        query = query.filter(models.Project.fy == fy)
     if project_type:
         query = query.filter(models.Project.project_type == project_type)
     if status:
@@ -389,13 +470,13 @@ def search_projects(
     if max_risk_score is not None:
         query = query.filter(models.RiskScore.risk_score <= max_risk_score)
 
-    total = query.count()
+    total = query.with_entities(models.Project.id).distinct().count()
     if sort_by:
         query = apply_sort(query, sort_by, sort_dir)
     else:
         query = query.order_by(models.Project.id.asc())
 
-    projects = query.offset(skip).limit(limit).all()
+    projects = query.with_entities(models.Project).distinct().offset(skip).limit(limit).all()
 
     return {
         "total": total,
@@ -441,12 +522,20 @@ def get_project(
 # =========================================================
 
 @app.get("/dashboard/overview", tags=["Dashboard"])
-def dashboard_overview(db: Session = Depends(get_db)):
-    cached = get_cached("dashboard_overview", ttl_seconds=60)
+def dashboard_overview(
+    fy: Optional[str] = Query(None, description="Filter by financial year"),
+    db: Session = Depends(get_db)
+):
+    cache_key = f"dashboard_overview_{fy or 'all'}"
+    cached = get_cached(cache_key, ttl_seconds=60)
     if cached is not None:
         return cached
 
-    stats = db.query(
+    base_q = db.query(models.Project)
+    if fy:
+        base_q = base_q.filter(models.Project.fy == fy)
+
+    stats = base_q.with_entities(
         func.count(models.Project.id).label("total_projects"),
         func.coalesce(func.sum(models.Project.sanctioned_amount), 0).label("total_sanctioned"),
         func.coalesce(func.sum(models.Project.expenditure), 0).label("total_expenditure"),
@@ -477,7 +566,7 @@ def dashboard_overview(db: Session = Depends(get_db)):
         "recommended_works": int(stats.recommended_works or 0),
     }
 
-    set_cached("dashboard_overview", result)
+    set_cached(cache_key, result)
     return result
 
 
@@ -847,7 +936,8 @@ def detect_anomalies(
     limit: int = Query(100, ge=1, le=500),
     risk_level: Optional[str] = None,
     state: Optional[str] = None,
-    district: Optional[str] = None,
+    constituency: Optional[str] = None,
+    fy: Optional[str] = Query(None, description="Filter by financial year"),
     q: Optional[str] = Query(None, description="Search by project name or ID"),
     sort_by: Optional[str] = Query(None, description="Sort: risk_score, sanctioned_amount, expenditure, completion_percentage, project_name, state, id"),
     sort_dir: Optional[str] = Query(None, description="Sort direction: asc or desc"),
@@ -863,8 +953,10 @@ def detect_anomalies(
         )
         if state:
             query = query.filter(models.Project.state == state)
-        if district:
-            query = query.filter(models.Project.district == district)
+        if constituency:
+            query = query.filter(models.Project.constituency == constituency)
+        if fy:
+            query = query.filter(models.Project.fy == fy)
         if risk_level:
             query = query.filter(models.RiskScore.risk_level.ilike(risk_level))
         if q:
@@ -1310,15 +1402,23 @@ def state_insights(
 # =========================================================
 
 @app.get("/dashboard/state-intelligence", tags=["Dashboard"])
-def state_intelligence(db: Session = Depends(get_db)):
+def state_intelligence(
+    fy: Optional[str] = Query(None, description="Filter by financial year"),
+    db: Session = Depends(get_db)
+):
     """Return detailed analytics for all states."""
-    cached = get_cached("state_intelligence", ttl_seconds=120)
+    cache_key = f"state_intelligence_{fy or 'all'}"
+    cached = get_cached(cache_key, ttl_seconds=120)
     if cached is not None:
         return cached
 
+    base_q = db.query(models.Project).filter(models.Project.state.isnot(None), models.Project.state != "")
+    if fy:
+        base_q = base_q.filter(models.Project.fy == fy)
+
     # Main state stats query
     rows = (
-        db.query(
+        base_q.with_entities(
             models.Project.state,
             func.count(models.Project.id).label("total_projects"),
             func.sum(case((models.Project.status.ilike("completed"), 1), else_=0)).label("completed_projects"),
@@ -1327,14 +1427,13 @@ def state_intelligence(db: Session = Depends(get_db)):
             func.coalesce(func.sum(models.Project.expenditure), 0).label("total_expenditure"),
             func.coalesce(func.avg(models.Project.completion_percentage), 0).label("avg_completion")
         )
-        .filter(models.Project.state.isnot(None), models.Project.state != "")
         .group_by(models.Project.state)
         .order_by(func.count(models.Project.id).desc())
         .all()
     )
 
     # High-risk counts per state
-    high_risk_rows = (
+    hr_q = (
         db.query(
             models.Project.state,
             func.count(models.RiskScore.id).label("high_risk_count"),
@@ -1343,9 +1442,10 @@ def state_intelligence(db: Session = Depends(get_db)):
             func.sum(case((models.RiskScore.risk_level.ilike("medium"), 1), else_=0)).label("medium_count")
         )
         .join(models.RiskScore, models.Project.id == models.RiskScore.project_id)
-        .group_by(models.Project.state)
-        .all()
     )
+    if fy:
+        hr_q = hr_q.filter(models.Project.fy == fy)
+    high_risk_rows = hr_q.group_by(models.Project.state).all()
     risk_map = {r.state: r for r in high_risk_rows}
 
     result = []
@@ -1368,7 +1468,7 @@ def state_intelligence(db: Session = Depends(get_db)):
             "ml_anomaly_projects": int(risk.ml_anomaly_count) if risk else 0,
         })
 
-    set_cached("state_intelligence", result)
+    set_cached(cache_key, result)
     return result
 
 
@@ -1381,7 +1481,8 @@ def audit_priority(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     state: Optional[str] = None,
-    district: Optional[str] = None,
+    constituency: Optional[str] = None,
+    fy: Optional[str] = Query(None, description="Filter by financial year"),
     risk_level: Optional[str] = None,
     q: Optional[str] = None,
     sort_by: Optional[str] = Query(None),
@@ -1396,8 +1497,10 @@ def audit_priority(
     )
     if state:
         query = query.filter(models.Project.state == state)
-    if district:
-        query = query.filter(models.Project.district == district)
+    if constituency:
+        query = query.filter(models.Project.constituency == constituency)
+    if fy:
+        query = query.filter(models.Project.fy == fy)
     if risk_level:
         query = query.filter(models.RiskScore.risk_level.ilike(risk_level))
     if q:
@@ -1650,6 +1753,7 @@ def export_report(
     report_type: str = Query("Project Audit Report", description="Report type"),
     state: Optional[str] = Query(None),
     district: Optional[str] = Query(None),
+    fy: Optional[str] = Query(None, description="Filter by financial year"),
     status: Optional[str] = Query(None),
     risk_level: Optional[str] = Query(None),
     sort_by: Optional[str] = Query(None),
@@ -1666,7 +1770,9 @@ def export_report(
         if state:
             query = query.filter(models.Project.state == state)
         if district:
-            query = query.filter(models.Project.district == district)
+            query = query.filter(models.Project.constituency == district)
+        if fy:
+            query = query.filter(models.Project.fy == fy)
         if risk_level:
             query = query.filter(models.RiskScore.risk_level.ilike(risk_level))
 
@@ -1675,7 +1781,7 @@ def export_report(
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow([
-            "Project ID", "Project Name", "State", "District", "Constituency",
+            "Project ID", "Project Name", "State", "Constituency",
             "Category", "Sanctioned Amount", "Expenditure", "Progress %",
             "Status", "Risk Score", "Risk Level", "ML Anomaly", "Anomaly Reasons"
         ])
@@ -1685,7 +1791,6 @@ def export_report(
                 proj.id,
                 proj.project_name or "",
                 proj.state or "",
-                proj.district or "",
                 proj.constituency or "",
                 proj.project_type or "",
                 proj.sanctioned_amount or 0,
@@ -1700,39 +1805,40 @@ def export_report(
     else:
         # Project Audit Report or other types
         query = db.query(models.Project)
-        if state:
-            query = query.filter(models.Project.state == state)
-        if district:
-            query = query.filter(models.Project.district == district)
-        if status:
-            query = query.filter(models.Project.status.ilike(status))
+    if state:
+        query = query.filter(models.Project.state == state)
+    if district:
+        query = query.filter(models.Project.constituency == district)
+    if fy:
+        query = query.filter(models.Project.fy == fy)
+    if status:
+        query = query.filter(models.Project.status.ilike(status))
 
-        if sort_by:
-            query = apply_sort(query, sort_by, sort_dir)
-        else:
-            query = query.order_by(models.Project.id.asc())
-        rows = query.all()
+    if sort_by:
+        query = apply_sort(query, sort_by, sort_dir)
+    else:
+        query = query.order_by(models.Project.id.asc())
+    rows = query.all()
 
-        output = io.StringIO()
-        writer = csv.writer(output)
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "Project ID", "Project Name", "State", "Constituency",
+        "Category", "Sanctioned Amount", "Expenditure", "Progress %",
+        "Status"
+    ])
+    for proj in rows:
         writer.writerow([
-            "Project ID", "Project Name", "State", "District", "Constituency",
-            "Category", "Sanctioned Amount", "Expenditure", "Progress %",
-            "Status"
+            proj.id,
+            proj.project_name or "",
+            proj.state or "",
+            proj.constituency or "",
+            proj.project_type or "",
+            proj.sanctioned_amount or 0,
+            proj.expenditure or 0,
+            proj.completion_percentage or 0,
+            proj.status or ""
         ])
-        for proj in rows:
-            writer.writerow([
-                proj.id,
-                proj.project_name or "",
-                proj.state or "",
-                proj.district or "",
-                proj.constituency or "",
-                proj.project_type or "",
-                proj.sanctioned_amount or 0,
-                proj.expenditure or 0,
-                proj.completion_percentage or 0,
-                proj.status or ""
-            ])
 
     # Generate filename
     import datetime
@@ -1755,6 +1861,7 @@ def export_report_count(
     report_type: str = Query("Project Audit Report"),
     state: Optional[str] = Query(None),
     district: Optional[str] = Query(None),
+    fy: Optional[str] = Query(None, description="Filter by financial year"),
     status: Optional[str] = Query(None),
     risk_level: Optional[str] = Query(None),
     db: Session = Depends(get_db)
@@ -1768,7 +1875,9 @@ def export_report_count(
         if state:
             query = query.filter(models.Project.state == state)
         if district:
-            query = query.filter(models.Project.district == district)
+            query = query.filter(models.Project.constituency == district)
+        if fy:
+            query = query.filter(models.Project.fy == fy)
         if risk_level:
             query = query.filter(models.RiskScore.risk_level.ilike(risk_level))
         total = query.scalar() or 0
@@ -1777,7 +1886,9 @@ def export_report_count(
         if state:
             query = query.filter(models.Project.state == state)
         if district:
-            query = query.filter(models.Project.district == district)
+            query = query.filter(models.Project.constituency == district)
+        if fy:
+            query = query.filter(models.Project.fy == fy)
         if status:
             query = query.filter(models.Project.status.ilike(status))
         total = query.scalar() or 0
