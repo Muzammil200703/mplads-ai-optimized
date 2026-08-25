@@ -7,7 +7,6 @@ import Overview from "./pages/Overview"
 import Projects from "./pages/Projects"
 import RiskCenter from "./pages/RiskCenter"
 import Reports from "./pages/Reports"
-import DataQuality from "./pages/DataQuality"
 import StateIntelligence from "./pages/StateIntelligence"
 import AuditPriority from "./pages/AuditPriority"
 
@@ -99,8 +98,6 @@ function App() {
         return <RiskCenter drillDownParams={drillDownParams} onClearDrillDown={() => setDrillDownParams(null)} fy={selectedFY} />
       case "Reports":
         return <Reports fy={selectedFY} />
-      case "Data Quality":
-        return <DataQuality />
       case "State Intelligence":
         return <StateIntelligence onNavigateToProjects={(state) => handleDrillDown("Projects", { state })} fy={selectedFY} />
       case "Audit Priority":

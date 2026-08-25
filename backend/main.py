@@ -1272,13 +1272,21 @@ def get_ai_insights(db: Session = Depends(get_db)):
 
 
 @app.get("/ai/narrative-insights", tags=["AI Operations"])
-def narrative_insights(db: Session = Depends(get_db)):
-    cached = get_cached("narrative_insights", ttl_seconds=120)
+def narrative_insights(
+    fy: Optional[str] = Query(None, description="Filter by financial year"),
+    db: Session = Depends(get_db),
+):
+    cache_key = f"narrative_insights_{fy or 'all'}"
+    cached = get_cached(cache_key, ttl_seconds=120)
     if cached is not None:
         return cached
 
+    base_q = db.query(models.Project)
+    if fy:
+        base_q = base_q.filter(models.Project.fy == fy)
+
     insights = []
-    stats = db.query(
+    stats = base_q.with_entities(
         func.count(models.Project.id).label("total"),
         func.sum(case((models.Project.status.ilike("completed"), 1), else_=0)).label("completed"),
         func.coalesce(func.sum(models.Project.sanctioned_amount), 0).label("sanctioned"),
@@ -1291,14 +1299,18 @@ def narrative_insights(db: Session = Depends(get_db)):
     completed = int(stats.completed or 0)
 
     # 1. High risk insight
-    high_risk = db.query(func.count(models.RiskScore.id)).filter(
+    risk_q = db.query(func.count(models.RiskScore.id)).filter(
         models.RiskScore.risk_level.ilike("high")
-    ).scalar() or 0
+    )
+    if fy:
+        risk_project_ids = base_q.with_entities(models.Project.id).subquery()
+        risk_q = risk_q.filter(models.RiskScore.project_id.in_(risk_project_ids))
+    high_risk = risk_q.scalar() or 0
 
     if high_risk == 0 and total_projects > 0:
-        high_risk = db.query(func.count(models.Project.id)).filter(
+        high_risk = base_q.filter(
             models.Project.expenditure > models.Project.sanctioned_amount
-        ).scalar() or 0
+        ).count() or 0
 
     if total_projects > 0:
         pct = (high_risk / total_projects) * 100
@@ -1327,18 +1339,18 @@ def narrative_insights(db: Session = Depends(get_db)):
         })
 
     # 4. Top state insight
-    top_state = (
-        db.query(models.Project.state, func.count(models.Project.id).label("count"))
-        .filter(models.Project.state.isnot(None), models.Project.state != "")
+    top_state_q = (
+        base_q.filter(models.Project.state.isnot(None), models.Project.state != "")
+        .with_entities(models.Project.state, func.count(models.Project.id).label("count"))
         .group_by(models.Project.state)
         .order_by(func.count(models.Project.id).desc())
         .first()
     )
-    if top_state:
+    if top_state_q:
         insights.append({
             "type": "geographic",
             "title": "Highest Work Allocation Concentration",
-            "message": f"{top_state[0]} leads with the highest number of sanctioned works ({top_state[1]:,} projects)."
+            "message": f"{top_state_q[0]} leads with the highest number of sanctioned works ({top_state_q[1]:,} projects)."
         })
 
     result = {
@@ -1346,7 +1358,7 @@ def narrative_insights(db: Session = Depends(get_db)):
         "insights": insights
     }
 
-    set_cached("narrative_insights", result)
+    set_cached(cache_key, result)
     return result
 
 

@@ -37,7 +37,6 @@ function TopBar({
     "Audit Priority",
     "State Intelligence",
     "Reports",
-    "Data Quality",
   ]
 
   return (

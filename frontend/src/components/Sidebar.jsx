@@ -13,7 +13,6 @@ function Sidebar({
     { name: "Reports", page: "Reports", icon: "▣" },
     { name: "State Intelligence", page: "State Intelligence", icon: "🗺" },
     { name: "Audit Priority", page: "Audit Priority", icon: "🎯" },
-    { name: "Data Quality", page: "Data Quality", icon: "📋" },
   ]
 
   // Mobile drawer

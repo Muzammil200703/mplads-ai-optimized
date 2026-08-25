@@ -123,8 +123,8 @@ export async function getAIInsights() {
   return request("/ai/insights")
 }
 
-export async function getAINarrativeInsights() {
-  return request("/ai/narrative-insights")
+export async function getAINarrativeInsights(params = {}) {
+  return request(`/ai/narrative-insights${buildQuery(params)}`)
 }
 
 export async function getStateInsights(state) {
@@ -166,10 +166,6 @@ export async function getAnomalyAnalytics(params = {}) {
 
 export async function getScatterData(params = {}) {
   return request(`/anomalies/scatter-data${buildQuery(params)}`)
-}
-
-export async function getDataQualityRecords(params = {}) {
-  return request(`/data-quality/records${buildQuery(params)}`)
 }
 
 export async function getOverview() {

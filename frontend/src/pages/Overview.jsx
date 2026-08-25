@@ -31,7 +31,7 @@ function Overview({ darkMode, onDrillDown, fy }) {
         const fyParams = fy ? { fy } : {}
         const [ovRes, narrRes, statesRes, anomRes] = await Promise.allSettled([
           getDashboardOverview(fyParams),
-          getAINarrativeInsights(),
+          getAINarrativeInsights(fyParams),
           getDashboardStates(fyParams),
           getAnomaliesSummary(fyParams),
         ])
@@ -352,6 +352,35 @@ function Overview({ darkMode, onDrillDown, fy }) {
                 </p>
               </div>
             </div>
+          </div>
+
+          {/* DATA SOURCES & PROVENANCE */}
+          <div className={`rounded-xl border p-4 sm:p-5 shadow-sm ${cardClasses}`}>
+            <div className="mb-3 flex items-center gap-2">
+              <span className="text-sm">🏛</span>
+              <h4 className="text-[10px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                Data Sources & Provenance
+              </h4>
+              <span className="ml-auto rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[9px] font-bold text-green-700 dark:border-green-800 dark:bg-green-950/40 dark:text-green-300">
+                Official Government Data
+              </span>
+            </div>
+            <div className="space-y-0">
+              {[
+                { source: "MPLADS Official Government Portal", data: "Project, constituency, MP and allocation records" },
+                { source: "MPLADS Works / Expenditure Data", data: "Sanctioned amount, expenditure and project progress" },
+                { source: "Project Status Records", data: "Ongoing/completed work information" },
+                { source: "AI Analysis Layer", data: "Risk scoring and anomaly detection derived from available project data" },
+              ].map((row, i) => (
+                <div key={i} className="flex flex-col gap-0.5 border-b border-gray-50 py-2 dark:border-gray-700/40 last:border-0 last:pb-0">
+                  <span className="text-[10px] font-bold text-gray-700 dark:text-gray-300">{row.source}</span>
+                  <span className="text-[10px] text-gray-500 dark:text-gray-400">{row.data}</span>
+                </div>
+              ))}
+            </div>
+            <p className="mt-2.5 border-t border-gray-50 pt-2 text-[9px] leading-relaxed text-gray-400 dark:border-gray-700/40 dark:text-gray-500">
+              Data is sourced from official MPLADS government records and processed by the platform for monitoring and analytical purposes.
+            </p>
           </div>
         </div>
       </div>
