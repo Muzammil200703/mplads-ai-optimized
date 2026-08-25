@@ -67,8 +67,8 @@ export async function getDashboardOverview(params = {}) {
   return request(`/dashboard/overview${buildQuery(params)}`)
 }
 
-export async function getDashboardStates() {
-  return request("/dashboard/states")
+export async function getDashboardStates(params = {}) {
+  return request(`/dashboard/states${buildQuery(params)}`)
 }
 
 export async function getDashboardMPs(params = {}) {
@@ -87,8 +87,8 @@ export async function getDashboardProjectTypes() {
   return request("/dashboard/project-types")
 }
 
-export async function getAnomaliesSummary() {
-  return request("/dashboard/anomalies-summary")
+export async function getAnomaliesSummary(params = {}) {
+  return request(`/dashboard/anomalies-summary${buildQuery(params)}`)
 }
 
 export async function refreshAnomaliesSummary() {
@@ -160,8 +160,16 @@ export async function getSimilarProjects(projectId, limit = 5) {
   return request(`/projects/${projectId}/similar?limit=${limit}`)
 }
 
-export async function getAnomalyAnalytics() {
-  return request("/anomalies/analytics")
+export async function getAnomalyAnalytics(params = {}) {
+  return request(`/anomalies/analytics${buildQuery(params)}`)
+}
+
+export async function getScatterData(params = {}) {
+  return request(`/anomalies/scatter-data${buildQuery(params)}`)
+}
+
+export async function getDataQualityRecords(params = {}) {
+  return request(`/data-quality/records${buildQuery(params)}`)
 }
 
 export async function getOverview() {

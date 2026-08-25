@@ -28,11 +28,12 @@ function Overview({ darkMode, onDrillDown, fy }) {
         setLoading(true)
         setError("")
 
+        const fyParams = fy ? { fy } : {}
         const [ovRes, narrRes, statesRes, anomRes] = await Promise.allSettled([
-          getDashboardOverview(fy ? { fy } : {}),
+          getDashboardOverview(fyParams),
           getAINarrativeInsights(),
-          getDashboardStates(),
-          getAnomaliesSummary(),
+          getDashboardStates(fyParams),
+          getAnomaliesSummary(fyParams),
         ])
 
         if (ovRes.status === "fulfilled") {

@@ -571,14 +571,21 @@ def dashboard_overview(
 
 
 @app.get("/dashboard/states", tags=["Dashboard"])
-def dashboard_states(db: Session = Depends(get_db)):
-    cached = get_cached("dashboard_states", ttl_seconds=120)
+def dashboard_states(
+    fy: Optional[str] = Query(None, description="Filter by financial year"),
+    db: Session = Depends(get_db)
+):
+    cache_key = f"dashboard_states_{fy or 'all'}"
+    cached = get_cached(cache_key, ttl_seconds=120)
     if cached is not None:
         return cached
 
-    # Perform a SINGLE grouped query instead of N+1 loop queries
+    base_q = db.query(models.Project)
+    if fy:
+        base_q = base_q.filter(models.Project.fy == fy)
+
     rows = (
-        db.query(
+        base_q.with_entities(
             models.Project.state,
             func.count(models.Project.id).label("total_projects"),
             func.sum(case((models.Project.status.ilike("completed"), 1), else_=0)).label("completed_projects"),
@@ -610,7 +617,7 @@ def dashboard_states(db: Session = Depends(get_db)):
             "average_completion_percentage": round(float(row.avg_completion), 2)
         })
 
-    set_cached("dashboard_states", result)
+    set_cached(cache_key, result)
     return result
 
 
@@ -649,18 +656,39 @@ def dashboard_mps(
 
 
 @app.get("/dashboard/anomalies-summary", tags=["Dashboard"])
-def anomalies_summary(db: Session = Depends(get_db)):
-    cached = get_cached("anomalies_summary", ttl_seconds=300)
+def anomalies_summary(
+    fy: Optional[str] = Query(None, description="Filter by financial year"),
+    db: Session = Depends(get_db)
+):
+    cache_key = f"anomalies_summary_{fy or 'all'}"
+    cached = get_cached(cache_key, ttl_seconds=300)
     if cached is not None:
         return cached
 
     # Check if precalculated RiskScore table has records
     risk_count = db.query(func.count(models.RiskScore.id)).scalar() or 0
     if risk_count > 0:
-        high = db.query(func.count(models.RiskScore.id)).filter(models.RiskScore.risk_level == "High").scalar() or 0
-        medium = db.query(func.count(models.RiskScore.id)).filter(models.RiskScore.risk_level == "Medium").scalar() or 0
-        low = db.query(func.count(models.RiskScore.id)).filter(models.RiskScore.risk_level == "Low").scalar() or 0
-        total_checked = db.query(func.count(models.Project.id)).scalar() or 0
+        # Build base query for projects, optionally filtered by fy
+        project_ids_q = db.query(models.Project.id)
+        if fy:
+            project_ids_q = project_ids_q.filter(models.Project.fy == fy)
+        project_ids_subq = project_ids_q.subquery()
+
+        high = db.query(func.count(models.RiskScore.id)).filter(
+            models.RiskScore.risk_level == "High",
+            models.RiskScore.project_id.in_(project_ids_subq)
+        ).scalar() or 0
+        medium = db.query(func.count(models.RiskScore.id)).filter(
+            models.RiskScore.risk_level == "Medium",
+            models.RiskScore.project_id.in_(project_ids_subq)
+        ).scalar() or 0
+        low = db.query(func.count(models.RiskScore.id)).filter(
+            models.RiskScore.risk_level == "Low",
+            models.RiskScore.project_id.in_(project_ids_subq)
+        ).scalar() or 0
+        total_checked = db.query(func.count(models.Project.id)).filter(
+            models.Project.fy == fy if fy else True
+        ).scalar() or 0
 
         result = {
             "total_projects_checked": total_checked,
@@ -669,20 +697,24 @@ def anomalies_summary(db: Session = Depends(get_db)):
             "low_risk": low,
             "total_anomalies": high + medium + low
         }
-        set_cached("anomalies_summary", result)
+        set_cached(cache_key, result)
         return result
 
     # Quick heuristic calculation
-    overspent = db.query(func.count(models.Project.id)).filter(models.Project.expenditure > models.Project.sanctioned_amount).scalar() or 0
-    stalled_high = db.query(func.count(models.Project.id)).filter(
+    base_q = db.query(models.Project)
+    if fy:
+        base_q = base_q.filter(models.Project.fy == fy)
+
+    overspent = base_q.filter(models.Project.expenditure > models.Project.sanctioned_amount).count() or 0
+    stalled_high = base_q.filter(
         models.Project.sanctioned_amount >= 1000000,
         models.Project.completion_percentage < 25
-    ).scalar() or 0
-    zero_progress = db.query(func.count(models.Project.id)).filter(
+    ).count() or 0
+    zero_progress = base_q.filter(
         models.Project.expenditure > 0,
         models.Project.completion_percentage == 0
-    ).scalar() or 0
-    total_projects = db.query(func.count(models.Project.id)).scalar() or 0
+    ).count() or 0
+    total_projects = base_q.count() or 0
 
     high_risk = overspent + stalled_high
     medium_risk = zero_progress
@@ -695,7 +727,7 @@ def anomalies_summary(db: Session = Depends(get_db)):
         "low_risk": low_risk,
         "total_anomalies": high_risk + medium_risk + low_risk
     }
-    set_cached("anomalies_summary", result)
+    set_cached(cache_key, result)
     return result
 
 
@@ -1662,23 +1694,37 @@ def get_similar_projects(
 # =========================================================
 
 @app.get("/anomalies/analytics", tags=["Anomaly Detection"])
-def anomaly_analytics(db: Session = Depends(get_db)):
-    """Return anomaly distribution analytics."""
-    cached = get_cached("anomaly_analytics", ttl_seconds=300)
+def anomaly_analytics(
+    state: Optional[str] = Query(None),
+    constituency: Optional[str] = Query(None),
+    fy: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Return anomaly distribution analytics, optionally filtered."""
+    cache_key = f"anomaly_analytics_{state or ''}_{constituency or ''}_{fy or ''}"
+    cached = get_cached(cache_key, ttl_seconds=300)
     if cached is not None:
         return cached
 
-    total = db.query(func.count(models.RiskScore.id)).scalar() or 0
+    base_q = (
+        db.query(models.RiskScore)
+        .join(models.Project, models.RiskScore.project_id == models.Project.id)
+    )
+    if state:
+        base_q = base_q.filter(models.Project.state == state)
+    if constituency:
+        base_q = base_q.filter(models.Project.constituency == constituency)
+    if fy:
+        base_q = base_q.filter(models.Project.fy == fy)
 
-    # Risk level distribution
-    high = db.query(func.count(models.RiskScore.id)).filter(models.RiskScore.risk_level.ilike("high")).scalar() or 0
-    medium = db.query(func.count(models.RiskScore.id)).filter(models.RiskScore.risk_level.ilike("medium")).scalar() or 0
-    low = db.query(func.count(models.RiskScore.id)).filter(models.RiskScore.risk_level.ilike("low")).scalar() or 0
-    none_count = db.query(func.count(models.RiskScore.id)).filter(models.RiskScore.risk_level.ilike("none")).scalar() or 0
-    ml_count = db.query(func.count(models.RiskScore.id)).filter(models.RiskScore.ml_anomaly == True).scalar() or 0
+    total = base_q.count() or 0
+    high = base_q.filter(models.RiskScore.risk_level.ilike("high")).count() or 0
+    medium = base_q.filter(models.RiskScore.risk_level.ilike("medium")).count() or 0
+    low = base_q.filter(models.RiskScore.risk_level.ilike("low")).count() or 0
+    none_count = base_q.filter(models.RiskScore.risk_level.ilike("none")).count() or 0
+    ml_count = base_q.filter(models.RiskScore.ml_anomaly == True).count() or 0
 
-    # Count by anomaly type (from reasons)
-    all_risks = db.query(models.RiskScore.reasons).filter(models.RiskScore.reasons != "").all()
+    all_risks = base_q.with_entities(models.RiskScore.reasons).filter(models.RiskScore.reasons != "").all()
     type_counts = {}
     for (reasons_str,) in all_risks:
         for reason in reasons_str.split(","):
@@ -1707,17 +1753,44 @@ def anomaly_analytics(db: Session = Depends(get_db)):
                 cat = "Other"
             type_counts[cat] = type_counts.get(cat, 0) + 1
 
-    # State-wise distribution (top 10)
-    state_rows = (
+    state_q = (
         db.query(
             models.Project.state,
             func.count(models.RiskScore.id).label("anomaly_count")
         )
         .join(models.RiskScore, models.Project.id == models.RiskScore.project_id)
         .filter(models.RiskScore.risk_score > 0)
-        .group_by(models.Project.state)
+    )
+    if state:
+        state_q = state_q.filter(models.Project.state == state)
+    if constituency:
+        state_q = state_q.filter(models.Project.constituency == constituency)
+    if fy:
+        state_q = state_q.filter(models.Project.fy == fy)
+
+    state_rows = (
+        state_q.group_by(models.Project.state)
         .order_by(func.count(models.RiskScore.id).desc())
         .limit(10)
+        .all()
+    )
+
+    # FY distribution
+    fy_q = (
+        db.query(
+            models.Project.fy,
+            func.count(models.RiskScore.id).label("anomaly_count")
+        )
+        .join(models.RiskScore, models.Project.id == models.RiskScore.project_id)
+        .filter(models.Project.fy.isnot(None), models.Project.fy != "")
+    )
+    if state:
+        fy_q = fy_q.filter(models.Project.state == state)
+    if constituency:
+        fy_q = fy_q.filter(models.Project.constituency == constituency)
+    fy_rows = (
+        fy_q.group_by(models.Project.fy)
+        .order_by(models.Project.fy.asc())
         .all()
     )
 
@@ -1737,10 +1810,71 @@ def anomaly_analytics(db: Session = Depends(get_db)):
         "state_distribution": [
             {"state": r.state, "count": r.anomaly_count}
             for r in state_rows
-        ]
+        ],
+        "fy_distribution": [
+            {"fy": r.fy, "count": r.anomaly_count}
+            for r in fy_rows
+        ],
     }
 
-    set_cached("anomaly_analytics", result)
+    set_cached(cache_key, result)
+    return result
+
+
+@app.get("/anomalies/scatter-data", tags=["Anomaly Detection"])
+def anomaly_scatter_data(
+    state: Optional[str] = Query(None),
+    constituency: Optional[str] = Query(None),
+    fy: Optional[str] = Query(None),
+    limit: int = Query(2000, ge=100, le=5000),
+    db: Session = Depends(get_db),
+):
+    """Return sampled project data for scatter plot: expenditure ratio vs physical progress."""
+    cache_key = f"scatter_data_{state or ''}_{constituency or ''}_{fy or ''}_{limit}"
+    cached = get_cached(cache_key, ttl_seconds=300)
+    if cached is not None:
+        return cached
+
+    q = (
+        db.query(
+            models.Project.id,
+            models.Project.project_name,
+            models.Project.state,
+            models.Project.sanctioned_amount,
+            models.Project.expenditure,
+            models.Project.completion_percentage,
+            models.RiskScore.risk_level,
+            models.RiskScore.risk_score,
+            models.RiskScore.ml_anomaly,
+        )
+        .join(models.RiskScore, models.Project.id == models.RiskScore.project_id)
+        .filter(models.Project.sanctioned_amount > 0)
+    )
+    if state:
+        q = q.filter(models.Project.state == state)
+    if constituency:
+        q = q.filter(models.Project.constituency == constituency)
+    if fy:
+        q = q.filter(models.Project.fy == fy)
+
+    rows = q.limit(limit).all()
+    result = [
+        {
+            "id": r.id,
+            "name": r.project_name or "",
+            "state": r.state or "",
+            "expenditure_ratio": round((r.expenditure or 0) / r.sanctioned_amount * 100, 2) if r.sanctioned_amount > 0 else 0,
+            "progress": r.completion_percentage or 0,
+            "sanctioned": r.sanctioned_amount or 0,
+            "expenditure": r.expenditure or 0,
+            "risk_level": r.risk_level or "None",
+            "risk_score": r.risk_score or 0,
+            "ml_anomaly": bool(r.ml_anomaly),
+        }
+        for r in rows
+    ]
+
+    set_cached(cache_key, result)
     return result
 
 
@@ -1752,6 +1886,7 @@ def anomaly_analytics(db: Session = Depends(get_db)):
 def export_report(
     report_type: str = Query("Project Audit Report", description="Report type"),
     state: Optional[str] = Query(None),
+    constituency: Optional[str] = Query(None),
     district: Optional[str] = Query(None),
     fy: Optional[str] = Query(None, description="Filter by financial year"),
     status: Optional[str] = Query(None),
@@ -1761,6 +1896,7 @@ def export_report(
     db: Session = Depends(get_db)
 ):
     """Generate a CSV report server-side using the full dataset."""
+    _constituency = constituency or district  # backward compat
     # Build query based on report type
     if report_type == "Anomaly Summary Report" and risk_level:
         query = (
@@ -1769,8 +1905,8 @@ def export_report(
         )
         if state:
             query = query.filter(models.Project.state == state)
-        if district:
-            query = query.filter(models.Project.constituency == district)
+        if _constituency:
+            query = query.filter(models.Project.constituency == _constituency)
         if fy:
             query = query.filter(models.Project.fy == fy)
         if risk_level:
@@ -1807,8 +1943,8 @@ def export_report(
         query = db.query(models.Project)
     if state:
         query = query.filter(models.Project.state == state)
-    if district:
-        query = query.filter(models.Project.constituency == district)
+    if _constituency:
+        query = query.filter(models.Project.constituency == _constituency)
     if fy:
         query = query.filter(models.Project.fy == fy)
     if status:
@@ -1860,6 +1996,7 @@ def export_report(
 def export_report_count(
     report_type: str = Query("Project Audit Report"),
     state: Optional[str] = Query(None),
+    constituency: Optional[str] = Query(None),
     district: Optional[str] = Query(None),
     fy: Optional[str] = Query(None, description="Filter by financial year"),
     status: Optional[str] = Query(None),
@@ -1867,6 +2004,7 @@ def export_report_count(
     db: Session = Depends(get_db)
 ):
     """Return the count of records that would be exported."""
+    _constituency = constituency or district  # backward compat
     if report_type == "Anomaly Summary Report" and risk_level:
         query = (
             db.query(func.count(models.RiskScore.id))
@@ -1874,8 +2012,8 @@ def export_report_count(
         )
         if state:
             query = query.filter(models.Project.state == state)
-        if district:
-            query = query.filter(models.Project.constituency == district)
+        if _constituency:
+            query = query.filter(models.Project.constituency == _constituency)
         if fy:
             query = query.filter(models.Project.fy == fy)
         if risk_level:
@@ -1885,8 +2023,8 @@ def export_report_count(
         query = db.query(func.count(models.Project.id))
         if state:
             query = query.filter(models.Project.state == state)
-        if district:
-            query = query.filter(models.Project.constituency == district)
+        if _constituency:
+            query = query.filter(models.Project.constituency == _constituency)
         if fy:
             query = query.filter(models.Project.fy == fy)
         if status:
@@ -2132,3 +2270,99 @@ def data_quality_check(db: Session = Depends(get_db)):
 
     set_cached("data_quality", result)
     return result
+
+
+@app.get("/data-quality/records", tags=["Data Quality"])
+def data_quality_records(
+    field: str = Query(..., description="Issue field identifier"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    """Return project records matching a specific data quality issue type."""
+    q = db.query(models.Project)
+    flag_reason = ""
+
+    if field == "project_name":
+        q = q.filter((models.Project.project_name.is_(None)) | (models.Project.project_name == ""))
+        flag_reason = "Project name is missing or empty"
+    elif field == "state":
+        q = q.filter((models.Project.state.is_(None)) | (models.Project.state == ""))
+        flag_reason = "State is missing or empty"
+    elif field == "district":
+        q = q.filter((models.Project.district.is_(None)) | (models.Project.district == ""))
+        flag_reason = "District is missing or empty"
+    elif field == "status":
+        q = q.filter((models.Project.status.is_(None)) | (models.Project.status == ""))
+        flag_reason = "Status is missing or empty"
+    elif field == "sanctioned_amount":
+        q = q.filter(
+            (models.Project.sanctioned_amount.is_(None)) |
+            (models.Project.sanctioned_amount == 0) |
+            (models.Project.sanctioned_amount < 0)
+        )
+        flag_reason = "Sanctioned amount is NULL, zero, or negative"
+    elif field == "expenditure":
+        q = q.filter(models.Project.expenditure < 0)
+        flag_reason = "Expenditure is negative"
+    elif field == "completion_percentage":
+        q = q.filter(
+            models.Project.completion_percentage.isnot(None),
+            ((models.Project.completion_percentage < 0) | (models.Project.completion_percentage > 100))
+        )
+        flag_reason = "Progress is outside 0-100% range"
+    elif field == "status vs completion_percentage":
+        q = q.filter(
+            models.Project.status.ilike("completed"),
+            models.Project.completion_percentage < 90
+        )
+        flag_reason = "Status is 'Completed' but progress < 90%"
+    elif field == "expenditure vs sanctioned_amount":
+        q = q.filter(
+            models.Project.expenditure > models.Project.sanctioned_amount,
+            models.Project.sanctioned_amount > 0
+        )
+        flag_reason = "Expenditure exceeds sanctioned amount"
+    elif field == "expenditure vs completion_percentage":
+        q = q.filter(
+            models.Project.expenditure == 0,
+            models.Project.completion_percentage > 0
+        )
+        flag_reason = "Progress > 0% but expenditure is zero"
+    elif field == "id":
+        # Find duplicate IDs
+        dup_subq = (
+            db.query(models.Project.id)
+            .group_by(models.Project.id)
+            .having(func.count(models.Project.id) > 1)
+            .subquery()
+        )
+        q = q.filter(models.Project.id.in_(db.query(dup_subq)))
+        flag_reason = "Duplicate project ID"
+    else:
+        # Unknown field — return empty
+        return {"records": [], "total": 0, "flag_reason": "Unknown issue type", "skip": skip, "limit": limit}
+
+    total = q.count()
+    records = q.order_by(models.Project.id).offset(skip).limit(limit).all()
+
+    return {
+        "records": [
+            {
+                "id": p.id,
+                "project_name": p.project_name or "",
+                "state": p.state or "",
+                "constituency": p.constituency or "",
+                "sanctioned_amount": p.sanctioned_amount or 0,
+                "expenditure": p.expenditure or 0,
+                "completion_percentage": p.completion_percentage or 0,
+                "status": p.status or "",
+                "project_type": p.project_type or "",
+            }
+            for p in records
+        ],
+        "total": total,
+        "flag_reason": flag_reason,
+        "skip": skip,
+        "limit": limit,
+    }

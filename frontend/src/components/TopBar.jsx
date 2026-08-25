@@ -19,8 +19,16 @@ function TopBar({
 
   useEffect(() => {
     getFYs().then((data) => {
-      if (Array.isArray(data)) setAvailableFYs(data)
-    }).catch(() => {})
+      if (Array.isArray(data) && data.length > 0) setAvailableFYs(data)
+    }).catch(() => {
+      // Fallback: show known FYs from the dataset when backend is offline
+      setAvailableFYs([
+        { fy: "2023-24", count: 8562 },
+        { fy: "2024-25", count: 19203 },
+        { fy: "2025-26", count: 50274 },
+        { fy: "2026-27", count: 5192 },
+      ])
+    })
   }, [])
   const navigation = [
     "Overview",

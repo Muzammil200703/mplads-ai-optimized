@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { getStates, getDistricts } from "../services/api"
+import { getStates, getConstituencies } from "../services/api"
 
 const API_URL = import.meta.env.VITE_API_URL !== undefined
   ? import.meta.env.VITE_API_URL
@@ -9,9 +9,9 @@ function Reports() {
   const [reportType, setReportType] = useState("Project Audit Report")
   const [format, setFormat] = useState("CSV Dataset (.csv)")
   const [states, setStates] = useState([])
-  const [districts, setDistricts] = useState([])
+  const [constituencies, setConstituencies] = useState([])
   const [selectedState, setSelectedState] = useState("")
-  const [selectedDistrict, setSelectedDistrict] = useState("")
+  const [selectedConstituency, setSelectedConstituency] = useState("")
   const [selectedRiskLevel, setSelectedRiskLevel] = useState("")
   const [sortBy, setSortBy] = useState("")
   const [sortDir, setSortDir] = useState("desc")
@@ -25,8 +25,8 @@ function Reports() {
   }, [])
 
   useEffect(() => {
-    if (!selectedState) { setDistricts([]); setSelectedDistrict(""); return }
-    getDistricts(selectedState).then((d) => { if (Array.isArray(d)) setDistricts(d) }).catch(() => {})
+    if (!selectedState) { setConstituencies([]); setSelectedConstituency(""); return }
+    getConstituencies(selectedState).then((d) => { if (Array.isArray(d)) setConstituencies(d) }).catch(() => {})
   }, [selectedState])
 
   // Fetch count of records that would be exported
@@ -36,7 +36,7 @@ function Reports() {
         const params = new URLSearchParams()
         params.set("report_type", reportType)
         if (selectedState) params.set("state", selectedState)
-        if (selectedDistrict) params.set("district", selectedDistrict)
+        if (selectedConstituency) params.set("constituency", selectedConstituency)
         if (selectedRiskLevel) params.set("risk_level", selectedRiskLevel)
 
         const r = await fetch(`${API_URL}/export/report-count?${params.toString()}`)
@@ -49,7 +49,7 @@ function Reports() {
       }
     }
     fetchCount()
-  }, [reportType, selectedState, selectedDistrict, selectedRiskLevel])
+  }, [reportType, selectedState, selectedConstituency, selectedRiskLevel])
 
   const handleExport = async () => {
     try {
@@ -60,7 +60,7 @@ function Reports() {
       const params = new URLSearchParams()
       params.set("report_type", reportType)
       if (selectedState) params.set("state", selectedState)
-      if (selectedDistrict) params.set("district", selectedDistrict)
+      if (selectedConstituency) params.set("constituency", selectedConstituency)
       if (selectedRiskLevel && reportType === "Anomaly Summary Report") params.set("risk_level", selectedRiskLevel)
       if (sortBy) {
         params.set("sort_by", sortBy)
@@ -106,8 +106,7 @@ function Reports() {
         URL.revokeObjectURL(url)
         setDownloadNotice(`JSON exported with ${rows.length} records`)
       } else {
-        window.print()
-        setDownloadNotice("Print dialog opened.")
+        setDownloadNotice("Export format not available.")
       }
       setTimeout(() => setDownloadNotice(""), 5000)
     } catch (err) {
@@ -163,10 +162,10 @@ function Reports() {
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">District Scope</label>
-                  <select value={selectedDistrict} disabled={!selectedState} onChange={(e) => setSelectedDistrict(e.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm disabled:opacity-50 dark:border-gray-600 dark:bg-[#111827]">
-                    <option value="">{selectedState ? "All Districts" : "Select State First"}</option>
-                    {districts.map((d) => <option key={d} value={d}>{d}</option>)}
+                  <label className="block text-[11px] font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">Constituency Scope</label>
+                  <select value={selectedConstituency} disabled={!selectedState} onChange={(e) => setSelectedConstituency(e.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
+                    <option value="">{selectedState ? "All Constituencies" : "Select State First"}</option>
+                    {constituencies.map((c) => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
 
@@ -187,7 +186,7 @@ function Reports() {
                   <select value={format} onChange={(e) => setFormat(e.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
                     <option>CSV Dataset (.csv)</option>
                     <option>JSON Report (.json)</option>
-                    <option>Print / PDF View</option>
+
                   </select>
                 </div>
 
@@ -250,7 +249,7 @@ function Reports() {
                 <h2 className="text-xl font-bold">{reportType}</h2>
                 <p className="text-xs text-gray-500 dark:text-gray-400">
                   Scope: {selectedState || "All States"}
-                  {selectedDistrict ? ` > ${selectedDistrict}` : ""}
+                  {selectedConstituency ? ` > ${selectedConstituency}` : ""}
                   {reportType === "Anomaly Summary Report" && selectedRiskLevel ? ` | Risk: ${selectedRiskLevel}` : ""}
                   {" | "}
                   <span className="font-bold text-blue-600 dark:text-blue-400">
@@ -290,7 +289,7 @@ function Reports() {
                     <div>
                       <p className="text-xs font-bold text-green-700 dark:text-green-400">Export includes all matching records</p>
                       <p className="mt-0.5 text-[10px] text-green-600 dark:text-green-500">
-                        The server queries the database directly. Filters for state, district, risk level, and status
+                        The server queries the database directly. Filters for state, constituency, risk level, and status
                         are applied at the SQL level for maximum efficiency.
                       </p>
                     </div>

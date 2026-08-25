@@ -1,9 +1,16 @@
 import { useEffect, useState } from "react"
-import { getAnomalies } from "../services/api"
+import { getDataQualityRecords } from "../services/api"
 
 const API_URL = import.meta.env.VITE_API_URL !== undefined
   ? import.meta.env.VITE_API_URL
   : (import.meta.env.PROD ? "" : "http://127.0.0.1:8000")
+
+function formatMoney(value) {
+  const number = Number(value || 0)
+  if (number >= 10000000) return `₹${(number / 10000000).toFixed(2)} Cr`
+  if (number >= 100000) return `₹${(number / 100000).toFixed(2)} L`
+  return `₹${number.toLocaleString("en-IN")}`
+}
 
 function DataQuality() {
   const [dataQuality, setDataQuality] = useState(null)
@@ -11,6 +18,8 @@ function DataQuality() {
   const [error, setError] = useState("")
   const [selectedIssue, setSelectedIssue] = useState(null)
   const [issueRecords, setIssueRecords] = useState([])
+  const [issueTotal, setIssueTotal] = useState(0)
+  const [issueFlagReason, setIssueFlagReason] = useState("")
   const [loadingRecords, setLoadingRecords] = useState(false)
 
   useEffect(() => {
@@ -35,34 +44,17 @@ function DataQuality() {
   const handleViewRecords = async (issue) => {
     setSelectedIssue(issue)
     setIssueRecords([])
+    setIssueTotal(0)
+    setIssueFlagReason("")
     setLoadingRecords(true)
     try {
-      // For specific issue types, query relevant records
-      const params = { limit: 20 }
-      if (issue.field === "state") {
-        // Can't directly query NULL states, but show anomaly data
-        const data = await getAnomalies({ ...params, risk_level: "High" })
-        setIssueRecords(data?.anomalies?.slice(0, 15) || [])
-      } else if (issue.field === "expenditure vs sanctioned_amount") {
-        const data = await getAnomalies({ ...params, risk_level: "High" })
-        setIssueRecords(data?.anomalies?.filter((a) => a.expenditure > a.sanctioned_amount).slice(0, 15) || [])
-      } else if (issue.field === "status vs completion_percentage") {
-        const data = await getAnomalies({ ...params, risk_level: "Medium" })
-        setIssueRecords(data?.anomalies?.filter((a) => a.status === "Completed" && a.completion_percentage < 90).slice(0, 15) || [])
-      } else if (issue.field === "completion_percentage") {
-        // Progress outside 0-100% — show anomalous records
-        const data = await getAnomalies({ ...params })
-        setIssueRecords(data?.anomalies?.filter((a) => a.completion_percentage < 0 || a.completion_percentage > 100).slice(0, 15) || [])
-      } else if (issue.field === "expenditure vs completion_percentage") {
-        const data = await getAnomalies({ ...params })
-        setIssueRecords(data?.anomalies?.filter((a) => a.expenditure === 0 && a.completion_percentage > 0).slice(0, 15) || [])
-      } else {
-        // Generic fallback — show high risk anomalies
-        const data = await getAnomalies({ ...params, risk_level: "High" })
-        setIssueRecords(data?.anomalies?.slice(0, 15) || [])
-      }
+      const data = await getDataQualityRecords({ field: issue.field, limit: 50 })
+      setIssueRecords(data?.records || [])
+      setIssueTotal(data?.total || 0)
+      setIssueFlagReason(data?.flag_reason || "")
     } catch (err) {
       console.error("Failed to load records:", err)
+      setIssueRecords([])
     } finally {
       setLoadingRecords(false)
     }
@@ -237,22 +229,60 @@ function DataQuality() {
                   <p className="mt-2 text-xs text-gray-500">Loading affected records...</p>
                 </div>
               ) : issueRecords.length > 0 ? (
-                <div className="space-y-2">
-                  <p className="text-xs text-gray-500">
-                    Showing sample of affected records (up to 15):
-                  </p>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between rounded-lg bg-blue-50 p-3 dark:bg-blue-950/30">
+                    <div>
+                      <p className="text-xs font-bold text-blue-800 dark:text-blue-200">
+                        {issueTotal.toLocaleString("en-IN")} affected projects
+                      </p>
+                      {issueFlagReason && (
+                        <p className="mt-0.5 text-[11px] text-blue-600 dark:text-blue-300">
+                          Flag reason: {issueFlagReason}
+                        </p>
+                      )}
+                    </div>
+                    <span className="text-[10px] text-blue-500">
+                      Showing {issueRecords.length} of {issueTotal.toLocaleString("en-IN")}
+                    </span>
+                  </div>
+
                   {issueRecords.map((rec) => (
-                    <div key={rec.project_id} className="rounded-lg border border-gray-200 bg-gray-50/50 p-3 dark:border-gray-700 dark:bg-[#111827]">
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <span className="font-mono text-xs font-bold text-gray-400">#{rec.project_id}</span>
-                          <p className="text-sm font-semibold text-gray-900 dark:text-white">{rec.project_name || "Unnamed"}</p>
-                          <p className="text-xs text-gray-500">{rec.state || "N/A"} — {rec.constituency || "N/A"}</p>
+                    <div key={rec.id} className="rounded-lg border border-gray-200 bg-gray-50/50 p-3 dark:border-gray-700 dark:bg-[#111827]">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-xs font-bold text-gray-400">#{rec.id}</span>
+                            {rec.status && (
+                              <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
+                                rec.status.toLowerCase() === "completed"
+                                  ? "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300"
+                                  : rec.status.toLowerCase() === "ongoing"
+                                  ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
+                                  : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300"
+                              }`}>{rec.status}</span>
+                            )}
+                          </div>
+                          <p className="mt-1 truncate text-sm font-semibold text-gray-900 dark:text-white" title={rec.project_name}>{rec.project_name || "Unnamed"}</p>
+                          <p className="text-[11px] text-gray-500">{rec.state || "N/A"} — {rec.constituency || "N/A"}</p>
+                          {issueFlagReason && (
+                            <div className="mt-1.5 rounded bg-amber-50 px-2 py-1 dark:bg-amber-950/30">
+                              <p className="text-[10px] font-semibold text-amber-700 dark:text-amber-300">⚠ {issueFlagReason}</p>
+                            </div>
+                          )}
                         </div>
-                        <div className="text-right font-mono text-xs">
-                          <p>Sanctioned: <strong>{rec.sanctioned_amount?.toLocaleString("en-IN") || 0}</strong></p>
-                          <p>Spent: <strong>{rec.expenditure?.toLocaleString("en-IN") || 0}</strong></p>
-                          <p>Progress: <strong>{rec.completion_percentage || 0}%</strong></p>
+                        <div className="flex-shrink-0 text-right font-mono text-xs">
+                          <p className="text-gray-500">Sanctioned</p>
+                          <p className="font-bold text-gray-900 dark:text-white">{formatMoney(rec.sanctioned_amount)}</p>
+                          <p className="mt-1 text-gray-500">Spent</p>
+                          <p className={`font-bold ${rec.expenditure > 0 && rec.completion_percentage === 0 ? "text-red-600 dark:text-red-400" : "text-gray-900 dark:text-white"}`}>{formatMoney(rec.expenditure)}</p>
+                          <p className="mt-1 text-gray-500">Progress</p>
+                          <p className={`font-bold ${
+                            rec.completion_percentage < 0 || rec.completion_percentage > 100
+                              ? "text-red-600 dark:text-red-400"
+                              : rec.completion_percentage === 0 && rec.expenditure > 0
+                              ? "text-amber-600 dark:text-amber-400"
+                              : "text-gray-900 dark:text-white"
+                          }`}>{rec.completion_percentage}%</p>
                         </div>
                       </div>
                     </div>
@@ -260,7 +290,7 @@ function DataQuality() {
                 </div>
               ) : (
                 <div className="p-8 text-center text-xs text-gray-500">
-                  No sample records available for this issue type. The {selectedIssue.count.toLocaleString("en-IN")} affected records exist in the database but cannot be individually displayed through the anomaly API.
+                  No records found for this issue type.
                 </div>
               )}
             </div>
