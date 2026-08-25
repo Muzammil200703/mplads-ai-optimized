@@ -49,11 +49,35 @@ export async function getStates() {
 
 export async function getConstituencies(state) {
   if (!state) return []
-  return request(`/filters/constituencies?state=${encodeURIComponent(state)}`)
+  try {
+    return await request(`/filters/constituencies?state=${encodeURIComponent(state)}`)
+  } catch {
+    // Fallback: try old endpoint name
+    try {
+      return await request(`/filters/districts?state=${encodeURIComponent(state)}`)
+    } catch {
+      // Last resort: extract from search/projects
+      try {
+        const data = await request(`/search/projects?state=${encodeURIComponent(state)}&skip=0&limit=500`)
+        const set = new Set()
+        if (data && Array.isArray(data.results)) {
+          data.results.forEach((p) => { if (p.constituency) set.add(p.constituency) })
+        }
+        return Array.from(set).sort()
+      } catch {
+        return []
+      }
+    }
+  }
 }
 
 export async function getFYs() {
-  return request("/filters/fys")
+  try {
+    return await request("/filters/fys")
+  } catch {
+    // Fallback for older backends that may not have this endpoint
+    return ["2023-24", "2024-25", "2025-26", "2026-27"]
+  }
 }
 
 // Keep backward-compatible alias
