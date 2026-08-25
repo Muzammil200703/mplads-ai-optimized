@@ -39,18 +39,18 @@ function DonutChart({ high, medium, low, none }) {
           style={{ background: grad }}
         />
         <div className="absolute inset-0 flex flex-col items-center justify-center rounded-full bg-white dark:bg-[#1f2937]" style={{ margin: "22%" }}>
-          <span className="font-mono text-xl font-bold text-gray-900 dark:text-white">{total.toLocaleString("en-IN")}</span>
-          <span className="text-[10px] text-gray-500">Projects</span>
+          <span className="font-mono text-2xl font-bold text-gray-900 dark:text-white">{total.toLocaleString("en-IN")}</span>
+          <span className="text-xs text-gray-500">Projects</span>
         </div>
       </div>
-      <div className="flex flex-wrap gap-x-6 gap-y-2 sm:flex-col sm:gap-2.5">
+      <div className="flex flex-wrap gap-x-6 gap-y-2 sm:flex-col sm:gap-3">
         {segments.map((s) => (
           <div key={s.label} className="flex items-center gap-2.5">
-            <span className={`h-3 w-3 flex-shrink-0 rounded-sm ${s.color}`} />
+            <span className={`h-3.5 w-3.5 flex-shrink-0 rounded-sm ${s.color}`} />
             <div className="flex items-baseline gap-2">
-              <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">{s.label}</span>
-              <span className="font-mono text-xs font-bold text-gray-500">{s.count.toLocaleString("en-IN")}</span>
-              <span className="font-mono text-[10px] text-gray-400">({s.pct.toFixed(1)}%)</span>
+              <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">{s.label}</span>
+              <span className="font-mono text-sm font-bold text-gray-500">{s.count.toLocaleString("en-IN")}</span>
+              <span className="font-mono text-xs text-gray-400">({s.pct.toFixed(1)}%)</span>
             </div>
           </div>
         ))}
@@ -60,11 +60,11 @@ function DonutChart({ high, medium, low, none }) {
 }
 
 /* ──────────── Horizontal Bar Chart ──────────── */
-function HBarChart({ items, maxCount, barColor = "bg-blue-500", onClickItem }) {
+function HBarChart({ items, maxCount, barColor = "bg-blue-500", onClickItem, compact }) {
   if (!items || items.length === 0) return null
   const peak = maxCount || Math.max(...items.map((i) => i.count))
   return (
-    <div className="space-y-2">
+    <div className={compact ? "flex w-full flex-col justify-center gap-4" : "space-y-3"}>
       {items.map((item) => {
         const width = peak > 0 ? (item.count / peak) * 100 : 0
         return (
@@ -73,22 +73,22 @@ function HBarChart({ items, maxCount, barColor = "bg-blue-500", onClickItem }) {
             className={`group flex items-center gap-3 ${onClickItem ? "cursor-pointer" : ""}`}
             onClick={() => onClickItem && onClickItem(item)}
           >
-            <span className="w-36 flex-shrink-0 truncate text-right text-[11px] font-semibold text-gray-700 dark:text-gray-300" title={item.label}>
+            <span className="w-44 flex-shrink-0 truncate text-right text-sm font-semibold text-gray-700 dark:text-gray-300" title={item.label}>
               {item.label}
             </span>
             <div className="min-w-0 flex-1">
-              <div className="h-5 overflow-hidden rounded bg-gray-100 dark:bg-gray-700/60">
+              <div className="h-8 overflow-hidden rounded bg-gray-100 dark:bg-gray-700/60">
                 <div
                   className={`h-full rounded ${barColor} transition-all duration-300 group-hover:opacity-80`}
                   style={{ width: `${Math.max(2, width)}%` }}
                 />
               </div>
             </div>
-            <span className="w-20 flex-shrink-0 text-right font-mono text-[11px] font-bold text-gray-600 dark:text-gray-400">
+            <span className="w-24 flex-shrink-0 text-right font-mono text-sm font-bold text-gray-600 dark:text-gray-400">
               {item.count.toLocaleString("en-IN")}
             </span>
             {item.pct !== undefined && (
-              <span className="w-12 flex-shrink-0 text-right font-mono text-[10px] text-gray-400">{item.pct}%</span>
+              <span className="w-12 flex-shrink-0 text-right font-mono text-xs text-gray-400">{item.pct}%</span>
             )}
           </div>
         )
@@ -237,7 +237,7 @@ function RiskCenter({ drillDownParams, onClearDrillDown, fy }) {
           ].map((card) => (
             <div key={card.label} className={`rounded-xl border border-gray-200 border-l-4 ${card.accent} bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]`}>
               <div className="flex items-center justify-between">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{card.label}</p>
+                <p className="text-[11px] font-bold uppercase tracking-wider text-gray-400">{card.label}</p>
                 <span className="text-lg">{card.icon}</span>
               </div>
               <p className={`mt-1 font-mono text-2xl font-bold ${card.text}`}>{card.value.toLocaleString("en-IN")}</p>
@@ -250,13 +250,13 @@ function RiskCenter({ drillDownParams, onClearDrillDown, fy }) {
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {/* Risk Distribution Donut */}
             <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
-              <h3 className="mb-4 text-xs font-bold uppercase tracking-wider text-gray-400">Risk Distribution</h3>
+              <h3 className="mb-4 text-sm font-bold uppercase tracking-wider text-gray-400">Risk Distribution</h3>
               <DonutChart high={rd.high} medium={rd.medium} low={rd.low} none={rd.none} />
             </div>
 
             {/* Anomaly Type Distribution */}
             <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
-              <h3 className="mb-4 text-xs font-bold uppercase tracking-wider text-gray-400">Anomaly Type Distribution</h3>
+              <h3 className="mb-4 text-sm font-bold uppercase tracking-wider text-gray-400">Anomaly Type Distribution</h3>
               <HBarChart
                 items={analytics.anomaly_types.map((at) => ({ label: at.type, count: at.count, pct: at.percentage }))}
                 barColor="bg-blue-500"
@@ -269,29 +269,32 @@ function RiskCenter({ drillDownParams, onClearDrillDown, fy }) {
         {analytics && (
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {/* Top States */}
-            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
-              <h3 className="mb-4 text-xs font-bold uppercase tracking-wider text-gray-400">Top States by Anomaly Count</h3>
+            <div className="flex flex-col rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
+              <h3 className="mb-4 text-sm font-bold uppercase tracking-wider text-gray-400">Top States by Anomaly Count</h3>
               <HBarChart
                 items={analytics.state_distribution.map((sd, idx) => ({ label: sd.state, count: sd.count, rank: idx + 1 }))}
                 barColor="bg-red-500"
                 onClickItem={(item) => { setFilterState(item.label); setCurrentPage(1) }}
               />
               {analytics.state_distribution.length > 0 && (
-                <p className="mt-3 text-[10px] text-gray-400 italic">Click a state to filter the project list below.</p>
+                <p className="mt-3 text-xs text-gray-400 italic">Click a state to filter the project list below.</p>
               )}
             </div>
 
             {/* FY Distribution */}
-            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
-              <h3 className="mb-4 text-xs font-bold uppercase tracking-wider text-gray-400">Anomalies by Financial Year</h3>
-              {analytics.fy_distribution && analytics.fy_distribution.length > 0 ? (
-                <HBarChart
-                  items={analytics.fy_distribution.map((f) => ({ label: f.fy, count: f.count }))}
-                  barColor="bg-emerald-500"
-                />
-              ) : (
-                <p className="py-8 text-center text-sm text-gray-400">No FY distribution data available.</p>
-              )}
+            <div className="flex flex-col justify-between rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
+              <h3 className="mb-4 text-sm font-bold uppercase tracking-wider text-gray-400">Anomalies by Financial Year</h3>
+              <div className="flex-1 flex items-center">
+                {analytics.fy_distribution && analytics.fy_distribution.length > 0 ? (
+                  <HBarChart
+                    items={analytics.fy_distribution.map((f) => ({ label: f.fy, count: f.count }))}
+                    barColor="bg-emerald-500"
+                    compact
+                  />
+                ) : (
+                  <p className="py-8 w-full text-center text-sm text-gray-400">No FY distribution data available.</p>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -300,8 +303,8 @@ function RiskCenter({ drillDownParams, onClearDrillDown, fy }) {
         {analytics && (
           <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
             <div className="mb-4">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-gray-400">Projects by Risk Level</h3>
-              <p className="mt-0.5 text-[10px] text-gray-400">Distribution of monitored projects across AI-assessed risk levels.</p>
+              <h3 className="text-sm font-bold uppercase tracking-wider text-gray-400">Projects by Risk Level</h3>
+              <p className="mt-0.5 text-xs text-gray-400">Distribution of monitored projects across AI-assessed risk levels.</p>
             </div>
             {(() => {
               const rd = analytics.risk_distribution || {}
@@ -315,20 +318,20 @@ function RiskCenter({ drillDownParams, onClearDrillDown, fy }) {
               ].sort((a, b) => b.count - a.count)
               const maxCount = categories[0]?.count || 1
               return (
-                <div className="space-y-3">
+                <div className="space-y-4">
                   {categories.map((cat) => {
                     const pct = total > 0 ? (cat.count / total * 100).toFixed(1) : 0
                     const barWidth = maxCount > 0 ? (cat.count / maxCount) * 100 : 0
                     return (
                       <div key={cat.label} className="group">
-                        <div className="mb-1 flex items-baseline justify-between">
+                        <div className="mb-1.5 flex items-baseline justify-between">
                           <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">{cat.label}</span>
                           <div className="flex items-baseline gap-2">
                             <span className={`font-mono text-sm font-bold ${cat.text}`}>{cat.count.toLocaleString("en-IN")}</span>
-                            <span className="font-mono text-[10px] text-gray-400">({pct}%)</span>
+                            <span className="font-mono text-xs text-gray-400">({pct}%)</span>
                           </div>
                         </div>
-                        <div className="h-7 overflow-hidden rounded-md bg-gray-100 dark:bg-gray-700/60">
+                        <div className="h-8 overflow-hidden rounded-md bg-gray-100 dark:bg-gray-700/60">
                           <div
                             className={`h-full rounded-md ${cat.color} transition-all duration-500 group-hover:opacity-80`}
                             style={{ width: `${Math.max(1, barWidth)}%` }}
