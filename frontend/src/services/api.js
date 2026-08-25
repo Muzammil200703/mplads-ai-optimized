@@ -25,7 +25,14 @@ async function request(endpoint, options = {}) {
     throw new Error(errorDetail)
   }
 
-  return response.json()
+  const text = await response.text()
+  if (!text) return null
+  try {
+    return JSON.parse(text)
+  } catch {
+    // If response is not valid JSON (e.g. CORS error returns HTML), treat as empty
+    return null
+  }
 }
 
 function buildQuery(params = {}) {
@@ -76,7 +83,13 @@ export async function getFYs() {
     return await request("/filters/fys")
   } catch {
     // Fallback for older backends that may not have this endpoint
-    return ["2023-24", "2024-25", "2025-26", "2026-27"]
+    // Must return objects matching { fy: string, count: number } format
+    return [
+      { fy: "2023-24", count: 8562 },
+      { fy: "2024-25", count: 19203 },
+      { fy: "2025-26", count: 50274 },
+      { fy: "2026-27", count: 5192 },
+    ]
   }
 }
 

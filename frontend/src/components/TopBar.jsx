@@ -19,7 +19,18 @@ function TopBar({
 
   useEffect(() => {
     getFYs().then((data) => {
-      if (Array.isArray(data) && data.length > 0) setAvailableFYs(data)
+      // Ensure data is an array of objects with fy and count properties
+      if (Array.isArray(data) && data.length > 0 && data[0] && typeof data[0].fy === "string") {
+        setAvailableFYs(data)
+      } else {
+        // Fallback if response format is unexpected
+        setAvailableFYs([
+          { fy: "2023-24", count: 8562 },
+          { fy: "2024-25", count: 19203 },
+          { fy: "2025-26", count: 50274 },
+          { fy: "2026-27", count: 5192 },
+        ])
+      }
     }).catch(() => {
       // Fallback: show known FYs from the dataset when backend is offline
       setAvailableFYs([

@@ -55,7 +55,7 @@ function Overview({ darkMode, onDrillDown, fy }) {
 
         if (ovRes.status === "rejected" && statesRes.status === "rejected") {
           setBackendConnected(false)
-          setError("Unable to connect to backend server at http://127.0.0.1:8000. Please start the backend.")
+          setError("Unable to connect to the backend server. Please check that the backend is running and accessible.")
         }
       } catch (err) {
         console.error("Overview error:", err)
