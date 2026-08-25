@@ -91,3 +91,4 @@ npm run dev
 5. **Server-Side Pagination & Search**:
    - Fast keyword search on project names and categories.
    - Paginated responses to protect client browsers from loading 83,000 records at once.
+
