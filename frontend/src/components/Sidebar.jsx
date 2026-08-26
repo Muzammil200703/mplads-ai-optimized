@@ -11,7 +11,7 @@ function Sidebar({
     { name: "Projects", page: "Projects", icon: "▤" },
     { name: "Risk Center", page: "Risk Center", icon: "⚠" },
     { name: "Reports", page: "Reports", icon: "▣" },
-    { name: "State Intelligence", page: "State Intelligence", icon: "🗺" },
+    { name: "State Intelligence", page: "State Intelligence", icon: "map-pin" },
     { name: "Audit Priority", page: "Audit Priority", icon: "🎯" },
     { name: "Compare Projects", page: "Compare Projects", icon: "⚖" },
   ]
@@ -40,22 +40,34 @@ function Sidebar({
               <p className="whitespace-nowrap text-xs text-[#44474d] dark:text-[#9ca3af]">Auditor Portal</p>
             </div>
           </div>
-          <nav className="flex-1 space-y-1">
+          <nav className="space-y-1">
             {navigation.map((item) => {
               const active = currentPage === item.page
               return (
                 <button key={item.name} onClick={() => onNavigate(item.page)}
                   className={`group relative flex w-full items-center gap-3 rounded px-3 py-2.5 transition-all duration-200 justify-start ${active ? "bg-[#f0f3ff] text-[#031632] dark:bg-[#1f2937] dark:text-white" : "text-[#44474d] hover:bg-[#e2e8f8] hover:text-[#031632] dark:text-[#d1d5db] dark:hover:bg-[#1f2937] dark:hover:text-white"}`}>                  {active && <span className="absolute right-0 top-1/2 h-8 w-1 -translate-y-1/2 rounded-l bg-[#bb0011]" />}
-                  <span className={`flex h-6 w-6 shrink-0 items-center justify-center text-base leading-none ${active ? "font-bold text-[#031632] dark:text-white" : ""}`}>{item.icon}</span>
+                  <span className={`flex h-6 w-6 shrink-0 items-center justify-center text-base leading-none ${active ? "font-bold text-[#031632] dark:text-white" : ""}`}>{item.icon === "map-pin" ? (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-[18px] w-[18px]" aria-hidden="true">
+                      <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" />
+                      <circle cx="12" cy="10" r="3" />
+                    </svg>
+                  ) : item.icon}</span>
                   <span className="whitespace-nowrap text-sm font-medium">{item.name}</span>
                 </button>
               )
             })}
           </nav>
-          <div className="space-y-1 border-t border-[#c5c6ce] pt-2 dark:border-[#374151]">
-            {[{ icon: "⚙", label: "Settings" }, { icon: "?", label: "Support" }].map((item) => (
-              <button key={item.label} className="flex w-full items-center gap-3 rounded px-3 py-2.5 text-[#44474d] transition-all duration-200 hover:bg-[#e2e8f8] hover:text-[#031632] dark:text-[#d1d5db] dark:hover:bg-[#1f2937] dark:hover:text-white justify-start">
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center text-base leading-none">{item.icon}</span>
+          <div className="mt-7 space-y-0.5 border-t border-[#c5c6ce] pt-2 dark:border-[#374151]">
+            {[{ icon: "⚙", label: "Settings", page: null }, { icon: "headphones", label: "Support", page: null }, { icon: "❓", label: "FAQ", page: "FAQ" }].map((item) => (
+              <button key={item.label} onClick={() => item.page && onNavigate(item.page)} className="flex w-full items-center gap-3 rounded px-3 py-2 text-[#44474d] transition-all duration-200 hover:bg-[#e2e8f8] hover:text-[#031632] dark:text-[#d1d5db] dark:hover:bg-[#1f2937] dark:hover:text-white justify-start">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center text-base leading-none">
+                  {item.icon === "headphones" ? (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-[18px] w-[18px]" aria-hidden="true">
+                      <path d="M3 18v-6a9 9 0 0 1 18 0v6" />
+                      <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" />
+                    </svg>
+                  ) : item.icon}
+                </span>
                 <span className="whitespace-nowrap text-sm font-medium">{item.label}</span>
               </button>
             ))}
@@ -132,7 +144,7 @@ function Sidebar({
       </div>
 
       {/* MAIN NAVIGATION */}
-      <nav className="flex-1 space-y-1">
+      <nav className="space-y-1">
 
         {navigation.map((item) => {
 
@@ -198,7 +210,12 @@ function Sidebar({
                   }
                 `}
               >
-                {item.icon}
+                {item.icon === "map-pin" ? (
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-[18px] w-[18px]" aria-hidden="true">
+                    <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" />
+                    <circle cx="12" cy="10" r="3" />
+                  </svg>
+                ) : item.icon}
               </span>
 
               {/* LABEL */}
@@ -222,93 +239,64 @@ function Sidebar({
 
       </nav>
 
-      {/* BOTTOM NAVIGATION */}
-      <div className="space-y-1 border-t
-        border-[#c5c6ce] pt-2
+      {/* BOTTOM NAVIGATION — Settings, Support, FAQ */}
+      <div className="mt-8 space-y-0.5 border-t
+        border-[#c5c6ce] pt-3
         dark:border-[#374151]"
       >
 
-        {/* SETTINGS */}
-        <button
-          title={collapsed ? "Settings" : ""}
-          className={`
-            flex w-full items-center gap-3 rounded
-            px-3 py-2.5 text-[#44474d]
-            transition-all duration-200
-            hover:bg-[#e2e8f8]
-            hover:text-[#031632]
-            dark:text-[#d1d5db]
-            dark:hover:bg-[#1f2937]
-            dark:hover:text-white
-            ${
-              collapsed
-                ? "justify-center"
-                : "justify-start"
-            }
-          `}
-        >
-
-          <span className="flex h-6 w-6 shrink-0
-            items-center justify-center text-base leading-none">
-            ⚙
-          </span>
-
-          <span
+        {[
+          { icon: "⚙", label: "Settings", page: null },
+          { icon: "headphones", label: "Support", page: null },
+          { icon: "❓", label: "FAQ", page: "FAQ" },
+        ].map((item) => (
+          <button
+            key={item.label}
+            onClick={() => item.page && onNavigate(item.page)}
+            title={collapsed ? item.label : ""}
             className={`
-              whitespace-nowrap text-sm font-medium
-              transition-all duration-300
+              flex w-full items-center gap-3 rounded
+              px-3 py-2 text-[#44474d]
+              transition-all duration-200
+              hover:bg-[#e2e8f8]
+              hover:text-[#031632]
+              dark:text-[#d1d5db]
+              dark:hover:bg-[#1f2937]
+              dark:hover:text-white
               ${
                 collapsed
-                  ? "w-0 overflow-hidden opacity-0"
-                  : "w-auto opacity-100"
+                  ? "justify-center"
+                  : "justify-start"
               }
             `}
           >
-            Settings
-          </span>
 
-        </button>
+            <span className="flex h-6 w-6 shrink-0
+              items-center justify-center text-base leading-none">
+              {item.icon === "headphones" ? (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-[18px] w-[18px]" aria-hidden="true">
+                  <path d="M3 18v-6a9 9 0 0 1 18 0v6" />
+                  <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" />
+                </svg>
+              ) : item.icon}
+            </span>
 
-        {/* SUPPORT */}
-        <button
-          title={collapsed ? "Support" : ""}
-          className={`
-            flex w-full items-center gap-3 rounded
-            px-3 py-2.5 text-[#44474d]
-            transition-all duration-200
-            hover:bg-[#e2e8f8]
-            hover:text-[#031632]
-            dark:text-[#d1d5db]
-            dark:hover:bg-[#1f2937]
-            dark:hover:text-white
-            ${
-              collapsed
-                ? "justify-center"
-                : "justify-start"
-            }
-          `}
-        >
+            <span
+              className={`
+                whitespace-nowrap text-sm font-medium
+                transition-all duration-300
+                ${
+                  collapsed
+                    ? "w-0 overflow-hidden opacity-0"
+                    : "w-auto opacity-100"
+                }
+              `}
+            >
+              {item.label}
+            </span>
 
-          <span className="flex h-6 w-6 shrink-0
-            items-center justify-center text-base leading-none">
-            ?
-          </span>
-
-          <span
-            className={`
-              whitespace-nowrap text-sm font-medium
-              transition-all duration-300
-              ${
-                collapsed
-                  ? "w-0 overflow-hidden opacity-0"
-                  : "w-auto opacity-100"
-              }
-            `}
-          >
-            Support
-          </span>
-
-        </button>
+          </button>
+        ))}
 
       </div>
 

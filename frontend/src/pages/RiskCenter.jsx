@@ -60,6 +60,35 @@ function DonutChart({ high, medium, low, none }) {
 }
 
 /* ──────────── Horizontal Bar Chart ──────────── */
+/* ═══════════════ FY VERTICAL BAR CHART ═══════════════ */
+function FYearChart({ items }) {
+  if (!items || items.length === 0) return null
+  const maxCount = Math.max(...items.map((f) => f.count || 0))
+  return (
+    <div className="flex w-full items-end gap-3 pt-2" style={{ height: 140 }}>
+      {items.map((f) => {
+        const pct = maxCount > 0 ? (f.count / maxCount) * 100 : 0
+        return (
+          <div key={f.fy} className="flex min-w-0 flex-1 flex-col items-center justify-end gap-1">
+            <span className="text-[11px] font-bold text-gray-600 dark:text-gray-300">
+              {(f.count || 0).toLocaleString("en-IN")}
+            </span>
+            <div className="w-full max-w-[52px] overflow-hidden rounded-t bg-gray-100 dark:bg-gray-700/50">
+              <div
+                className="w-full rounded-t bg-emerald-500 transition-all duration-300 hover:bg-emerald-400"
+                style={{ height: `${Math.max(4, pct)}%` }}
+              />
+            </div>
+            <span className="mt-1 text-[11px] font-semibold text-gray-500 dark:text-gray-400">
+              {f.fy}
+            </span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function HBarChart({ items, maxCount, barColor = "bg-blue-500", onClickItem, compact }) {
   if (!items || items.length === 0) return null
   const peak = maxCount || Math.max(...items.map((i) => i.count))
@@ -281,14 +310,12 @@ function RiskCenter({ drillDownParams, onClearDrillDown, fy }) {
               )}
             </div>
 
-            {/* FY Distribution */}
+            {/* FY Distribution — compact vertical bar chart */}
             <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
-              <h3 className="mb-4 text-sm font-bold uppercase tracking-wider text-gray-400">Anomalies by Financial Year</h3>
+              <h3 className="mb-1 text-sm font-bold text-gray-600 dark:text-gray-300">Anomalies by Financial Year</h3>
+              <p className="mb-4 text-[11px] text-gray-400 dark:text-gray-500">Number of flagged projects per FY period</p>
               {analytics.fy_distribution && analytics.fy_distribution.length > 0 ? (
-                <HBarChart
-                  items={analytics.fy_distribution.map((f) => ({ label: f.fy, count: f.count }))}
-                  barColor="bg-emerald-500"
-                />
+                <FYearChart items={analytics.fy_distribution} />
               ) : (
                 <p className="py-8 w-full text-center text-sm text-gray-400">No FY distribution data available.</p>
               )}

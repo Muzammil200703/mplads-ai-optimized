@@ -10,6 +10,7 @@ import Reports from "./pages/Reports"
 import StateIntelligence from "./pages/StateIntelligence"
 import AuditPriority from "./pages/AuditPriority"
 import CompareProjects from "./pages/CompareProjects"
+import FAQ from "./pages/FAQ"
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(() =>
@@ -105,6 +106,8 @@ function App() {
         return <AuditPriority fy={selectedFY} />
       case "Compare Projects":
         return <CompareProjects fy={selectedFY} />
+      case "FAQ":
+        return <FAQ />
       default:
         return <Overview fy={selectedFY} />
     }

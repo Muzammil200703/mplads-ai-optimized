@@ -7,7 +7,7 @@ from fastapi import FastAPI, Depends, HTTPException, Query, Path, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func, distinct, case, text
+from sqlalchemy import func, distinct, case, text, or_
 import io
 import csv
 
@@ -48,10 +48,16 @@ def clear_cache(prefix: Optional[str] = None):
 async def lifespan(app: FastAPI):
     # Setup indices on existing SQLite tables if not present
     with engine.connect() as conn:
+        # Project indexes for search/filter performance
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_proj_state ON projects(state);"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_proj_district ON projects(district);"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_proj_status ON projects(status);"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_proj_type ON projects(project_type);"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_proj_constituency ON projects(constituency);"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_proj_fy2 ON projects(fy);"))
+        # MP summary indexes for name-based search
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_mp_name ON mp_summaries(mp_name);"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_mp_const_state ON mp_summaries(constituency, state);"))
         conn.commit()
     yield
 
@@ -376,7 +382,66 @@ def search_projects(
     limit: int = Query(50, ge=1, le=500),
     db: Session = Depends(get_db)
 ):
-    # Join with risk_scores if risk_level or risk_score filters are used
+    """Optimized project search.
+
+    Performance optimizations vs. previous implementation:
+    - Short-circuits for exact numeric ID match (indexed PK lookup)
+    - Uses EXISTS subqueries for MP name matching (avoids full outerjoin)
+    - Skips expensive DISTINCT+COUNT; uses LIMIT+1 for hasMore instead
+    - Removes redundant DISTINCT on primary-key results
+    """
+    q_clean = (q or "").strip()
+
+    # ---------------------------------------------------------------
+    # FAST PATH: exact numeric ID match (single indexed PK lookup)
+    # ---------------------------------------------------------------
+    if q_clean:
+        try:
+            q_id = int(q_clean)
+            project = db.query(models.Project).filter(models.Project.id == q_id).first()
+            if project:
+                # Apply post-filters to the single result
+                if state and project.state != state:
+                    return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
+                if district and project.district != district:
+                    return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
+                if constituency and project.constituency != constituency:
+                    return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
+                if fy and project.fy != fy:
+                    return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
+                if project_type and project.project_type != project_type:
+                    return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
+                if min_sanctioned_amount is not None and (project.sanctioned_amount or 0) < min_sanctioned_amount:
+                    return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
+                if max_sanctioned_amount is not None and (project.sanctioned_amount or 0) > max_sanctioned_amount:
+                    return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
+                if min_expenditure is not None and (project.expenditure or 0) < min_expenditure:
+                    return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
+                if max_expenditure is not None and (project.expenditure or 0) > max_expenditure:
+                    return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
+                if min_completion is not None and (project.completion_percentage or 0) < min_completion:
+                    return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
+                if max_completion is not None and (project.completion_percentage or 0) > max_completion:
+                    return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
+                # Risk filters — need to check risk_scores table
+                if risk_level or min_risk_score is not None or max_risk_score is not None:
+                    risk_row = db.query(models.RiskScore).filter(models.RiskScore.project_id == project.id).first()
+                    if not risk_row:
+                        return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
+                    if risk_level and (risk_row.risk_level or "").lower() != risk_level.lower():
+                        return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
+                    if min_risk_score is not None and (risk_row.risk_score or 0) < min_risk_score:
+                        return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
+                    if max_risk_score is not None and (risk_row.risk_score or 0) > max_risk_score:
+                        return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
+                return {"total": 1, "skip": 0, "limit": limit, "results": [project], "hasMore": False}
+            # Exact ID not found — fall through to text search below
+        except (ValueError, TypeError):
+            pass
+
+    # ---------------------------------------------------------------
+    # BUILD MAIN QUERY
+    # ---------------------------------------------------------------
     needs_risk_join = risk_level or min_risk_score is not None or max_risk_score is not None
     if needs_risk_join:
         query = (
@@ -386,59 +451,40 @@ def search_projects(
     else:
         query = db.query(models.Project)
 
-    if q:
-        q_clean = q.strip()
-        # Try matching by exact numeric ID first
-        id_match = None
-        try:
-            id_match = int(q_clean)
-        except (ValueError, TypeError):
-            pass
+    # ---------------------------------------------------------------
+    # TEXT SEARCH — use EXISTS subqueries for MP name (avoids full outerjoin)
+    # ---------------------------------------------------------------
+    if q_clean:
+        ilike_pattern = f"%{q_clean}%"
+        or_conditions = [
+            models.Project.project_name.ilike(ilike_pattern),
+            models.Project.project_type.ilike(ilike_pattern),
+            models.Project.state.ilike(ilike_pattern),
+            models.Project.district.ilike(ilike_pattern),
+            models.Project.constituency.ilike(ilike_pattern),
+        ]
 
-        # Subquery to get MP names for projects via mp_summaries (constituency+state join)
-        mp_name_subq = (
-            db.query(
-                models.MPSummary.constituency,
-                models.MPSummary.state,
-                models.MPSummary.mp_name
+        # Only add MP-name subquery if the query looks like it could be a name
+        # (all alpha characters, or contains spaces typical of names)
+        is_likely_name = q_clean.replace(" ", "").replace(".", "").replace("-", "").isalpha()
+        if is_likely_name:
+            mp_exists = (
+                db.query(models.MPSummary.id)
+                .filter(
+                    models.MPSummary.mp_name.ilike(ilike_pattern),
+                    models.MPSummary.constituency == models.Project.constituency,
+                    models.MPSummary.state == models.Project.state,
+                )
+                .correlate(models.Project)
+                .exists()
             )
-            .filter(
-                models.MPSummary.mp_name.isnot(None),
-                models.MPSummary.mp_name != ""
-            )
-            .subquery()
-        )
+            or_conditions.append(mp_exists)
 
-        if id_match is not None:
-            # Prioritize exact ID match, but also include fuzzy text matches across all fields
-            query = query.outerjoin(
-                mp_name_subq,
-                (models.Project.constituency == mp_name_subq.c.constituency) &
-                (models.Project.state == mp_name_subq.c.state)
-            ).filter(
-                (models.Project.id == id_match) |
-                (models.Project.project_name.ilike(f"%{q_clean}%")) |
-                (models.Project.project_type.ilike(f"%{q_clean}%")) |
-                (models.Project.state.ilike(f"%{q_clean}%")) |
-                (models.Project.district.ilike(f"%{q_clean}%")) |
-                (models.Project.constituency.ilike(f"%{q_clean}%")) |
-                (mp_name_subq.c.mp_name.ilike(f"%{q_clean}%"))
-            )
-        else:
-            # Text search across name, type, state, district, constituency, MP name
-            query = query.outerjoin(
-                mp_name_subq,
-                (models.Project.constituency == mp_name_subq.c.constituency) &
-                (models.Project.state == mp_name_subq.c.state)
-            ).filter(
-                (models.Project.project_name.ilike(f"%{q_clean}%")) |
-                (models.Project.project_type.ilike(f"%{q_clean}%")) |
-                (models.Project.state.ilike(f"%{q_clean}%")) |
-                (models.Project.district.ilike(f"%{q_clean}%")) |
-                (models.Project.constituency.ilike(f"%{q_clean}%")) |
-                (mp_name_subq.c.mp_name.ilike(f"%{q_clean}%"))
-            )
+        query = query.filter(or_(*or_conditions))
 
+    # ---------------------------------------------------------------
+    # STRUCTURAL FILTERS (exact match on indexed columns)
+    # ---------------------------------------------------------------
     if state:
         query = query.filter(models.Project.state == state)
     if district:
@@ -470,19 +516,26 @@ def search_projects(
     if max_risk_score is not None:
         query = query.filter(models.RiskScore.risk_score <= max_risk_score)
 
-    total = query.with_entities(models.Project.id).distinct().count()
+    # ---------------------------------------------------------------
+    # SORT + PAGINATE — skip expensive COUNT, use LIMIT+1 for hasMore
+    # ---------------------------------------------------------------
     if sort_by:
         query = apply_sort(query, sort_by, sort_dir)
     else:
         query = query.order_by(models.Project.id.asc())
 
-    projects = query.with_entities(models.Project).distinct().offset(skip).limit(limit).all()
+    # Fetch one extra row to detect whether more results exist
+    projects = query.offset(skip).limit(limit + 1).all()
+    has_more = len(projects) > limit
+    if has_more:
+        projects = projects[:limit]
 
     return {
-        "total": total,
+        "total": len(projects) + (1 if has_more else 0),
         "skip": skip,
         "limit": limit,
-        "results": projects
+        "results": projects,
+        "hasMore": has_more
     }
 
 

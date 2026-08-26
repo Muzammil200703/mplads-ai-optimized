@@ -137,7 +137,8 @@ export async function getProjects(params = {}) {
 }
 
 export async function searchProjects(params = {}) {
-  return request(`/search/projects${buildQuery(params)}`)
+  const { signal, ...queryParams } = params
+  return request(`/search/projects${buildQuery(queryParams)}`, signal ? { signal } : {})
 }
 
 export async function getProjectDetail(projectId) {

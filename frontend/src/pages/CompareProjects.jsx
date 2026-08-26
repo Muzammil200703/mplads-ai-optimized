@@ -2,6 +2,29 @@ import { useState, useCallback, useEffect, useRef } from "react"
 import { searchProjects, getProjectDetail } from "../services/api"
 
 const MAX_COMPARE = 4
+const SEARCH_DEBOUNCE_MS = 280
+const SEARCH_CACHE_MAX = 25
+
+// Simple LRU cache: Map iterates in insertion order, delete+set moves to end
+const searchCache = new Map()
+function cacheGet(key) {
+  if (searchCache.has(key)) {
+    const v = searchCache.get(key)
+    searchCache.delete(key)
+    searchCache.set(key, v)
+    return v
+  }
+  return undefined
+}
+function cacheSet(key, value) {
+  if (searchCache.has(key)) searchCache.delete(key)
+  if (searchCache.size >= SEARCH_CACHE_MAX) {
+    // evict oldest (first entry)
+    const oldest = searchCache.keys().next().value
+    searchCache.delete(oldest)
+  }
+  searchCache.set(key, value)
+}
 
 function fmtMoney(v) {
   const n = Number(v || 0)
@@ -97,39 +120,82 @@ export default function CompareProjects({ fy }) {
   const [searchFocused, setSearchFocused] = useState(false)
   const searchTimer = useRef(null)
   const searchInputRef = useRef(null)
+  const abortRef = useRef(null)
+  const latestQueryRef = useRef("")
 
   const fetchResults = useCallback(
     async (q) => {
-      if (!q || q.trim().length < 1) {
+      const trimmed = q.trim()
+      if (!trimmed || trimmed.length < 1) {
         setResults([])
         setSearchTotal(0)
+        setSearching(false)
         return
       }
+
+      // Check cache first
+      const cacheKey = `${trimmed}::${fy || "all"}`
+      const cached = cacheGet(cacheKey)
+      if (cached) {
+        setResults(cached.results)
+        setSearchTotal(cached.total)
+        setSearching(false)
+        return
+      }
+
+      // Cancel any in-flight request
+      if (abortRef.current) abortRef.current.abort()
+      const controller = new AbortController()
+      abortRef.current = controller
+
       try {
         setSearching(true)
         const data = await searchProjects({
-          q: q.trim(),
+          q: trimmed,
           fy: fy || undefined,
           skip: 0,
           limit: 20,
+          signal: controller.signal,
         })
-        setResults(data?.results || [])
-        setSearchTotal(data?.total || 0)
-      } catch {
-        setResults([])
-        setSearchTotal(0)
+        // Only apply if this is still the latest query
+        if (!controller.signal.aborted && latestQueryRef.current === trimmed) {
+          const results = data?.results || []
+          // Prefer hasMore for accurate display; fall back to total count
+          const total = data?.hasMore
+            ? results.length + 1  // at least one more exists
+            : (data?.total || results.length)
+          setResults(results)
+          setSearchTotal(total)
+          cacheSet(cacheKey, { results, total })
+        }
+      } catch (err) {
+        if (err?.name !== "AbortError" && latestQueryRef.current === trimmed) {
+          setResults([])
+          setSearchTotal(0)
+        }
       } finally {
-        setSearching(false)
+        if (!controller.signal.aborted && latestQueryRef.current === trimmed) {
+          setSearching(false)
+        }
       }
     },
     [fy]
   )
 
-  const handleQueryChange = (val) => {
+  const handleQueryChange = useCallback((val) => {
     setQuery(val)
+    latestQueryRef.current = val.trim()
     if (searchTimer.current) clearTimeout(searchTimer.current)
-    searchTimer.current = setTimeout(() => fetchResults(val), 300)
-  }
+    if (!val || val.trim().length < 1) {
+      // Immediate clear — no debounce needed for empty
+      setResults([])
+      setSearchTotal(0)
+      setSearching(false)
+      if (abortRef.current) abortRef.current.abort()
+      return
+    }
+    searchTimer.current = setTimeout(() => fetchResults(val), SEARCH_DEBOUNCE_MS)
+  }, [fetchResults])
 
   const handleAdd = async (proj) => {
     if (selected.find((s) => s.id === proj.id)) return
@@ -161,9 +227,13 @@ export default function CompareProjects({ fy }) {
 
   const handleClearSearch = () => {
     setQuery("")
+    latestQueryRef.current = ""
     setResults([])
     setSearchTotal(0)
     setSearchFocused(false)
+    setSearching(false)
+    if (abortRef.current) abortRef.current.abort()
+    if (searchTimer.current) clearTimeout(searchTimer.current)
     if (searchInputRef.current) searchInputRef.current.blur()
   }
 
@@ -175,6 +245,7 @@ export default function CompareProjects({ fy }) {
   useEffect(
     () => () => {
       if (searchTimer.current) clearTimeout(searchTimer.current)
+      if (abortRef.current) abortRef.current.abort()
     },
     []
   )
@@ -263,7 +334,7 @@ export default function CompareProjects({ fy }) {
           {showSearchResults && (
             <div className="mt-3 max-h-72 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-700">
               <div className="bg-gray-50 px-4 py-2 text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:bg-[#172033]">
-                {searchTotal.toLocaleString("en-IN")} results — showing first {results.length}
+                {searchTotal.toLocaleString("en-IN")}+ results — showing first {results.length}
               </div>
               {results.map((proj) => {
                 const isSelected = selected.some((s) => s.id === proj.id)
