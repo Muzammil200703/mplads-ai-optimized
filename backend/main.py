@@ -1025,6 +1025,7 @@ def detect_anomalies(
         else:
             rows = query.order_by(models.RiskScore.risk_score.desc()).offset(skip).limit(limit).all()
 
+
         anomalies_list = []
         for risk, proj in rows:
             reasons = [r.strip() for r in (risk.reasons or "").split(",") if r.strip()]

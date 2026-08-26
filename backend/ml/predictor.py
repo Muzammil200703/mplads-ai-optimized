@@ -338,9 +338,13 @@ def create_project_features(project):
     return df
 
 
-def predict_risk(project):
+def predict_risk(project, batch_mode=False):
     """
     Predict risk for a project with full explainability.
+
+    Args:
+        project: Project ORM object
+        batch_mode: If True, skip expensive SHAP explainability (for bulk scoring)
 
     Returns:
         ml_anomaly: bool
@@ -349,7 +353,7 @@ def predict_risk(project):
         risk_level: str (High/Medium/Low/None)
         is_anomaly: bool
         reasons: list[str] (backward-compatible rule-based reasons)
-        explanation: dict (NEW: full explanation with contributing factors)
+        explanation: dict (full explanation with contributing factors, skipped in batch_mode)
     """
     sanctioned = float(getattr(project, "sanctioned_amount", 0) or 0)
     expenditure = float(getattr(project, "expenditure", 0) or 0)
@@ -427,7 +431,17 @@ def predict_risk(project):
     else:
         risk_level = "None"
 
-    # --- EXPLAINABILITY (new) ---
+    # --- EXPLAINABILITY ---
+    if batch_mode:
+        return {
+            "ml_anomaly": ml_anomaly,
+            "ml_score": round(anomaly_score, 4),
+            "risk_score": risk_score,
+            "risk_level": risk_level,
+            "is_anomaly": len(reasons) > 0,
+            "reasons": reasons,
+        }
+
     contributions = _compute_feature_contributions(project)
     explanation = _summarize_reasons(contributions, reasons, risk_level)
 
@@ -457,7 +471,6 @@ def predict_risk(project):
         "risk_level": risk_level,
         "is_anomaly": len(reasons) > 0,
         "reasons": reasons,
-        # New explainability fields
         "explanation": explanation,
         "contributing_factors": top_factors[:10],
     }

@@ -42,7 +42,7 @@ def generate_scores():
 
         for project in projects:
 
-            risk = predict_risk(project)
+            risk = predict_risk(project, batch_mode=True)
 
 
             score = RiskScore(
