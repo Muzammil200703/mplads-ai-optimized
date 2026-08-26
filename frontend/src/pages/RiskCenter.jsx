@@ -97,70 +97,6 @@ function HBarChart({ items, maxCount, barColor = "bg-blue-500", onClickItem, com
   )
 }
 
-/* ──────────── Vertical Bar Chart (for FY Distribution) ──────────── */
-function VBarChart({ items, barColor = "bg-emerald-500" }) {
-  if (!items || items.length === 0) return null
-  const maxVal = Math.max(...items.map((i) => i.count))
-  if (maxVal === 0) return null
-  const chartH = 180 // px for bar area
-
-  // Y-axis ticks
-  const tickCount = 4
-  const ticks = Array.from({ length: tickCount + 1 }, (_, i) => Math.round((maxVal * i) / tickCount)).reverse()
-
-  return (
-    <div className="w-full">
-      <div className="text-[11px] text-gray-400 font-semibold uppercase tracking-wider mb-2">Anomaly Count</div>
-      <div className="flex">
-        {/* Y-axis */}
-        <div className="flex flex-col justify-between pr-2 text-right shrink-0" style={{ height: chartH }}>
-          {ticks.map((t, i) => (
-            <span key={i} className="font-mono text-[11px] text-gray-400 leading-none">{t.toLocaleString("en-IN")}</span>
-          ))}
-        </div>
-        {/* Chart area */}
-        <div className="flex-1 min-w-0">
-          {/* Grid + Bars */}
-          <div className="relative" style={{ height: chartH }}>
-            {/* Horizontal grid lines */}
-            <div className="absolute inset-0 flex flex-col justify-between pointer-events-none">
-              {ticks.map((_, i) => (
-                <div key={i} className="border-t border-gray-100 dark:border-gray-700/50" />
-              ))}
-            </div>
-            {/* Bars */}
-            <div className="absolute inset-0 flex items-end justify-around px-1">
-              {items.map((item) => {
-                const barH = Math.max(4, (item.count / maxVal) * chartH)
-                return (
-                  <div key={item.label} className="flex flex-col items-center flex-1 min-w-0 gap-1">
-                    <span className="font-mono text-sm font-bold text-gray-700 dark:text-gray-200 leading-none whitespace-nowrap">
-                      {item.count.toLocaleString("en-IN")}
-                    </span>
-                    <div
-                      className={`w-full max-w-[72px] rounded-t-md ${barColor} transition-all duration-500 hover:opacity-80 cursor-default`}
-                      style={{ height: barH }}
-                      title={`${item.label}: ${item.count.toLocaleString("en-IN")}`}
-                    />
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-          {/* X-axis labels */}
-          <div className="flex justify-around px-1 mt-2">
-            {items.map((item) => (
-              <span key={item.label} className="flex-1 text-center text-sm font-semibold text-gray-600 dark:text-gray-300 truncate">
-                {item.label}
-              </span>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 /* ═══════════════ MAIN COMPONENT ═══════════════ */
 function RiskCenter({ drillDownParams, onClearDrillDown, fy }) {
   const [summary, setSummary] = useState({ total_projects_checked: 0, high_risk: 0, medium_risk: 0, low_risk: 0, total_anomalies: 0 })
@@ -346,18 +282,16 @@ function RiskCenter({ drillDownParams, onClearDrillDown, fy }) {
             </div>
 
             {/* FY Distribution */}
-            <div className="flex flex-col rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
-              <h3 className="mb-3 text-sm font-bold uppercase tracking-wider text-gray-400">Anomalies by Financial Year</h3>
-              <div className="flex-1">
-                {analytics.fy_distribution && analytics.fy_distribution.length > 0 ? (
-                  <VBarChart
-                    items={analytics.fy_distribution.map((f) => ({ label: f.fy, count: f.count }))}
-                    barColor="bg-emerald-500"
-                  />
-                ) : (
-                  <p className="py-8 w-full text-center text-sm text-gray-400">No FY distribution data available.</p>
-                )}
-              </div>
+            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
+              <h3 className="mb-4 text-sm font-bold uppercase tracking-wider text-gray-400">Anomalies by Financial Year</h3>
+              {analytics.fy_distribution && analytics.fy_distribution.length > 0 ? (
+                <HBarChart
+                  items={analytics.fy_distribution.map((f) => ({ label: f.fy, count: f.count }))}
+                  barColor="bg-emerald-500"
+                />
+              ) : (
+                <p className="py-8 w-full text-center text-sm text-gray-400">No FY distribution data available.</p>
+              )}
             </div>
           </div>
         )}

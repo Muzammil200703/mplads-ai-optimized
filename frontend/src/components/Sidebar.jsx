@@ -13,6 +13,7 @@ function Sidebar({
     { name: "Reports", page: "Reports", icon: "▣" },
     { name: "State Intelligence", page: "State Intelligence", icon: "🗺" },
     { name: "Audit Priority", page: "Audit Priority", icon: "🎯" },
+    { name: "Compare Projects", page: "Compare Projects", icon: "⚖" },
   ]
 
   // Mobile drawer
@@ -51,7 +52,7 @@ function Sidebar({
               )
             })}
           </nav>
-          <div className="space-y-1 border-t border-[#c5c6ce] pt-4 dark:border-[#374151]">
+          <div className="space-y-1 border-t border-[#c5c6ce] pt-2 dark:border-[#374151]">
             {[{ icon: "⚙", label: "Settings" }, { icon: "?", label: "Support" }].map((item) => (
               <button key={item.label} className="flex w-full items-center gap-3 rounded px-3 py-2.5 text-[#44474d] transition-all duration-200 hover:bg-[#e2e8f8] hover:text-[#031632] dark:text-[#d1d5db] dark:hover:bg-[#1f2937] dark:hover:text-white justify-start">
                 <span className="flex h-6 w-6 shrink-0 items-center justify-center text-base leading-none">{item.icon}</span>
@@ -223,7 +224,7 @@ function Sidebar({
 
       {/* BOTTOM NAVIGATION */}
       <div className="space-y-1 border-t
-        border-[#c5c6ce] pt-4
+        border-[#c5c6ce] pt-2
         dark:border-[#374151]"
       >
 

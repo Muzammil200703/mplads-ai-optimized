@@ -9,6 +9,7 @@ import RiskCenter from "./pages/RiskCenter"
 import Reports from "./pages/Reports"
 import StateIntelligence from "./pages/StateIntelligence"
 import AuditPriority from "./pages/AuditPriority"
+import CompareProjects from "./pages/CompareProjects"
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(() =>
@@ -102,6 +103,8 @@ function App() {
         return <StateIntelligence onNavigateToProjects={(state) => handleDrillDown("Projects", { state })} fy={selectedFY} />
       case "Audit Priority":
         return <AuditPriority fy={selectedFY} />
+      case "Compare Projects":
+        return <CompareProjects fy={selectedFY} />
       default:
         return <Overview fy={selectedFY} />
     }
