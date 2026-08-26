@@ -60,28 +60,30 @@ function DonutChart({ high, medium, low, none }) {
 }
 
 /* ──────────── Horizontal Bar Chart ──────────── */
-/* ═══════════════ FY VERTICAL BAR CHART ═══════════════ */
+/* ═══════════════ FY HORIZONTAL BAR CHART ═══════════════ */
 function FYearChart({ items }) {
   if (!items || items.length === 0) return null
   const maxCount = Math.max(...items.map((f) => f.count || 0))
   return (
-    <div className="flex w-full items-end gap-3 pt-2" style={{ height: 140 }}>
+    <div className="flex w-full flex-col gap-5 py-2">
       {items.map((f) => {
         const pct = maxCount > 0 ? (f.count / maxCount) * 100 : 0
         return (
-          <div key={f.fy} className="flex min-w-0 flex-1 flex-col items-center justify-end gap-1">
-            <span className="text-[11px] font-bold text-gray-600 dark:text-gray-300">
-              {(f.count || 0).toLocaleString("en-IN")}
-            </span>
-            <div className="w-full max-w-[52px] overflow-hidden rounded-t bg-gray-100 dark:bg-gray-700/50">
+          <div key={f.fy} className="flex w-full flex-col gap-1.5">
+            <div className="flex items-baseline justify-between">
+              <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                {f.fy}
+              </span>
+              <span className="text-sm font-bold tabular-nums text-gray-900 dark:text-white">
+                {(f.count || 0).toLocaleString("en-IN")}
+              </span>
+            </div>
+            <div className="h-7 w-full overflow-hidden rounded-md bg-gray-100 dark:bg-gray-700/60">
               <div
-                className="w-full rounded-t bg-emerald-500 transition-all duration-300 hover:bg-emerald-400"
-                style={{ height: `${Math.max(4, pct)}%` }}
+                className="h-full rounded-md bg-emerald-500 transition-all duration-300"
+                style={{ width: `${Math.max(2, pct)}%` }}
               />
             </div>
-            <span className="mt-1 text-[11px] font-semibold text-gray-500 dark:text-gray-400">
-              {f.fy}
-            </span>
           </div>
         )
       })}
