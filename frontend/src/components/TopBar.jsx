@@ -257,21 +257,6 @@ flex h-full items-center gap-1.5 px-2 sm:gap-3 sm:px-4 lg:gap-4 lg:px-5 transiti
           {darkMode ? "☀️" : "🌙"}
         </button>
 
-        {/* NOTIFICATION */}
-        <button
-          className="
-            hidden sm:flex h-10 w-10 shrink-0
-            items-center justify-center
-            rounded-lg text-lg
-            transition-all duration-150
-            hover:bg-[#eef1f8]
-            dark:hover:bg-[#1f2937]
-          "
-          aria-label="Notifications"
-        >
-          🔔
-        </button>
-
         {/* PROFILE */}
         <button
           className="
