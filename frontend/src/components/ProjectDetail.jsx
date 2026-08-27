@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { getProjectDetail, getSimilarProjects } from "../services/api"
+import { getProjectDetail, getSimilarProjects, getRiskExplanation, getAnomalyExplanation } from "../services/api"
 
 function formatMoney(value) {
   const number = Number(value || 0)
@@ -12,7 +12,12 @@ function formatMoney(value) {
 function getBadges(risk, project) {
   const badges = []
   if (!risk) return badges
-  const reasons = risk.reasons || []
+  // reasons may be a JSON string (from DB) or an array (from predict_risk)
+  let reasons = risk.reasons || []
+  if (typeof reasons === 'string') {
+    try { reasons = JSON.parse(reasons) } catch { reasons = [] }
+  }
+  if (!Array.isArray(reasons)) reasons = []
   const sanctioned = Number(project.sanctioned_amount || 0)
   const expenditure = Number(project.expenditure || 0)
   const completion = Number(project.completion_percentage || 0)
@@ -36,7 +41,11 @@ function getBadges(risk, project) {
 
 // Generate audit recommendation based on risk reasons
 function getAuditRecommendation(reasons) {
-  if (!reasons || reasons.length === 0) return null
+  // Parse string reasons from DB if needed
+  if (typeof reasons === 'string') {
+    try { reasons = JSON.parse(reasons) } catch { reasons = [] }
+  }
+  if (!Array.isArray(reasons) || reasons.length === 0) return null
   const recommendations = []
   for (const reason of reasons) {
     const r = reason.toLowerCase()
@@ -66,6 +75,9 @@ function ProjectDetail({ projectId, onClose }) {
   const [loading, setLoading] = useState(true)
   const [loadingSimilar, setLoadingSimilar] = useState(false)
   const [activeTab, setActiveTab] = useState("overview")
+  const [riskExplanation, setRiskExplanation] = useState(null)
+  const [anomalyExplanation, setAnomalyExplanation] = useState(null)
+  const [loadingExplanation, setLoadingExplanation] = useState(false)
 
   useEffect(() => {
     if (!projectId) return
@@ -80,6 +92,17 @@ function ProjectDetail({ projectId, onClose }) {
     ]).then(([d, s]) => {
       setDetail(d)
       setSimilar(s)
+      // Load risk + anomaly explanations in parallel
+      if (d?.risk?.risk_level && d.risk.risk_level !== "None" && d.risk.risk_level !== "Low") {
+        setLoadingExplanation(true)
+        Promise.allSettled([
+          getRiskExplanation(projectId).catch(() => null),
+          getAnomalyExplanation(projectId).catch(() => null),
+        ]).then(([re, ae]) => {
+          if (re.status === "fulfilled" && re.value) setRiskExplanation(re.value)
+          if (ae.status === "fulfilled" && ae.value) setAnomalyExplanation(ae.value)
+        }).finally(() => setLoadingExplanation(false))
+      }
     }).catch((err) => {
       console.error("Detail load error:", err)
     }).finally(() => {
@@ -111,6 +134,12 @@ function ProjectDetail({ projectId, onClose }) {
 
   const proj = detail.project
   const risk = detail.risk
+  // Parse reasons — may be a JSON string from DB or an array from predict_risk()
+  let parsedReasons = risk?.reasons || []
+  if (typeof parsedReasons === 'string') {
+    try { parsedReasons = JSON.parse(parsedReasons) } catch { parsedReasons = [] }
+  }
+  if (!Array.isArray(parsedReasons)) parsedReasons = []
   const sanctioned = Number(proj.sanctioned_amount || 0)
   const expenditure = Number(proj.expenditure || 0)
   const completion = Number(proj.completion_percentage || 0)
@@ -118,7 +147,7 @@ function ProjectDetail({ projectId, onClose }) {
   const remaining = Math.max(0, sanctioned - expenditure)
   const discrepancy = utilization - completion
   const badges = getBadges(risk, proj)
-  const recommendations = getAuditRecommendation(risk?.reasons)
+  const recommendations = getAuditRecommendation(parsedReasons)
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-2xs transition-opacity" onClick={onClose}>
@@ -146,6 +175,13 @@ function ProjectDetail({ projectId, onClose }) {
           <span className="text-xs text-gray-500">📍 {proj.state || "N/A"}</span>
           <span className="text-xs text-gray-500">🏛 {proj.constituency || "N/A"}</span>
         </div>
+
+        {proj.data_quality_flag === "POSSIBLY_STALE" && (
+          <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/60 dark:bg-amber-950/30">
+            <div className="flex items-center gap-2"><span className="text-sm">⚠</span><span className="text-xs font-bold text-amber-700 dark:text-amber-300">Data Update Notice</span></div>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">Reported progress or expenditure may not reflect the latest project status. A high-risk score indicates an anomaly based on available data and does not by itself confirm project delay or irregularity.</p>
+          </div>
+        )}
 
         {/* Badges */}
         {badges.length > 0 && (
@@ -290,10 +326,10 @@ function ProjectDetail({ projectId, onClose }) {
               )}
 
               {/* Triggered Rules */}
-              {risk?.reasons && risk.reasons.length > 0 && (
+              {parsedReasons && parsedReasons.length > 0 && (
                 <div className="space-y-2">
-                  <h4 className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Triggered Rules ({risk.reasons.length})</h4>
-                  {risk.reasons.map((reason, i) => (
+                  <h4 className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Triggered Rules ({parsedReasons.length})</h4>
+                  {parsedReasons.map((reason, i) => (
                     <div key={i} className="rounded-lg border border-red-100 bg-red-50/50 p-3 dark:border-red-900/40 dark:bg-red-950/20">
                       <p className="text-xs font-semibold text-red-700 dark:text-red-400">{reason}</p>
                     </div>
@@ -340,6 +376,84 @@ function ProjectDetail({ projectId, onClose }) {
                 <div className="rounded-lg border border-purple-200 bg-purple-50 p-3 dark:border-purple-900/60 dark:bg-purple-950/30">
                   <p className="text-xs font-bold text-purple-700 dark:text-purple-300">✨ ML Statistical Outlier Detected</p>
                   <p className="mt-1 text-[10px] text-purple-600 dark:text-purple-400">Isolation Forest model flagged this project as a multi-dimensional statistical anomaly.</p>
+                </div>
+              )}
+
+              {/* AI Risk Explanation */}
+              {riskExplanation && (
+                <div className="rounded-xl border border-blue-200 bg-blue-50/40 p-4 dark:border-blue-900/40 dark:bg-blue-950/20">
+                  <div className="flex items-center gap-2 mb-3">
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-600 text-[10px] text-white">AI</span>
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-blue-700 dark:text-blue-300">Risk Explanation</h4>
+                  </div>
+                  <p className="text-xs text-gray-600 dark:text-gray-300 mb-3">{riskExplanation.summary}</p>
+                  {riskExplanation.contributing_factors?.length > 0 && (
+                    <div className="space-y-1.5">
+                      <p className="text-[10px] font-bold uppercase text-gray-400">Contributing Factors:</p>
+                      {riskExplanation.contributing_factors.map((f, i) => (
+                        <div key={i} className="flex items-start gap-2 text-xs">
+                          <span className={`mt-0.5 flex-shrink-0 rounded px-1 py-0.5 text-[9px] font-bold ${
+                            f.source === "ml" ? "bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300"
+                            : f.source === "rule" ? "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300"
+                            : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300"
+                          }`}>{f.source}</span>
+                          <span className="text-gray-700 dark:text-gray-300">{f.factor}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {riskExplanation.data_sufficiency === "limited" && (
+                    <p className="mt-2 text-[10px] italic text-gray-400">Note: Explanation is based on limited available data.</p>
+                  )}
+                </div>
+              )}
+
+              {riskExplanation?.data_quality?.flag === "POSSIBLY_STALE" && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50/40 p-4 dark:border-amber-900/40 dark:bg-amber-950/20">
+                  <h4 className="mb-2 text-xs font-bold uppercase tracking-wider text-amber-700 dark:text-amber-300">Data Quality Check</h4>
+                  <div className="flex items-start gap-2">
+                    <span className="mt-0.5 text-sm">⚠</span>
+                    <div>
+                      <p className="text-xs font-semibold text-amber-700 dark:text-amber-300">Possible stale progress data</p>
+                      <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">{riskExplanation.data_quality.reason}</p>
+                      <p className="mt-1.5 text-[10px] italic text-amber-400 dark:text-amber-500">This indicator does not confirm project delay or irregularity.</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Anomaly Explanation Panel */}
+              {anomalyExplanation && anomalyExplanation.detected_anomalies?.length > 0 && (
+                <div className="rounded-xl border border-red-200 bg-red-50/40 p-4 dark:border-red-900/40 dark:bg-red-950/20">
+                  <h4 className="mb-3 text-xs font-bold uppercase tracking-wider text-red-700 dark:text-red-300">Why is this an anomaly?</h4>
+                  {anomalyExplanation.detected_anomalies.map((anomaly, i) => (
+                    <div key={i} className="mb-3 last:mb-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                          anomaly.severity === "High" ? "bg-red-100 text-red-700"
+                          : anomaly.severity === "Medium" ? "bg-amber-100 text-amber-700"
+                          : "bg-gray-100 text-gray-600"
+                        }`}>{anomaly.severity}</span>
+                        <span className="text-xs font-bold">{anomaly.type}</span>
+                        <span className="text-[9px] px-1 py-0.5 rounded bg-gray-100 text-gray-500">{anomaly.source}</span>
+                      </div>
+                      <p className="text-xs text-gray-600 dark:text-gray-300">{anomaly.what}</p>
+                      {anomaly.factors?.length > 0 && (
+                        <div className="mt-1.5 space-y-0.5">
+                          {anomaly.factors.map((f, fi) => (
+                            <p key={fi} className="text-[10px] text-gray-500">• {f}</p>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {loadingExplanation && !riskExplanation && !anomalyExplanation && (
+                <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 p-3">
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-blue-600 border-r-transparent" />
+                  <span className="text-xs text-gray-400">Loading AI explanations...</span>
                 </div>
               )}
             </>

@@ -2,6 +2,24 @@ const API_URL = import.meta.env.VITE_API_URL !== undefined
   ? import.meta.env.VITE_API_URL 
   : (import.meta.env.PROD ? "" : "https://mplads-ai-optimized.onrender.com")
 
+// ═══════════════ CLIENT-SIDE API CACHE ═══════════════
+// TTL-based cache to avoid refetching filter/static data on every page mount
+const _apiCache = new Map()
+function cacheGet(key, ttlMs = 60000) {
+  const entry = _apiCache.get(key)
+  if (entry && (Date.now() - entry.ts) < ttlMs) return entry.data
+  _apiCache.delete(key)
+  return undefined
+}
+function cacheSet(key, data) {
+  _apiCache.set(key, { data, ts: Date.now() })
+}
+function cacheInvalidate(prefix) {
+  for (const key of _apiCache.keys()) {
+    if (key.startsWith(prefix)) _apiCache.delete(key)
+  }
+}
+
 async function request(endpoint, options = {}) {
   const url = `${API_URL}${endpoint}`
   const response = await fetch(url, {
@@ -30,7 +48,6 @@ async function request(endpoint, options = {}) {
   try {
     return JSON.parse(text)
   } catch {
-    // If response is not valid JSON (e.g. CORS error returns HTML), treat as empty
     return null
   }
 }
@@ -51,26 +68,37 @@ export async function healthCheck() {
 }
 
 export async function getStates() {
-  return request("/filters/states")
+  const cached = cacheGet("states", 300000) // 5 min cache
+  if (cached !== undefined) return cached
+  const data = await request("/filters/states")
+  if (data) cacheSet("states", data)
+  return data
 }
 
 export async function getConstituencies(state) {
   if (!state) return []
+  const cacheKey = `cons_${state}`
+  const cached = cacheGet(cacheKey, 300000) // 5 min cache
+  if (cached !== undefined) return cached
   try {
-    return await request(`/filters/constituencies?state=${encodeURIComponent(state)}`)
+    const data = await request(`/filters/constituencies?state=${encodeURIComponent(state)}`)
+    if (data) cacheSet(cacheKey, data)
+    return data
   } catch {
-    // Fallback: try old endpoint name
     try {
-      return await request(`/filters/districts?state=${encodeURIComponent(state)}`)
+      const data = await request(`/filters/districts?state=${encodeURIComponent(state)}`)
+      if (data) cacheSet(cacheKey, data)
+      return data
     } catch {
-      // Last resort: extract from search/projects
       try {
         const data = await request(`/search/projects?state=${encodeURIComponent(state)}&skip=0&limit=500`)
         const set = new Set()
         if (data && Array.isArray(data.results)) {
           data.results.forEach((p) => { if (p.constituency) set.add(p.constituency) })
         }
-        return Array.from(set).sort()
+        const result = Array.from(set).sort()
+        cacheSet(cacheKey, result)
+        return result
       } catch {
         return []
       }
@@ -79,25 +107,38 @@ export async function getConstituencies(state) {
 }
 
 export async function getFYs() {
+  const cached = cacheGet("fys", 300000) // 5 min cache
+  if (cached !== undefined) return cached
   try {
-    return await request("/filters/fys")
+    const data = await request("/filters/fys")
+    if (data) cacheSet("fys", data)
+    return data
   } catch {
-    // Fallback for older backends that may not have this endpoint
-    // Must return objects matching { fy: string, count: number } format
-    return [
+    const fallback = [
       { fy: "2023-24", count: 8562 },
       { fy: "2024-25", count: 19203 },
       { fy: "2025-26", count: 50274 },
       { fy: "2026-27", count: 5192 },
     ]
+    cacheSet("fys", fallback)
+    return fallback
   }
 }
 
 // Keep backward-compatible alias
 export const getDistricts = getConstituencies
 
+// Allow pages to invalidate cache when data changes
+export function invalidateAPICache(prefix) {
+  cacheInvalidate(prefix || "")
+}
+
 export async function getCategories() {
-  return request("/filters/categories")
+  const cached = cacheGet("categories", 300000)
+  if (cached !== undefined) return cached
+  const data = await request("/filters/categories")
+  if (data) cacheSet("categories", data)
+  return data
 }
 
 export async function getDashboardOverview(params = {}) {
@@ -105,7 +146,13 @@ export async function getDashboardOverview(params = {}) {
 }
 
 export async function getDashboardStates(params = {}) {
-  return request(`/dashboard/states${buildQuery(params)}`)
+  // Cache state dashboard data for 2 minutes (expensive aggregation)
+  const cacheKey = `dash_states_${buildQuery(params)}`
+  const cached = cacheGet(cacheKey, 120000)
+  if (cached !== undefined) return cached
+  const data = await request(`/dashboard/states${buildQuery(params)}`)
+  if (data) cacheSet(cacheKey, data)
+  return data
 }
 
 export async function getDashboardMPs(params = {}) {
@@ -125,7 +172,12 @@ export async function getDashboardProjectTypes() {
 }
 
 export async function getAnomaliesSummary(params = {}) {
-  return request(`/dashboard/anomalies-summary${buildQuery(params)}`)
+  const cacheKey = `anom_summary_${buildQuery(params)}`
+  const cached = cacheGet(cacheKey, 120000) // 2 min cache
+  if (cached !== undefined) return cached
+  const data = await request(`/dashboard/anomalies-summary${buildQuery(params)}`)
+  if (data) cacheSet(cacheKey, data)
+  return data
 }
 
 export async function refreshAnomaliesSummary() {
@@ -187,7 +239,12 @@ export async function getCompletedWorks(params = {}) {
 }
 
 export async function getStateIntelligence(params = {}) {
-  return request(`/dashboard/state-intelligence${buildQuery(params)}`)
+  const cacheKey = `state_intel_${buildQuery(params)}`
+  const cached = cacheGet(cacheKey, 120000) // 2 min cache
+  if (cached !== undefined) return cached
+  const data = await request(`/dashboard/state-intelligence${buildQuery(params)}`)
+  if (data) cacheSet(cacheKey, data)
+  return data
 }
 
 export async function getAuditPriority(params = {}) {
@@ -199,7 +256,12 @@ export async function getSimilarProjects(projectId, limit = 5) {
 }
 
 export async function getAnomalyAnalytics(params = {}) {
-  return request(`/anomalies/analytics${buildQuery(params)}`)
+  const cacheKey = `anomaly_analytics_${buildQuery(params)}`
+  const cached = cacheGet(cacheKey, 120000) // 2 min cache for expensive analytics
+  if (cached !== undefined) return cached
+  const data = await request(`/anomalies/analytics${buildQuery(params)}`)
+  if (data) cacheSet(cacheKey, data)
+  return data
 }
 
 export async function getScatterData(params = {}) {
@@ -209,3 +271,21 @@ export async function getScatterData(params = {}) {
 export async function getOverview() {
   return getDashboardOverview()
 }
+
+// Feature 1: AI Risk Explanation
+export async function getRiskExplanation(projectId) {
+  return request(`/ai/risk-explanation/${projectId}`)
+}
+
+// Feature 3: Anomaly Explanation
+export async function getAnomalyExplanation(projectId) {
+  return request(`/ai/anomaly-explanation/${projectId}`)
+}
+
+// Feature 4: Benchmarking
+export async function getBenchmarking(params = {}) {
+  return request(`/ai/benchmarking${buildQuery(params)}`)
+}
+
+// Export cache invalidation for use after data mutations
+export { cacheInvalidate }

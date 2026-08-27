@@ -1,15 +1,9 @@
-import { useEffect, useState, useCallback } from "react"
+import { useEffect, useState, useCallback, memo } from "react"
 import { getAnomalies, getAnomaliesSummary, getStates, getConstituencies, getProjectDetail, getAnomalyAnalytics } from "../services/api"
-
-function formatMoney(value) {
-  const number = Number(value || 0)
-  if (number >= 10000000) return `₹${(number / 10000000).toFixed(2)} Cr`
-  if (number >= 100000) return `₹${(number / 100000).toFixed(2)} L`
-  return `₹${number.toLocaleString("en-IN")}`
-}
+import { formatMoney, formatNumber } from "../utils/format"
 
 /* ──────────── Donut Chart (pure CSS) ──────────── */
-function DonutChart({ high, medium, low, none }) {
+const DonutChart = memo(function DonutChart({ high, medium, low, none }) {
   const total = high + medium + low + none
   if (total === 0) return null
   const highPct = (high / total) * 100
@@ -57,11 +51,11 @@ function DonutChart({ high, medium, low, none }) {
       </div>
     </div>
   )
-}
+})
 
 /* ──────────── Horizontal Bar Chart ──────────── */
 /* ═══════════════ FY HORIZONTAL BAR CHART ═══════════════ */
-function FYearChart({ items }) {
+const FYearChart = memo(function FYearChart({ items }) {
   if (!items || items.length === 0) return null
   const maxCount = Math.max(...items.map((f) => f.count || 0))
   return (
@@ -89,9 +83,9 @@ function FYearChart({ items }) {
       })}
     </div>
   )
-}
+})
 
-function HBarChart({ items, maxCount, barColor = "bg-blue-500", onClickItem, compact }) {
+const HBarChart = memo(function HBarChart({ items, maxCount, barColor = "bg-blue-500", onClickItem, compact }) {
   if (!items || items.length === 0) return null
   const peak = maxCount || Math.max(...items.map((i) => i.count))
   return (
@@ -126,10 +120,10 @@ function HBarChart({ items, maxCount, barColor = "bg-blue-500", onClickItem, com
       })}
     </div>
   )
-}
+})
 
 /* ═══════════════ MAIN COMPONENT ═══════════════ */
-function RiskCenter({ drillDownParams, onClearDrillDown, fy }) {
+const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown, fy }) {
   const [summary, setSummary] = useState({ total_projects_checked: 0, high_risk: 0, medium_risk: 0, low_risk: 0, total_anomalies: 0 })
   const [anomalies, setAnomalies] = useState([])
   const [totalCount, setTotalCount] = useState(0)
@@ -672,6 +666,6 @@ function RiskCenter({ drillDownParams, onClearDrillDown, fy }) {
       )}
     </div>
   )
-}
+})
 
 export default RiskCenter

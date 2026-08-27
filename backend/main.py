@@ -19,6 +19,79 @@ from ml.predictor import predict_risk
 # Create tables
 Base.metadata.create_all(bind=engine)
 
+# ═══════════════ STALE PROGRESS DETECTION CONFIG ═══════════════
+# Projects above this sanctioned-amount threshold with zero progress
+# and zero expenditure are flagged as "possibly stale" data rather
+# than automatically treated as anomalous.
+STALE_PROGRESS_AMOUNT_THRESHOLD = 10 * 100000  # ₹10 lakh
+
+# Known financial years in the dataset (newest first)
+_KNOWN_FYS = ["2026-27", "2025-26", "2024-25", "2023-24"]
+
+
+def _check_stale_progress(project):
+    """
+    Check if a project's zero-progress/zero-expenditure record
+    may indicate stale (un-updated) data rather than genuine anomalies.
+
+    Returns a dict:
+        flag: "POSSIBLY_STALE" | "INSUFFICIENT_DATA" | "NORMAL"
+        reason: human-readable explanation
+        sanctioned_amount: float
+        expenditure: float
+        completion: float
+    """
+    sanctioned = float(getattr(project, "sanctioned_amount", 0) or 0)
+    expenditure = float(getattr(project, "expenditure", 0) or 0)
+    completion = float(getattr(project, "completion_percentage", 0) or 0)
+    status_str = str(getattr(project, "status", "") or "").lower()
+    fy = str(getattr(project, "fy", "") or "")
+
+    # If any values are missing/None, treat as insufficient data
+    if sanctioned is None or expenditure is None or completion is None:
+        return {
+            "flag": "INSUFFICIENT_DATA",
+            "reason": "Insufficient project data to assess progress status.",
+            "sanctioned_amount": sanctioned or 0,
+            "expenditure": expenditure or 0,
+            "completion": completion or 0,
+        }
+
+    # Only flag if: high sanctioned amount AND zero progress AND zero expenditure
+    if (sanctioned >= STALE_PROGRESS_AMOUNT_THRESHOLD
+            and completion == 0
+            and expenditure == 0):
+
+        # Build the reason
+        sanctioned_display = f"₹{sanctioned / 100000:.1f} L" if sanctioned < 10000000 else f"₹{sanctioned / 10000000:.2f} Cr"
+        reason = (
+            f"{sanctioned_display} sanctioned but 0% progress and ₹0 expenditure recorded. "
+            f"Progress data may require updating."
+        )
+
+        # If we have FY info, add a note about age
+        if fy and fy in _KNOWN_FYS:
+            fy_index = _KNOWN_FYS.index(fy)
+            if fy_index >= 2:  # FY 2024-25 or older
+                reason += f" (Financial year: {fy})"
+
+        return {
+            "flag": "POSSIBLY_STALE",
+            "reason": reason,
+            "sanctioned_amount": sanctioned,
+            "expenditure": expenditure,
+            "completion": completion,
+        }
+
+    # Normal — not enough conditions to warrant a flag
+    return {
+        "flag": "NORMAL",
+        "reason": "",
+        "sanctioned_amount": sanctioned,
+        "expenditure": expenditure,
+        "completion": completion,
+    }
+
 # In-memory cache for heavy aggregations
 _cache: Dict[str, Any] = {}
 _cache_ttl: Dict[str, float] = {}
@@ -55,10 +128,90 @@ async def lifespan(app: FastAPI):
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_proj_type ON projects(project_type);"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_proj_constituency ON projects(constituency);"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_proj_fy2 ON projects(fy);"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_proj_sanctioned ON projects(sanctioned_amount);"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_proj_expenditure ON projects(expenditure);"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_proj_completion ON projects(completion_percentage);"))
+        # Risk score indexes for anomaly/risk queries
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_risk_project ON risk_scores(project_id);"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_risk_level ON risk_scores(risk_level);"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_risk_score ON risk_scores(risk_score);"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_risk_ml ON risk_scores(ml_anomaly);"))
         # MP summary indexes for name-based search
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_mp_name ON mp_summaries(mp_name);"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_mp_const_state ON mp_summaries(constituency, state);"))
         conn.commit()
+
+    # Add composite indexes for common query patterns
+    with engine.connect() as conn:
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_risk_level_ml ON risk_scores(risk_level, ml_anomaly);"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_risk_level_score ON risk_scores(risk_level, risk_score);"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_proj_state_fy ON projects(state, fy);"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_proj_state_cons ON projects(state, constituency);"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_risk_project_level ON risk_scores(project_id, risk_level);"))
+        conn.commit()
+
+    # Cache risk table presence at startup (avoids COUNT(*) on every request)
+    db = SessionLocal()
+    try:
+        _cache["_has_risk_table"] = (db.query(func.count(models.RiskScore.id)).scalar() or 0) > 0
+        _cache_ttl["_has_risk_table"] = time.time()
+    except Exception:
+        _cache["_has_risk_table"] = False
+        _cache_ttl["_has_risk_table"] = time.time()
+    finally:
+        db.close()
+
+    # Warm-cache critical endpoints at startup for instant first load
+    try:
+        db = SessionLocal()
+        try:
+            # Warm filter_states
+            states_rows = db.query(models.Project.state).filter(
+                models.Project.state.isnot(None), models.Project.state != ""
+            ).distinct().order_by(models.Project.state.asc()).all()
+            set_cached("filter_states", [s[0] for s in states_rows if s[0]])
+
+            # Warm filter_fys
+            fy_rows = db.query(
+                models.Project.fy, func.count(models.Project.id).label("count")
+            ).filter(
+                models.Project.fy.isnot(None), models.Project.fy != ""
+            ).group_by(models.Project.fy).order_by(models.Project.fy.asc()).all()
+            set_cached("filter_fys", [{"fy": r.fy, "count": r.count} for r in fy_rows])
+
+            # Warm dashboard_overview (all FY)
+            stats = db.query(
+                func.count(models.Project.id).label("total_projects"),
+                func.coalesce(func.sum(models.Project.sanctioned_amount), 0).label("total_sanctioned"),
+                func.coalesce(func.sum(models.Project.expenditure), 0).label("total_expenditure"),
+                func.coalesce(func.avg(models.Project.completion_percentage), 0).label("avg_completion"),
+                func.count(distinct(models.Project.state)).label("total_states"),
+                func.sum(case((models.Project.status.ilike("completed"), 1), else_=0)).label("completed_projects"),
+                func.sum(case((models.Project.status.ilike("ongoing"), 1), else_=0)).label("ongoing_projects"),
+                func.sum(case((models.Project.status.ilike("recommended"), 1), else_=0)).label("recommended_works")
+            ).one()
+            total_sanctioned = float(stats.total_sanctioned)
+            total_expenditure = float(stats.total_expenditure)
+            utilization = (total_expenditure / total_sanctioned * 100) if total_sanctioned > 0 else 0.0
+            total_mps = db.query(func.count(models.MPSummary.id)).scalar() or 0
+            set_cached("dashboard_overview_all", {
+                "total_projects": int(stats.total_projects or 0),
+                "completed_projects": int(stats.completed_projects or 0),
+                "ongoing_projects": int(stats.ongoing_projects or 0),
+                "total_allocated_amount": total_sanctioned,
+                "total_sanctioned_amount": total_sanctioned,
+                "total_expenditure": total_expenditure,
+                "utilization_percentage": round(utilization, 2),
+                "average_completion_percentage": round(float(stats.avg_completion or 0), 2),
+                "total_mps": total_mps,
+                "total_states": int(stats.total_states or 0),
+                "recommended_works": int(stats.recommended_works or 0),
+            })
+        finally:
+            db.close()
+    except Exception:
+        pass  # Warm-cache is best-effort
+
     yield
 
 
@@ -116,6 +269,45 @@ def apply_sort(query, sort_by: Optional[str], sort_dir: Optional[str], model=Non
     if sort_dir and sort_dir.strip().lower() == "asc":
         return query.order_by(col.asc().nullslast())
     return query.order_by(col.desc().nullslast())
+
+
+def _enrich_projects_with_risk(projects, db):
+    """Attach risk_scores data to a list of Project objects for API responses.
+    This ensures the Projects table, Risk Center, and Project Details all
+    use the SAME backend risk score as the single source of truth."""
+    if not projects:
+        return []
+    project_ids = [p.id for p in projects]
+    risk_rows = (
+        db.query(models.RiskScore)
+        .filter(models.RiskScore.project_id.in_(project_ids))
+        .all()
+    )
+    risk_map = {r.project_id: r for r in risk_rows}
+    result = []
+    for p in projects:
+        risk = risk_map.get(p.id)
+        item = {
+            "id": p.id,
+            "project_name": p.project_name,
+            "state": p.state,
+            "district": p.district,
+            "constituency": p.constituency,
+            "project_type": p.project_type,
+            "sanctioned_amount": p.sanctioned_amount or 0.0,
+            "expenditure": p.expenditure or 0.0,
+            "completion_percentage": p.completion_percentage or 0.0,
+            "status": p.status,
+            "fy": p.fy,
+            "risk": {
+                "risk_score": risk.risk_score if risk else None,
+                "risk_level": risk.risk_level if risk else None,
+                "ml_anomaly": risk.ml_anomaly if risk else None,
+                "reasons": risk.reasons if risk else None,
+            } if risk else None,
+        }
+        result.append(item)
+    return result
 
 
 # =========================================================
@@ -355,7 +547,7 @@ def get_projects(
         query = query.order_by(models.Project.id.asc())
 
     projects = query.offset(skip).limit(limit).all()
-    return projects
+    return _enrich_projects_with_risk(projects, db)
 
 
 @app.get("/search/projects", tags=["Projects"])
@@ -434,7 +626,7 @@ def search_projects(
                         return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
                     if max_risk_score is not None and (risk_row.risk_score or 0) > max_risk_score:
                         return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
-                return {"total": 1, "skip": 0, "limit": limit, "results": [project], "hasMore": False}
+                return {"total": 1, "skip": 0, "limit": limit, "results": _enrich_projects_with_risk([project], db), "hasMore": False}
             # Exact ID not found — fall through to text search below
         except (ValueError, TypeError):
             pass
@@ -530,11 +722,12 @@ def search_projects(
     if has_more:
         projects = projects[:limit]
 
+    enriched = _enrich_projects_with_risk(projects, db)
     return {
         "total": len(projects) + (1 if has_more else 0),
         "skip": skip,
         "limit": limit,
-        "results": projects,
+        "results": enriched,
         "hasMore": has_more
     }
 
@@ -551,7 +744,20 @@ def get_project(
             detail=f"Project with ID {project_id} not found"
         )
 
-    risk_info = predict_risk(project)
+    # Use pre-computed risk from risk_scores table (single source of truth)
+    # This ensures consistency with the Projects table, Risk Center, etc.
+    risk_row = db.query(models.RiskScore).filter(models.RiskScore.project_id == project.id).first()
+    if risk_row:
+        risk_info = {
+            "risk_score": risk_row.risk_score,
+            "risk_level": risk_row.risk_level,
+            "ml_anomaly": risk_row.ml_anomaly,
+            "ml_score": risk_row.ml_score,
+            "reasons": risk_row.reasons,
+        }
+    else:
+        risk_info = predict_risk(project)
+    stale_check = _check_stale_progress(project)
 
     return {
         "project": {
@@ -565,6 +771,8 @@ def get_project(
             "sanctioned_amount": project.sanctioned_amount or 0.0,
             "expenditure": project.expenditure or 0.0,
             "completion_percentage": project.completion_percentage or 0.0,
+            "data_quality_flag": stale_check["flag"],
+            "data_quality_reason": stale_check["reason"],
         },
         "risk": risk_info
     }
@@ -583,6 +791,13 @@ def dashboard_overview(
     cached = get_cached(cache_key, ttl_seconds=60)
     if cached is not None:
         return cached
+
+    # Use warmed cache for the common all-FY case
+    if not fy:
+        warmed = get_cached("dashboard_overview_all", ttl_seconds=600)
+        if warmed is not None:
+            set_cached(cache_key, warmed)
+            return warmed
 
     base_q = db.query(models.Project)
     if fy:
@@ -718,59 +933,58 @@ def anomalies_summary(
     if cached is not None:
         return cached
 
-    # Check if precalculated RiskScore table has records
-    risk_count = db.query(func.count(models.RiskScore.id)).scalar() or 0
-    if risk_count > 0:
-        # Build base query for projects, optionally filtered by fy
-        project_ids_q = db.query(models.Project.id)
+    # Use cached risk table presence (avoids COUNT(*) every call)
+    has_risk_table = _cache.get("_has_risk_table", False)
+    if has_risk_table:
+        # Single consolidated GROUP BY query instead of 3 separate COUNT + IN subquery
+        base_q = (
+            db.query(models.RiskScore.risk_level, func.count(models.RiskScore.id).label("cnt"))
+            .join(models.Project, models.RiskScore.project_id == models.Project.id)
+        )
         if fy:
-            project_ids_q = project_ids_q.filter(models.Project.fy == fy)
-        project_ids_subq = project_ids_q.subquery()
+            base_q = base_q.filter(models.Project.fy == fy)
+        rows = base_q.group_by(models.RiskScore.risk_level).all()
 
-        high = db.query(func.count(models.RiskScore.id)).filter(
-            models.RiskScore.risk_level == "High",
-            models.RiskScore.project_id.in_(project_ids_subq)
-        ).scalar() or 0
-        medium = db.query(func.count(models.RiskScore.id)).filter(
-            models.RiskScore.risk_level == "Medium",
-            models.RiskScore.project_id.in_(project_ids_subq)
-        ).scalar() or 0
-        low = db.query(func.count(models.RiskScore.id)).filter(
-            models.RiskScore.risk_level == "Low",
-            models.RiskScore.project_id.in_(project_ids_subq)
-        ).scalar() or 0
+        level_map = {"high": 0, "medium": 0, "low": 0}
+        for row in rows:
+            key = (row.risk_level or "").lower()
+            if key in level_map:
+                level_map[key] = row.cnt
+
         total_checked = db.query(func.count(models.Project.id)).filter(
             models.Project.fy == fy if fy else True
         ).scalar() or 0
 
         result = {
             "total_projects_checked": total_checked,
-            "high_risk": high,
-            "medium_risk": medium,
-            "low_risk": low,
-            "total_anomalies": high + medium + low
+            "high_risk": level_map["high"],
+            "medium_risk": level_map["medium"],
+            "low_risk": level_map["low"],
+            "total_anomalies": level_map["high"] + level_map["medium"] + level_map["low"]
         }
         set_cached(cache_key, result)
         return result
 
-    # Quick heuristic calculation
+    # Heuristic calculation — consolidated into fewer queries
     base_q = db.query(models.Project)
     if fy:
         base_q = base_q.filter(models.Project.fy == fy)
 
-    overspent = base_q.filter(models.Project.expenditure > models.Project.sanctioned_amount).count() or 0
-    stalled_high = base_q.filter(
-        models.Project.sanctioned_amount >= 1000000,
-        models.Project.completion_percentage < 25
-    ).count() or 0
-    zero_progress = base_q.filter(
-        models.Project.expenditure > 0,
-        models.Project.completion_percentage == 0
-    ).count() or 0
-    total_projects = base_q.count() or 0
+    # Single pass with CASE WHEN to count all categories at once
+    stats = base_q.with_entities(
+        func.count(models.Project.id).label("total"),
+        func.sum(case((
+            (models.Project.expenditure > models.Project.sanctioned_amount) |
+            ((models.Project.sanctioned_amount >= 1000000) & (models.Project.completion_percentage < 25)),
+            1), else_=0)).label("high"),
+        func.sum(case((
+            (models.Project.expenditure > 0) & (models.Project.completion_percentage == 0),
+            1), else_=0)).label("medium"),
+    ).one()
 
-    high_risk = overspent + stalled_high
-    medium_risk = zero_progress
+    total_projects = int(stats.total or 0)
+    high_risk = int(stats.high or 0)
+    medium_risk = int(stats.medium or 0)
     low_risk = max(0, int(total_projects * 0.02))
 
     result = {
@@ -1028,10 +1242,10 @@ def detect_anomalies(
     sort_dir: Optional[str] = Query(None, description="Sort direction: asc or desc"),
     db: Session = Depends(get_db)
 ):
-    # If RiskScore table is populated, query it with join
-    has_risk_table = db.query(func.count(models.RiskScore.id)).scalar() or 0
+    # Use cached risk table presence flag (set at startup, avoids COUNT(*) on every request)
+    has_risk_table = _cache.get("_has_risk_table", False)
 
-    if has_risk_table > 0:
+    if has_risk_table:
         query = (
             db.query(models.RiskScore, models.Project)
             .join(models.Project, models.RiskScore.project_id == models.Project.id)
@@ -1772,32 +1986,54 @@ def anomaly_analytics(
     if cached is not None:
         return cached
 
-    base_q = (
-        db.query(models.RiskScore)
+    # ── QUERY 1: Risk distribution + total + ml_count in a single GROUP BY ──
+    base_filter = []
+    if state:
+        base_filter.append(models.Project.state == state)
+    if constituency:
+        base_filter.append(models.Project.constituency == constituency)
+    if fy:
+        base_filter.append(models.Project.fy == fy)
+
+    # Single query: GROUP BY risk_level + aggregate ml_anomaly count
+    dist_q = (
+        db.query(
+            models.RiskScore.risk_level,
+            func.count(models.RiskScore.id).label("cnt"),
+            func.sum(case((models.RiskScore.ml_anomaly == True, 1), else_=0)).label("ml_cnt")
+        )
         .join(models.Project, models.RiskScore.project_id == models.Project.id)
     )
-    if state:
-        base_q = base_q.filter(models.Project.state == state)
-    if constituency:
-        base_q = base_q.filter(models.Project.constituency == constituency)
-    if fy:
-        base_q = base_q.filter(models.Project.fy == fy)
+    if base_filter:
+        dist_q = dist_q.filter(*base_filter)
+    dist_rows = dist_q.group_by(models.RiskScore.risk_level).all()
 
-    total = base_q.count() or 0
-    high = base_q.filter(models.RiskScore.risk_level.ilike("high")).count() or 0
-    medium = base_q.filter(models.RiskScore.risk_level.ilike("medium")).count() or 0
-    low = base_q.filter(models.RiskScore.risk_level.ilike("low")).count() or 0
-    none_count = base_q.filter(models.RiskScore.risk_level.ilike("none")).count() or 0
-    ml_count = base_q.filter(models.RiskScore.ml_anomaly == True).count() or 0
+    total = 0
+    level_map = {"high": 0, "medium": 0, "low": 0, "none": 0}
+    ml_count = 0
+    for row in dist_rows:
+        total += row.cnt
+        ml_count += int(row.ml_cnt or 0)
+        key = (row.risk_level or "").lower()
+        if key in level_map:
+            level_map[key] = row.cnt
 
-    all_risks = base_q.with_entities(models.RiskScore.reasons).filter(models.RiskScore.reasons != "").all()
+    # ── QUERY 2: Anomaly reasons categorization (Python-side) ──
+    reasons_q = (
+        db.query(models.RiskScore.reasons)
+        .join(models.Project, models.RiskScore.project_id == models.Project.id)
+        .filter(models.RiskScore.reasons.isnot(None), models.RiskScore.reasons != "")
+    )
+    if base_filter:
+        reasons_q = reasons_q.filter(*base_filter)
+    all_reasons = reasons_q.all()
+
     type_counts = {}
-    for (reasons_str,) in all_risks:
+    for (reasons_str,) in all_reasons:
         for reason in reasons_str.split(","):
             reason = reason.strip()
             if not reason:
                 continue
-            # Categorize
             r_lower = reason.lower()
             if "exceeds sanctioned" in r_lower:
                 cat = "Cost Overrun"
@@ -1819,6 +2055,7 @@ def anomaly_analytics(
                 cat = "Other"
             type_counts[cat] = type_counts.get(cat, 0) + 1
 
+    # ── QUERY 3: State distribution ──
     state_q = (
         db.query(
             models.Project.state,
@@ -1833,7 +2070,6 @@ def anomaly_analytics(
         state_q = state_q.filter(models.Project.constituency == constituency)
     if fy:
         state_q = state_q.filter(models.Project.fy == fy)
-
     state_rows = (
         state_q.group_by(models.Project.state)
         .order_by(func.count(models.RiskScore.id).desc())
@@ -1841,7 +2077,7 @@ def anomaly_analytics(
         .all()
     )
 
-    # FY distribution
+    # ── QUERY 4: FY distribution ──
     fy_q = (
         db.query(
             models.Project.fy,
@@ -1863,10 +2099,10 @@ def anomaly_analytics(
     result = {
         "total_scored": total,
         "risk_distribution": {
-            "high": high,
-            "medium": medium,
-            "low": low,
-            "none": none_count,
+            "high": level_map["high"],
+            "medium": level_map["medium"],
+            "low": level_map["low"],
+            "none": level_map["none"],
         },
         "ml_anomaly_count": ml_count,
         "anomaly_types": [
@@ -2432,3 +2668,445 @@ def data_quality_records(
         "skip": skip,
         "limit": limit,
     }
+
+
+# =========================================================
+# FEATURE 1: AI RISK EXPLANATION
+# =========================================================
+
+@app.get("/ai/risk-explanation/{project_id}", tags=["AI Operations"])
+def get_risk_explanation(
+    project_id: int = Path(..., description="Project ID"),
+    db: Session = Depends(get_db),
+):
+    """Return a structured, human-readable explanation of a project's risk score."""
+    project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    risk_info = predict_risk(project)
+    sanctioned = float(project.sanctioned_amount or 0)
+    expenditure = float(project.expenditure or 0)
+    completion = float(project.completion_percentage or 0)
+    utilization = (expenditure / sanctioned * 100) if sanctioned > 0 else 0
+    status_str = str(project.status or "").lower()
+
+    # Build structured explanation
+    contributing_factors = []
+    explanation = risk_info.get("explanation", {})
+    risk_factors = explanation.get("risk_factors", [])
+
+    for factor in risk_factors:
+        contributing_factors.append({
+            "factor": factor.get("explanation", ""),
+            "source": factor.get("source", "rule"),
+            "impact": factor.get("impact", None),
+        })
+
+    # If no ML/rule factors, generate transparent data-based explanation
+    if not contributing_factors:
+        if sanctioned > 0 and expenditure > sanctioned:
+            contributing_factors.append({
+                "factor": f"Expenditure (₹{expenditure:,.0f}) exceeds sanctioned amount (₹{sanctioned:,.0f})",
+                "source": "data",
+            })
+        if expenditure > 0 and completion == 0:
+            contributing_factors.append({
+                "factor": f"₹{expenditure:,.0f} spent with 0% physical progress",
+                "source": "data",
+            })
+        if sanctioned > 0 and utilization >= 80 and completion < 50:
+            contributing_factors.append({
+                "factor": f"Fund utilization at {utilization:.0f}% but physical progress only {completion:.0f}%",
+                "source": "data",
+            })
+        if status_str == "completed" and completion < 90:
+            contributing_factors.append({
+                "factor": f"Project marked as completed but physical progress is {completion:.0f}%",
+                "source": "data",
+            })
+
+    # Performance context
+    performance_context = {
+        "sanctioned_amount": sanctioned,
+        "expenditure": expenditure,
+        "completion_percentage": completion,
+        "fund_utilization_pct": round(utilization, 2),
+        "status": project.status or "",
+    }
+
+    # Check for stale progress data (separate from ML risk)
+    stale_check = _check_stale_progress(project)
+
+    result = {
+        "project_id": project_id,
+        "risk_score": risk_info["risk_score"],
+        "risk_level": risk_info["risk_level"],
+        "summary": explanation.get("summary", f"Risk level: {risk_info['risk_level']}").strip(),
+        "contributing_factors": contributing_factors,
+        "performance_context": performance_context,
+        "data_sufficiency": "sufficient" if (sanctioned > 0 or expenditure > 0) else "limited",
+        "ml_anomaly": risk_info.get("ml_anomaly", False),
+        "data_quality": {
+            "flag": stale_check["flag"],
+            "reason": stale_check["reason"],
+        },
+    }
+    return result
+
+
+# =========================================================
+# FEATURE 3: ANOMALY EXPLANATION
+# =========================================================
+
+@app.get("/ai/anomaly-explanation/{project_id}", tags=["AI Operations"])
+def get_anomaly_explanation(
+    project_id: int = Path(..., description="Project ID"),
+    db: Session = Depends(get_db),
+):
+    """Return detailed anomaly explanation for a specific project."""
+    project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    risk_info = predict_risk(project)
+    sanctioned = float(project.sanctioned_amount or 0)
+    expenditure = float(project.expenditure or 0)
+    completion = float(project.completion_percentage or 0)
+    utilization = (expenditure / sanctioned * 100) if sanctioned > 0 else 0
+
+    # Get peer stats for expected values
+    expected = {}
+    explanation = risk_info.get("explanation", {})
+    risk_factors = explanation.get("risk_factors", [])
+
+    # Compute expected reference values from peer stats
+    from ml.predictor import peer_stats as _peer_stats
+    if _peer_stats and project.state:
+        state_stats = _peer_stats.get("states", {}).get(project.state, {})
+        if state_stats:
+            expected = {
+                "state_avg_completion": round(state_stats.get("avg_completion", 0), 1),
+                "state_median_expenditure": state_stats.get("median_expenditure", 0),
+                "state_avg_utilization": round(state_stats.get("avg_utilization", 0), 1),
+            }
+        national = _peer_stats.get("national", {})
+        if national:
+            expected["national_avg_completion"] = round(national.get("avg_completion", 0), 1)
+            expected["national_avg_utilization"] = round(national.get("avg_utilization", 0), 1)
+
+    # Build detected anomalies list
+    detected_anomalies = []
+
+    # Rule-based anomalies
+    if sanctioned > 0 and expenditure > sanctioned:
+        detected_anomalies.append({
+            "type": "Cost Overrun",
+            "what": f"Expenditure (₹{expenditure:,.0f}) exceeds sanctioned amount (₹{sanctioned:,.0f})",
+            "observed": {"expenditure": expenditure, "sanctioned_amount": sanctioned},
+            "expected": {"max_expenditure": sanctioned},
+            "severity": "High",
+            "source": "rule",
+            "factors": ["Expenditure may include unapproved costs", "Sanction limits may have been exceeded"]
+        })
+
+    if expenditure > 0 and completion == 0:
+        detected_anomalies.append({
+            "type": "Zero Progress Disbursement",
+            "what": f"₹{expenditure:,.0f} spent but physical progress remains at 0%",
+            "observed": {"expenditure": expenditure, "completion": 0},
+            "expected": {"expected_completion_at_spend_level": min(100, expenditure / max(sanctioned, 1) * 100)},
+            "severity": "High",
+            "source": "rule",
+            "factors": ["Work may not have commenced", "Expenditure may be for mobilization only"]
+        })
+
+    if sanctioned > 0 and utilization >= 80 and completion < 50:
+        detected_anomalies.append({
+            "type": "Expenditure-Progress Mismatch",
+            "what": f"Fund utilization at {utilization:.0f}% but physical progress only {completion:.0f}%",
+            "observed": {"utilization_pct": round(utilization, 1), "completion_pct": completion},
+            "expected": {"expected_completion": round(utilization, 1)},
+            "severity": "Medium",
+            "source": "rule",
+            "factors": ["Financial and physical progress are significantly out of sync", "May indicate premature payments or data recording issues"]
+        })
+
+    if str(project.status or "").lower() == "completed" and completion < 90:
+        detected_anomalies.append({
+            "type": "Status Inconsistency",
+            "what": f"Project marked as completed but physical progress is {completion:.0f}%",
+            "observed": {"status": project.status, "completion": completion},
+            "expected": {"expected_completion": 100},
+            "severity": "Medium",
+            "source": "rule",
+            "factors": ["Status may be incorrectly recorded", "Project may be partially complete"]
+        })
+
+    # ML-based anomaly
+    if risk_info.get("ml_anomaly"):
+        ml_factors = []
+        for rf in risk_factors:
+            if rf.get("source") == "ml" and rf.get("explanation"):
+                ml_factors.append(rf["explanation"])
+        detected_anomalies.append({
+            "type": "ML Statistical Outlier",
+            "what": "Project exhibits patterns statistically unusual compared to peer projects",
+            "observed": {"ml_score": risk_info.get("ml_score", 0)},
+            "expected": {},
+            "severity": "High" if risk_info["risk_level"] == "High" else "Medium",
+            "source": "ml",
+            "factors": ml_factors[:3] if ml_factors else ["Statistical deviation detected by ML model"]
+        })
+
+    # If no anomalies detected, note it
+    if not detected_anomalies:
+        detected_anomalies.append({
+            "type": "No Anomaly Detected",
+            "what": "This project does not show significant anomalous patterns",
+            "observed": {},
+            "expected": {},
+            "severity": "None",
+            "source": "data",
+            "factors": ["Project metrics are within expected ranges for similar projects"]
+        })
+
+    severity = risk_info["risk_level"]
+
+    return {
+        "project_id": project_id,
+        "risk_score": risk_info["risk_score"],
+        "risk_level": severity,
+        "detected_anomalies": detected_anomalies,
+        "reference_values": expected,
+        "project_metrics": {
+            "sanctioned_amount": sanctioned,
+            "expenditure": expenditure,
+            "completion_percentage": completion,
+            "fund_utilization_pct": round(utilization, 2),
+            "status": project.status or "",
+        },
+    }
+
+
+# =========================================================
+# FEATURE 4: STATE / CONSTITUENCY BENCHMARKING
+# =========================================================
+
+@app.get("/ai/benchmarking", tags=["AI Operations"])
+def get_benchmarking(
+    state: Optional[str] = Query(None, description="State to benchmark"),
+    constituency: Optional[str] = Query(None, description="Constituency to benchmark"),
+    fy: Optional[str] = Query(None, description="Financial year filter"),
+    db: Session = Depends(get_db),
+):
+    """Return benchmarking comparison for a state/constituency against national or state averages."""
+    if not state and not constituency:
+        raise HTTPException(status_code=400, detail="Provide at least a state or constituency")
+
+    cache_key = f"benchmark_{state or ''}_{constituency or ''}_{fy or 'all'}"
+    cached = get_cached(cache_key, ttl_seconds=120)
+    if cached is not None:
+        return cached
+
+    # --- National average ---
+    nat_q = db.query(models.Project)
+    if fy:
+        nat_q = nat_q.filter(models.Project.fy == fy)
+    nat_stats = nat_q.with_entities(
+        func.count(models.Project.id).label("total"),
+        func.coalesce(func.avg(models.Project.completion_percentage), 0).label("avg_completion"),
+        func.coalesce(func.sum(models.Project.sanctioned_amount), 0).label("total_sanctioned"),
+        func.coalesce(func.sum(models.Project.expenditure), 0).label("total_expenditure"),
+        func.sum(case((models.Project.status.ilike("completed"), 1), else_=0)).label("completed"),
+        func.sum(case((models.Project.status.ilike("ongoing"), 1), else_=0)).label("ongoing"),
+    ).one()
+
+    nat_sanctioned = float(nat_stats.total_sanctioned)
+    nat_expenditure = float(nat_stats.total_expenditure)
+    national = {
+        "total_projects": int(nat_stats.total or 0),
+        "avg_completion": round(float(nat_stats.avg_completion), 2),
+        "utilization_pct": round((nat_expenditure / nat_sanctioned * 100) if nat_sanctioned > 0 else 0, 2),
+        "total_sanctioned": nat_sanctioned,
+        "total_expenditure": nat_expenditure,
+        "completed_projects": int(nat_stats.completed or 0),
+        "ongoing_projects": int(nat_stats.ongoing or 0),
+    }
+
+    # National risk stats
+    nat_risk_q = db.query(
+        func.count(models.RiskScore.id).label("total_risk"),
+        func.sum(case((models.RiskScore.risk_level.ilike("high"), 1), else_=0)).label("high_risk"),
+        func.coalesce(func.avg(models.RiskScore.risk_score), 0).label("avg_risk_score"),
+    )
+    if fy:
+        nat_risk_q = nat_risk_q.join(models.Project, models.RiskScore.project_id == models.Project.id).filter(models.Project.fy == fy)
+    nat_risk = nat_risk_q.one()
+    national["high_risk_projects"] = int(nat_risk.high_risk or 0)
+    national["avg_risk_score"] = round(float(nat_risk.avg_risk_score), 1)
+
+    # --- State-level stats ---
+    state_stats = None
+    state_name = state
+    if constituency and not state:
+        # Infer state from constituency
+        state_row = (
+            db.query(models.Project.state)
+            .filter(models.Project.constituency == constituency, models.Project.state.isnot(None))
+            .first()
+        )
+        if state_row:
+            state_name = state_row[0]
+
+    if state_name:
+        sq = db.query(models.Project).filter(models.Project.state == state_name)
+        if fy:
+            sq = sq.filter(models.Project.fy == fy)
+        s_stats = sq.with_entities(
+            func.count(models.Project.id).label("total"),
+            func.coalesce(func.avg(models.Project.completion_percentage), 0).label("avg_completion"),
+            func.coalesce(func.sum(models.Project.sanctioned_amount), 0).label("total_sanctioned"),
+            func.coalesce(func.sum(models.Project.expenditure), 0).label("total_expenditure"),
+            func.sum(case((models.Project.status.ilike("completed"), 1), else_=0)).label("completed"),
+            func.sum(case((models.Project.status.ilike("ongoing"), 1), else_=0)).label("ongoing"),
+        ).one()
+
+        s_sanctioned = float(s_stats.total_sanctioned)
+        s_expenditure = float(s_stats.total_expenditure)
+        state_stats = {
+            "total_projects": int(s_stats.total or 0),
+            "avg_completion": round(float(s_stats.avg_completion), 2),
+            "utilization_pct": round((s_expenditure / s_sanctioned * 100) if s_sanctioned > 0 else 0, 2),
+            "total_sanctioned": s_sanctioned,
+            "total_expenditure": s_expenditure,
+            "completed_projects": int(s_stats.completed or 0),
+            "ongoing_projects": int(s_stats.ongoing or 0),
+        }
+
+        # State risk stats
+        sr_q = (
+            db.query(
+                func.sum(case((models.RiskScore.risk_level.ilike("high"), 1), else_=0)).label("high_risk"),
+                func.coalesce(func.avg(models.RiskScore.risk_score), 0).label("avg_risk_score"),
+            )
+            .join(models.Project, models.RiskScore.project_id == models.Project.id)
+            .filter(models.Project.state == state_name)
+        )
+        if fy:
+            sr_q = sr_q.filter(models.Project.fy == fy)
+        sr = sr_q.one()
+        state_stats["high_risk_projects"] = int(sr.high_risk or 0)
+        state_stats["avg_risk_score"] = round(float(sr.avg_risk_score), 1)
+
+    # --- Constituency-level stats ---
+    cons_stats = None
+    if constituency and state_name:
+        cq = db.query(models.Project).filter(
+            models.Project.state == state_name,
+            models.Project.constituency == constituency,
+        )
+        if fy:
+            cq = cq.filter(models.Project.fy == fy)
+        c_stats = cq.with_entities(
+            func.count(models.Project.id).label("total"),
+            func.coalesce(func.avg(models.Project.completion_percentage), 0).label("avg_completion"),
+            func.coalesce(func.sum(models.Project.sanctioned_amount), 0).label("total_sanctioned"),
+            func.coalesce(func.sum(models.Project.expenditure), 0).label("total_expenditure"),
+            func.sum(case((models.Project.status.ilike("completed"), 1), else_=0)).label("completed"),
+            func.sum(case((models.Project.status.ilike("ongoing"), 1), else_=0)).label("ongoing"),
+        ).one()
+
+        c_sanctioned = float(c_stats.total_sanctioned)
+        c_expenditure = float(c_stats.total_expenditure)
+        cons_stats = {
+            "total_projects": int(c_stats.total or 0),
+            "avg_completion": round(float(c_stats.avg_completion), 2),
+            "utilization_pct": round((c_expenditure / c_sanctioned * 100) if c_sanctioned > 0 else 0, 2),
+            "total_sanctioned": c_sanctioned,
+            "total_expenditure": c_expenditure,
+            "completed_projects": int(c_stats.completed or 0),
+            "ongoing_projects": int(c_stats.ongoing or 0),
+        }
+
+        cr_q = (
+            db.query(
+                func.sum(case((models.RiskScore.risk_level.ilike("high"), 1), else_=0)).label("high_risk"),
+                func.coalesce(func.avg(models.RiskScore.risk_score), 0).label("avg_risk_score"),
+            )
+            .join(models.Project, models.RiskScore.project_id == models.Project.id)
+            .filter(models.Project.state == state_name, models.Project.constituency == constituency)
+        )
+        if fy:
+            cr_q = cr_q.filter(models.Project.fy == fy)
+        cr = cr_q.one()
+        cons_stats["high_risk_projects"] = int(cr.high_risk or 0)
+        cons_stats["avg_risk_score"] = round(float(cr.avg_risk_score), 1)
+
+    # Build comparisons
+    comparisons = []
+
+    if state_stats:
+        # State vs National
+        state_vs_national = []
+        metrics = [
+            ("avg_completion", "Average Completion", "%", True),
+            ("utilization_pct", "Fund Utilization", "%", True),
+            ("high_risk_projects", "High-Risk Projects", "", False),
+            ("avg_risk_score", "Avg Risk Score", "", False),
+        ]
+        for key, label, unit, higher_is_better in metrics:
+            state_val = state_stats.get(key, 0)
+            nat_val = national.get(key, 0)
+            diff = state_val - nat_val
+            state_vs_national.append({
+                "metric": label,
+                "selected": state_val,
+                "benchmark": nat_val,
+                "difference": round(diff, 2),
+                "unit": unit,
+                "better": diff > 0 if higher_is_better else diff < 0,
+            })
+        comparisons.append({
+            "type": "state_vs_national",
+            "label": f"{state_name} vs National Average",
+            "selected_name": state_name,
+            "benchmark_name": "National Average",
+            "metrics": state_vs_national,
+        })
+
+    if cons_stats and state_stats:
+        # Constituency vs State
+        cons_vs_state = []
+        for key, label, unit, higher_is_better in metrics:
+            cons_val = cons_stats.get(key, 0)
+            st_val = state_stats.get(key, 0)
+            diff = cons_val - st_val
+            cons_vs_state.append({
+                "metric": label,
+                "selected": cons_val,
+                "benchmark": st_val,
+                "difference": round(diff, 2),
+                "unit": unit,
+                "better": diff > 0 if higher_is_better else diff < 0,
+            })
+        comparisons.append({
+            "type": "constituency_vs_state",
+            "label": f"{constituency} vs {state_name} Average",
+            "selected_name": constituency,
+            "benchmark_name": f"{state_name} Average",
+            "metrics": cons_vs_state,
+        })
+
+    result = {
+        "state": state_name,
+        "constituency": constituency,
+        "fy": fy,
+        "national": national,
+        "state_stats": state_stats,
+        "constituency_stats": cons_stats,
+        "comparisons": comparisons,
+    }
+
+    set_cached(cache_key, result)
+    return result

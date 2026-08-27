@@ -1,20 +1,20 @@
-import { useEffect, useState, useMemo } from "react"
-import { getStateIntelligence } from "../services/api"
+import { useEffect, useState, useMemo, memo, useCallback } from "react"
+import { getStateIntelligence, getConstituencies, getBenchmarking } from "../services/api"
+import { formatMoney, formatNumber } from "../utils/format"
 
-function formatMoney(value) {
-  const number = Number(value || 0)
-  if (number >= 10000000) return `₹${(number / 10000000).toFixed(2)} Cr`
-  if (number >= 100000) return `₹${(number / 100000).toFixed(2)} L`
-  return `₹${number.toLocaleString("en-IN")}`
-}
-
-function StateIntelligence({ onNavigateToProjects, fy }) {
+const StateIntelligence = memo(function StateIntelligence({ onNavigateToProjects, fy }) {
   const [states, setStates] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const [sortBy, setSortBy] = useState("total_projects")
   const [sortDir, setSortDir] = useState("desc")
   const [searchTerm, setSearchTerm] = useState("")
+  // Benchmarking state
+  const [benchState, setBenchState] = useState("")
+  const [benchConstituency, setBenchConstituency] = useState("")
+  const [benchConstituencies, setBenchConstituencies] = useState([])
+  const [benchData, setBenchData] = useState(null)
+  const [benchLoading, setBenchLoading] = useState(false)
 
   useEffect(() => {
     async function load() {
@@ -57,6 +57,29 @@ function StateIntelligence({ onNavigateToProjects, fy }) {
       setSortDir(col === "state" ? "asc" : "desc")
     }
   }
+
+  // Load constituencies when bench state changes
+  useEffect(() => {
+    if (!benchState) { setBenchConstituencies([]); setBenchConstituency(""); return }
+    getConstituencies(benchState).then((d) => { if (Array.isArray(d)) setBenchConstituencies(d) }).catch(() => {})
+  }, [benchState])
+
+  const loadBenchmarking = useCallback(async () => {
+    if (!benchState && !benchConstituency) return
+    setBenchLoading(true)
+    try {
+      const params = {}
+      if (benchState) params.state = benchState
+      if (benchConstituency) params.constituency = benchConstituency
+      if (fy) params.fy = fy
+      const data = await getBenchmarking(params)
+      setBenchData(data)
+    } catch (err) {
+      console.error("Benchmarking error:", err)
+    } finally {
+      setBenchLoading(false)
+    }
+  }, [benchState, benchConstituency, fy])
 
   if (loading) {
     return (
@@ -130,6 +153,77 @@ function StateIntelligence({ onNavigateToProjects, fy }) {
               {sortBy === opt.value && <span className="ml-1">{sortDir === "asc" ? "↑" : "↓"}</span>}
             </button>
           ))}
+        </div>
+
+        {/* BENCHMARKING SECTION */}
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
+          <h3 className="mb-3 text-sm font-bold uppercase tracking-wider text-gray-400">State / Constituency Benchmarking</h3>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex-1 min-w-[150px]">
+              <label className="mb-1 block text-[10px] font-bold uppercase text-gray-400">State</label>
+              <select
+                value={benchState}
+                onChange={(e) => { setBenchState(e.target.value); setBenchData(null) }}
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-600 dark:bg-[#111827] dark:text-white"
+              >
+                <option value="">Select State</option>
+                {states.map((s) => <option key={s.state} value={s.state}>{s.state}</option>)}
+              </select>
+            </div>
+            <div className="flex-1 min-w-[150px]">
+              <label className="mb-1 block text-[10px] font-bold uppercase text-gray-400">Constituency (optional)</label>
+              <select
+                value={benchConstituency}
+                onChange={(e) => setBenchConstituency(e.target.value)}
+                disabled={!benchState}
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm disabled:opacity-50 dark:border-gray-600 dark:bg-[#111827] dark:text-white"
+              >
+                <option value="">All Constituencies</option>
+                {benchConstituencies.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <button
+              onClick={loadBenchmarking}
+              disabled={(!benchState && !benchConstituency) || benchLoading}
+              className="rounded-lg bg-[#031632] px-4 py-2 text-xs font-bold text-white transition hover:opacity-80 disabled:opacity-50 dark:bg-blue-600"
+            >
+              {benchLoading ? "Loading..." : "Compare"}
+            </button>
+          </div>
+
+          {/* Benchmark Results */}
+          {benchData && benchData.comparisons?.length > 0 && (
+            <div className="mt-4 space-y-4">
+              {benchData.comparisons.map((comp, ci) => (
+                <div key={ci} className="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#111827]">
+                  <h4 className="mb-3 text-xs font-bold text-gray-700 dark:text-gray-300">{comp.label}</h4>
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    {comp.metrics.map((m, mi) => (
+                      <div key={mi} className="rounded-lg bg-white p-3 dark:bg-[#1f2937]">
+                        <p className="text-[10px] font-bold uppercase text-gray-400">{m.metric}</p>
+                        <p className="font-mono text-lg font-bold">{m.selected}{m.unit}</p>
+                        <p className="text-[10px] text-gray-400">Benchmark: {m.benchmark}{m.unit}</p>
+                        <p className={`mt-1 text-xs font-bold ${m.better ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
+                          {m.difference > 0 ? "+" : ""}{m.difference}{m.unit} {m.better ? "↑" : "↓"}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                  {/* Interpretation */}
+                  <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50/50 p-3 dark:border-blue-900/40 dark:bg-blue-950/20">
+                    {comp.metrics.map((m, mi) => (
+                      <p key={mi} className="text-[11px] text-gray-600 dark:text-gray-400">
+                        {comp.selected_name} {m.metric.toLowerCase()} is {Math.abs(m.difference)}{m.unit} {m.better ? "above" : "below"} {comp.benchmark_name.toLowerCase()} ({m.benchmark}{m.unit}).
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {benchData && benchData.comparisons?.length === 0 && (
+            <p className="mt-3 text-xs text-gray-400">No comparison data available for the selected filters.</p>
+          )}
         </div>
 
         {/* Table */}
@@ -218,6 +312,6 @@ function StateIntelligence({ onNavigateToProjects, fy }) {
       </div>
     </div>
   )
-}
+})
 
 export default StateIntelligence

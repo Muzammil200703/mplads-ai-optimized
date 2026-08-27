@@ -1,14 +1,8 @@
-import { useEffect, useState, useCallback } from "react"
+import { useEffect, useState, useCallback, memo } from "react"
 import { getAuditPriority, getStates, getConstituencies, getProjectDetail } from "../services/api"
+import { formatMoney, formatNumber } from "../utils/format"
 
-function formatMoney(value) {
-  const number = Number(value || 0)
-  if (number >= 10000000) return `₹${(number / 10000000).toFixed(2)} Cr`
-  if (number >= 100000) return `₹${(number / 100000).toFixed(2)} L`
-  return `₹${number.toLocaleString("en-IN")}`
-}
-
-function AuditPriority({ fy }) {
+const AuditPriority = memo(function AuditPriority({ fy }) {
   const [priorities, setPriorities] = useState([])
   const [totalCount, setTotalCount] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -351,6 +345,6 @@ function AuditPriority({ fy }) {
       )}
     </div>
   )
-}
+})
 
 export default AuditPriority

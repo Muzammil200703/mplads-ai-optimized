@@ -1,19 +1,13 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, memo } from "react"
 import {
   getDashboardOverview,
   getAINarrativeInsights,
   getDashboardStates,
   getAnomaliesSummary,
 } from "../services/api"
+import { formatCrore, formatNumber } from "../utils/format"
 
-function formatCrore(amount) {
-  const crore = Number(amount || 0) / 10000000
-  return crore.toLocaleString("en-IN", {
-    maximumFractionDigits: 2,
-  })
-}
-
-function Overview({ darkMode, onDrillDown, fy }) {
+const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
   const [overview, setOverview] = useState(null)
   const [narratives, setNarratives] = useState([])
   const [stateData, setStateData] = useState([])
@@ -386,6 +380,6 @@ function Overview({ darkMode, onDrillDown, fy }) {
       </div>
     </div>
   )
-}
+})
 
 export default Overview

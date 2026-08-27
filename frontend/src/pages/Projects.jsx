@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from "react"
+import { useEffect, useState, useCallback, useRef, memo } from "react"
 import {
   getProjects,
   searchProjects,
@@ -7,34 +7,25 @@ import {
   getProjectDetail,
 } from "../services/api"
 import ProjectDetail from "../components/ProjectDetail"
-
-function formatMoney(value) {
-  const number = Number(value || 0)
-  if (number >= 10000000) {
-    return `₹${(number / 10000000).toFixed(2)} Cr`
-  }
-  if (number >= 100000) {
-    return `₹${(number / 100000).toFixed(2)} L`
-  }
-  return `₹${number.toLocaleString("en-IN")}`
-}
+import { formatMoney, formatNumber } from "../utils/format"
 
 function getRiskScoreBadge(project) {
-  const sanctioned = Number(project.sanctioned_amount || 0)
-  const expenditure = Number(project.expenditure || 0)
-  const completion = Number(project.completion_percentage || 0)
+  // Use the backend risk data (single source of truth from risk_scores table)
+  const risk = project?.risk
+  const score = risk?.risk_score ?? null
+  const level = risk?.risk_level
 
-  let score = 0
-  if (sanctioned > 0) {
-    const ratio = expenditure / sanctioned
-    if (expenditure > sanctioned) score += 40
-    else if (ratio >= 0.8 && completion < 50) score += 35
+  // If no backend risk data available, show as unknown
+  if (score === null || score === undefined) {
+    return {
+      score: null,
+      label: "N/A",
+      badge: "border-gray-200 bg-gray-50 text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400",
+      icon: "—",
+    }
   }
-  if (expenditure > 0 && completion === 0) score += 30
-  if (sanctioned >= 1000000 && completion < 25) score += 20
-  score = Math.min(100, score)
 
-  if (score >= 60) {
+  if (level === "High") {
     return {
       score,
       label: "High",
@@ -42,7 +33,7 @@ function getRiskScoreBadge(project) {
       icon: "⚠",
     }
   }
-  if (score >= 30) {
+  if (level === "Medium") {
     return {
       score,
       label: "Medium",
@@ -52,13 +43,24 @@ function getRiskScoreBadge(project) {
   }
   return {
     score,
-    label: "Low",
+    label: level || "Low",
     badge: "border-green-200 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-950/70 dark:text-green-300",
     icon: "✓",
   }
 }
 
-function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDrillDown, fy }) {
+const STALE_THRESHOLD = 1000000 // ₹10 lakh
+function getStaleProgressFlag(project) {
+  const sanctioned = Number(project.sanctioned_amount || 0)
+  const expenditure = Number(project.expenditure || 0)
+  const completion = Number(project.completion_percentage || 0)
+  if (sanctioned >= STALE_THRESHOLD && completion === 0 && expenditure === 0) {
+    return "⚠ Update Required"
+  }
+  return null
+}
+
+const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSearch, drillDownParams, onClearDrillDown, fy }) {
   const [projects, setProjects] = useState([])
   const [totalCount, setTotalCount] = useState(0)
   const [states, setStates] = useState([])
@@ -77,21 +79,20 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
   const [selectedProjectId, setSelectedProjectId] = useState(null)
   const [compareIds, setCompareIds] = useState([])
   const [showComparison, setShowComparison] = useState(false)
-  const [globalSearchApplied, setGlobalSearchApplied] = useState(false)
-
+  const [projectSearchApplied, setProjectSearchApplied] = useState(false)
   const rowsPerPage = 15
 
-  // Use a ref to track the previous globalSearchQuery to detect changes
-  const prevGlobalQueryRef = useRef(null)
+  // Use a ref to track the previous projectSearchQuery to detect changes
+  const prevProjectQueryRef = useRef(null)
   useEffect(() => {
-    if (globalSearchQuery && globalSearchQuery.trim() && globalSearchQuery !== prevGlobalQueryRef.current) {
-      prevGlobalQueryRef.current = globalSearchQuery
-      setKeyword(globalSearchQuery.trim())
+    if (projectSearchQuery && projectSearchQuery.trim() && projectSearchQuery !== prevProjectQueryRef.current) {
+      prevProjectQueryRef.current = projectSearchQuery
+      setKeyword(projectSearchQuery.trim())
       setCurrentPage(1)
-      setGlobalSearchApplied(true)
-      if (onClearSearch) onClearSearch()
+      setProjectSearchApplied(true)
+      if (onClearProjectSearch) onClearProjectSearch()
     }
-  }, [globalSearchQuery, onClearSearch])
+  }, [projectSearchQuery, onClearProjectSearch])
 
   // Handle drill-down params from Overview
   useEffect(() => {
@@ -229,8 +230,8 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
     <div className="min-h-screen bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-gray-100">
       <div className="mx-auto max-w-[1440px] space-y-4 sm:space-y-6">
 
-        {/* GLOBAL SEARCH CONTEXT BANNER */}
-        {globalSearchApplied && keyword && (
+        {/* PROJECT SEARCH CONTEXT BANNER */}
+        {projectSearchApplied && keyword && (
           <div className="flex items-center justify-between rounded-xl border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-950/40">
             <div className="flex items-center gap-3">
               <span className="text-lg">🔍</span>
@@ -246,7 +247,7 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
             <button
               onClick={() => {
                 setKeyword("")
-                setGlobalSearchApplied(false)
+                setProjectSearchApplied(false)
                 setCurrentPage(1)
               }}
               className="rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-xs font-bold text-blue-700 transition hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-900/60 dark:text-blue-200 dark:hover:bg-blue-800"
@@ -499,6 +500,11 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
                             <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${riskBadge.badge}`}>
                               {riskBadge.icon} {riskBadge.label}
                             </span>
+                            {getStaleProgressFlag(proj) && (
+                              <span className="ml-1 inline-flex items-center gap-0.5 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[9px] font-bold text-amber-600 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300" title="Data Update Notice: Reported progress or expenditure may not reflect the latest project status. A risk score indicates an anomaly based on available data and does not by itself confirm project delay or irregularity.">
+                                ⚠
+                              </span>
+                            )}
                           </td>
                           <td className="p-4 text-center">
                             <button
@@ -536,6 +542,11 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
                               <span className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-bold ${riskBadge.badge}`}>
                                 {riskBadge.icon} {riskBadge.label}
                               </span>
+                              {getStaleProgressFlag(proj) && (
+                                <span className="inline-flex items-center gap-0.5 rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[9px] font-bold text-amber-600 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300" title="Data Update Notice: Reported progress or expenditure may not reflect the latest project status.">
+                                  ⚠
+                                </span>
+                              )}
                               <span className="rounded-md border border-gray-200 bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200">
                                 {proj.status || "Ongoing"}
                               </span>
@@ -643,7 +654,7 @@ function Projects({ globalSearchQuery, onClearSearch, drillDownParams, onClearDr
       )}
     </div>
   )
-}
+})
 
 /* Comparison Modal Component */
 function ComparisonModal({ projectIds, onClose, onRemove }) {

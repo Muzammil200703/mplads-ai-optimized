@@ -10,12 +10,22 @@ function TopBar({
   onThemeToggle,
   searchQuery,
   onSearchChange,
-  onSearchSubmit,
+  onNavigateToResult,
   isMobile,
   selectedFY,
   onFYChange,
 }) {
   const [availableFYs, setAvailableFYs] = useState([])
+
+  const handleSearchChange = (e) => {
+    onSearchChange(e.target.value)
+  }
+
+  const handleSearchSubmit = () => {
+    if (searchQuery && searchQuery.trim()) {
+      onNavigateToResult('Projects', { keyword: searchQuery.trim() })
+    }
+  }
 
   useEffect(() => {
     getFYs().then((data) => {
@@ -52,7 +62,7 @@ function TopBar({
 
   return (
     <header
-      className="fixed left-0 right-0 top-0 z-[70] h-[64px] lg:h-[72px] border-b border-[#c5c6ce] bg-[#f9f9ff] text-[#151c27] dark:border-[#374151] dark:bg-[#111827] dark:text-[#f3f4f6] transition-colors duration-300 overflow-hidden"
+      className="fixed left-0 right-0 top-0 z-[70] h-[64px] lg:h-[72px] border-b border-[#c5c6ce] bg-[#f9f9ff] text-[#151c27] dark:border-[#374151] dark:bg-[#111827] dark:text-[#f3f4f6] transition-colors duration-300"
     >
 
       <div
@@ -160,36 +170,38 @@ flex h-full items-center gap-1.5 px-2 sm:gap-3 sm:px-4 lg:gap-4 lg:px-5 transiti
             🔍
           </span>
 
-          <input
-            type="text"
-            placeholder={isMobile ? "Search..." : "Search projects, states, MPs..."}
-            value={searchQuery}
-            onChange={(e) => onSearchChange && onSearchChange(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && searchQuery && searchQuery.trim()) {
-                e.preventDefault()
-                onSearchSubmit && onSearchSubmit(searchQuery.trim())
-              }
-            }}
-            className="
-              h-10 w-full rounded-lg
-              border border-[#c5c6ce]
-              bg-white
-              pl-9 pr-3
-              text-sm text-[#151c27]
-              outline-none
-              placeholder:text-[#9ca3af]
-              focus:border-[#031632]
-              focus:ring-1 focus:ring-[#031632]
+          <div className="relative">
+            <input
+              type="text"
+              placeholder={isMobile ? "Search..." : "Search projects, states, constituency, MP..."}
+              value={searchQuery}
+              onChange={handleSearchChange}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault()
+                  handleSearchSubmit()
+                }
+              }}
+              className="
+                h-10 w-full rounded-lg
+                border border-[#c5c6ce]
+                bg-white
+                pl-9 pr-3
+                text-sm text-[#151c27]
+                outline-none
+                placeholder:text-[#9ca3af]
+                focus:border-[#031632]
+                focus:ring-1 focus:ring-[#031632]
 
-              dark:border-[#374151]
-              dark:bg-[#1f2937]
-              dark:text-[#f3f4f6]
-              dark:placeholder:text-[#6b7280]
-              dark:focus:border-[#8293b5]
-              dark:focus:ring-[#8293b5]
-            "
-          />
+                dark:border-[#374151]
+                dark:bg-[#1f2937]
+                dark:text-[#f3f4f6]
+                dark:placeholder:text-[#6b7280]
+                dark:focus:border-[#8293b5]
+                dark:focus:ring-[#8293b5]
+              "
+            />
+          </div>
 
         </div>
 

@@ -1,16 +1,18 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, lazy, Suspense, memo, useRef } from "react"
 
 import Sidebar from "./components/Sidebar"
 import TopBar from "./components/TopBar"
+import { PageSkeleton } from "./components/Skeleton"
 
-import Overview from "./pages/Overview"
-import Projects from "./pages/Projects"
-import RiskCenter from "./pages/RiskCenter"
-import Reports from "./pages/Reports"
-import StateIntelligence from "./pages/StateIntelligence"
-import AuditPriority from "./pages/AuditPriority"
-import CompareProjects from "./pages/CompareProjects"
-import FAQ from "./pages/FAQ"
+// Lazy-load page components — only the active page is loaded
+const Overview = lazy(() => import("./pages/Overview"))
+const Projects = lazy(() => import("./pages/Projects"))
+const RiskCenter = lazy(() => import("./pages/RiskCenter"))
+const Reports = lazy(() => import("./pages/Reports"))
+const StateIntelligence = lazy(() => import("./pages/StateIntelligence"))
+const AuditPriority = lazy(() => import("./pages/AuditPriority"))
+const CompareProjects = lazy(() => import("./pages/CompareProjects"))
+const FAQ = lazy(() => import("./pages/FAQ"))
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(() =>
@@ -30,7 +32,10 @@ function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true)
   const [darkMode, setDarkMode] = useState(false)
   const [currentPage, setCurrentPage] = useState("Overview")
-  const [searchQuery, setSearchQuery] = useState("")
+  // Global search — independent from project search
+  const [globalSearchQuery, setGlobalSearchQuery] = useState("")
+  // Project search — only set when navigating to Projects
+  const [projectSearchQuery, setProjectSearchQuery] = useState("")
   const [drillDownParams, setDrillDownParams] = useState(null)
   const [selectedFY, setSelectedFY] = useState("")
 
@@ -69,7 +74,7 @@ function App() {
     const handler = (e) => {
       const query = e.detail?.query
       if (query) {
-        setSearchQuery(query)
+        setProjectSearchQuery(query)
         setCurrentPage("Projects")
         if (isMobile) setMobileDrawerOpen(false)
       }
@@ -78,9 +83,13 @@ function App() {
     return () => window.removeEventListener("navigate-to-project", handler)
   }, [isMobile])
 
-  const handleSearchSubmit = (query) => {
-    setSearchQuery(query)
-    setCurrentPage("Projects")
+  // Global search submit: only navigate when user explicitly selects a result
+  const handleGlobalSearchNavigate = (page, params) => {
+    setGlobalSearchQuery("")
+    if (params?.keyword) {
+      setProjectSearchQuery(params.keyword)
+    }
+    setCurrentPage(page)
     if (isMobile) setMobileDrawerOpen(false)
   }
 
@@ -90,27 +99,33 @@ function App() {
     if (isMobile) setMobileDrawerOpen(false)
   }
 
+  // Page state preservation: track which pages have been visited so we keep them mounted
+  const visitedPages = useRef(new Set(["Overview"]))
+  // Add current page to visited set synchronously (not in useEffect)
+  if (!visitedPages.current.has(currentPage)) {
+    visitedPages.current.add(currentPage)
+  }
+
   const renderPage = () => {
-    switch (currentPage) {
-      case "Overview":
-        return <Overview darkMode={darkMode} onDrillDown={handleDrillDown} fy={selectedFY} />
-      case "Projects":
-        return <Projects globalSearchQuery={searchQuery} onClearSearch={() => setSearchQuery("")} drillDownParams={drillDownParams} onClearDrillDown={() => setDrillDownParams(null)} fy={selectedFY} />
-      case "Risk Center":
-        return <RiskCenter drillDownParams={drillDownParams} onClearDrillDown={() => setDrillDownParams(null)} fy={selectedFY} />
-      case "Reports":
-        return <Reports fy={selectedFY} />
-      case "State Intelligence":
-        return <StateIntelligence onNavigateToProjects={(state) => handleDrillDown("Projects", { state })} fy={selectedFY} />
-      case "Audit Priority":
-        return <AuditPriority fy={selectedFY} />
-      case "Compare Projects":
-        return <CompareProjects fy={selectedFY} />
-      case "FAQ":
-        return <FAQ />
-      default:
-        return <Overview fy={selectedFY} />
-    }
+    const pages = [
+      { key: "Overview", el: <Overview darkMode={darkMode} onDrillDown={handleDrillDown} fy={selectedFY} /> },
+      { key: "Projects", el: <Projects projectSearchQuery={projectSearchQuery} onClearProjectSearch={() => setProjectSearchQuery("")} drillDownParams={drillDownParams} onClearDrillDown={() => setDrillDownParams(null)} fy={selectedFY} /> },
+      { key: "Risk Center", el: <RiskCenter drillDownParams={drillDownParams} onClearDrillDown={() => setDrillDownParams(null)} fy={selectedFY} /> },
+      { key: "Reports", el: <Reports fy={selectedFY} /> },
+      { key: "State Intelligence", el: <StateIntelligence onNavigateToProjects={(state) => handleDrillDown("Projects", { state })} fy={selectedFY} /> },
+      { key: "Audit Priority", el: <AuditPriority fy={selectedFY} /> },
+      { key: "Compare Projects", el: <CompareProjects fy={selectedFY} /> },
+      { key: "FAQ", el: <FAQ /> },
+    ]
+    return (
+      <Suspense fallback={<PageSkeleton cards={4} columns={4} />}>
+        {pages.map(({ key, el }) => (
+          <div key={key} style={{ display: key === currentPage ? "block" : "none" }}>
+            {visitedPages.current.has(key) ? el : null}
+          </div>
+        ))}
+      </Suspense>
+    )
   }
 
   const getMainMargin = () => {
@@ -150,9 +165,9 @@ function App() {
         onNavigate={handleNavigate}
         darkMode={darkMode}
         onThemeToggle={() => setDarkMode((previous) => !previous)}
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
-        onSearchSubmit={handleSearchSubmit}
+        searchQuery={globalSearchQuery}
+        onSearchChange={setGlobalSearchQuery}
+        onNavigateToResult={handleGlobalSearchNavigate}
         isMobile={isMobile}
         selectedFY={selectedFY}
         onFYChange={setSelectedFY}
