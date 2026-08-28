@@ -1788,6 +1788,33 @@ def state_intelligence(
 # AUDIT PRIORITY QUEUE
 # =========================================================
 
+@app.get("/audit-priority/summary", tags=["Anomaly Detection"])
+def audit_priority_summary(
+    fy: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Return aggregate counts for audit priority KPI cards."""
+    base = db.query(models.RiskScore).join(
+        models.Project, models.RiskScore.project_id == models.Project.id
+    ).filter(models.RiskScore.risk_score > 0)
+    if fy:
+        base = base.filter(models.Project.fy == fy)
+
+    total = base.count()
+    high = base.filter(models.RiskScore.risk_level == "High").count()
+    medium = base.filter(models.RiskScore.risk_level == "Medium").count()
+    critical = base.filter(models.RiskScore.risk_score >= 80).count()
+    ml_count = base.filter(models.RiskScore.ml_anomaly == True).count()
+
+    return {
+        "total_flagged": total,
+        "high_risk": high,
+        "medium_risk": medium,
+        "critical": critical,
+        "ml_anomalies": ml_count,
+    }
+
+
 @app.get("/audit-priority", tags=["Anomaly Detection"])
 def audit_priority(
     skip: int = Query(0, ge=0),
@@ -2738,6 +2765,95 @@ def get_risk_explanation(
     # Check for stale progress data (separate from ML risk)
     stale_check = _check_stale_progress(project)
 
+    # ── Data Confidence: based on field completeness ──
+    fields_present = 0
+    fields_total = 4
+    if sanctioned > 0: fields_present += 1
+    if expenditure > 0: fields_present += 1
+    if completion > 0: fields_present += 1
+    if project.status and project.status.strip(): fields_present += 1
+    data_confidence = "High" if fields_present >= 3 else ("Medium" if fields_present >= 2 else "Low")
+    # Zero expenditure + zero progress on sanctioned project → lower confidence
+    if sanctioned > 0 and expenditure == 0 and completion == 0:
+        data_confidence = "Low"
+
+    # ── Risk Signals breakdown ──
+    risk_signals = []
+    if sanctioned > 0:
+        spend_ratio = (expenditure / sanctioned * 100) if sanctioned > 0 else 0
+        risk_signals.append({
+            "signal": "Expenditure / Sanction",
+            "value": f"{spend_ratio:.1f}%",
+            "raw_value": round(spend_ratio, 1),
+            "impact": "HIGH" if spend_ratio > 100 else ("MEDIUM" if spend_ratio > 80 else "LOW"),
+        })
+    else:
+        risk_signals.append({"signal": "Expenditure / Sanction", "value": "N/A", "raw_value": None, "impact": "N/A"})
+
+    risk_signals.append({
+        "signal": "Reported Physical Progress",
+        "value": f"{completion}%",
+        "raw_value": completion,
+        "impact": "HIGH" if completion == 0 else ("MEDIUM" if completion < 50 else "LOW"),
+    })
+
+    if sanctioned > 0:
+        risk_signals.append({
+            "signal": "Project Value",
+            "value": f"₹{sanctioned:,.0f}",
+            "raw_value": sanctioned,
+            "impact": "MEDIUM" if sanctioned >= 1000000 else "LOW",
+        })
+
+    risk_signals.append({
+        "signal": "Recorded Expenditure",
+        "value": f"₹{expenditure:,.0f}",
+        "raw_value": expenditure,
+        "impact": "HIGH" if (sanctioned > 0 and expenditure > sanctioned) else ("MEDIUM" if expenditure > 0 else "LOW"),
+    })
+
+    # Overspend calculations
+    overspend = None
+    overspend_pct = None
+    if sanctioned > 0 and expenditure > sanctioned:
+        overspend = expenditure - sanctioned
+        overspend_pct = (overspend / sanctioned) * 100
+
+    # ── Dynamic AI Recommendation ──
+    reasons = risk_info.get("reasons", [])
+    risk_level = risk_info["risk_level"]
+    recommendation = ""
+    if risk_level == "High":
+        parts = []
+        if sanctioned > 0 and expenditure > sanctioned:
+            parts.append(f"Expenditure (₹{expenditure:,.0f}) has exceeded the sanctioned amount (₹{sanctioned:,.0f}). Verify expenditure records and check if additional approvals were obtained.")
+        if expenditure > 0 and completion == 0:
+            parts.append(f"₹{expenditure:,.0f} has been spent but no physical progress is reported. Verify whether work has commenced and obtain the latest progress update.")
+        if sanctioned > 0 and completion < 25 and sanctioned >= 1000000:
+            parts.append(f"This is a high-value project (₹{sanctioned:,.0f}) with only {completion}% reported progress. Prioritize for field verification.")
+        if status_str == "completed" and completion < 90:
+            parts.append(f"Project is marked completed but reported progress is {completion}%. Verify completion status against physical verification records.")
+        if risk_info.get("ml_anomaly"):
+            parts.append("The ML model has flagged this project as a statistical outlier. Cross-reference with peer projects in the same state/constituency.")
+        if not parts:
+            parts.append(f"Multiple risk indicators are active for this project (score: {risk_info['risk_score']}/100). Prioritize for financial and progress verification.")
+        recommendation = " ".join(parts)
+        if data_confidence == "Low":
+            recommendation += " Note: Data confidence is low — the assessment is based on incomplete project records."
+    elif risk_level == "Medium":
+        parts = []
+        if completion < 50 and expenditure > 0:
+            parts.append(f"Physical progress ({completion}%) is below expected levels for the expenditure incurred (₹{expenditure:,.0f}). Monitor for further delays.")
+        if risk_info.get("ml_anomaly"):
+            parts.append("An ML-detected anomaly is present. Review project context to determine if the deviation is expected.")
+        if not parts:
+            parts.append(f"Several risk indicators are partially active (score: {risk_info['risk_score']}/100). Schedule periodic review.")
+        recommendation = " ".join(parts)
+    elif risk_level == "Low":
+        recommendation = f"Minor deviations detected (score: {risk_info['risk_score']}/100). No immediate action required; continue routine monitoring."
+    else:
+        recommendation = "No significant risk indicators detected. Project metrics appear consistent with expected patterns. Continue standard monitoring."
+
     result = {
         "project_id": project_id,
         "risk_score": risk_info["risk_score"],
@@ -2751,6 +2867,13 @@ def get_risk_explanation(
             "flag": stale_check["flag"],
             "reason": stale_check["reason"],
         },
+        # New enhanced fields
+        "data_confidence": data_confidence,
+        "indicator_count": len(reasons),
+        "risk_signals": risk_signals,
+        "overspend": overspend,
+        "overspend_pct": round(overspend_pct, 1) if overspend_pct else None,
+        "ai_recommendation": recommendation,
     }
     return result
 

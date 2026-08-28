@@ -251,6 +251,10 @@ export async function getAuditPriority(params = {}) {
   return request(`/audit-priority${buildQuery(params)}`)
 }
 
+export async function getAuditPrioritySummary(params = {}) {
+  return request(`/audit-priority/summary${buildQuery(params)}`)
+}
+
 export async function getSimilarProjects(projectId, limit = 5) {
   return request(`/projects/${projectId}/similar?limit=${limit}`)
 }

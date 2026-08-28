@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, memo } from "react"
-import { getAnomalies, getAnomaliesSummary, getStates, getConstituencies, getProjectDetail, getAnomalyAnalytics } from "../services/api"
+import { getAnomalies, getAnomaliesSummary, getStates, getConstituencies, getProjectDetail, getAnomalyAnalytics, getRiskExplanation } from "../services/api"
 import { formatMoney, formatNumber } from "../utils/format"
 
 /* ──────────── Donut Chart (pure CSS) ──────────── */
@@ -157,6 +157,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
   // Detail panel
   const [selectedAnomaly, setSelectedAnomaly] = useState(null)
   const [detailRisk, setDetailRisk] = useState(null)
+  const [riskExplanation, setRiskExplanation] = useState(null)
   const [loadingDetail, setLoadingDetail] = useState(false)
 
   // Analytics
@@ -238,10 +239,15 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
   const handleOpenDetail = async (anomaly) => {
     setSelectedAnomaly(anomaly)
     setDetailRisk(null)
+    setRiskExplanation(null)
     setLoadingDetail(true)
     try {
-      const detail = await getProjectDetail(anomaly.project_id)
+      const [detail, explanation] = await Promise.all([
+        getProjectDetail(anomaly.project_id),
+        getRiskExplanation(anomaly.project_id),
+      ])
       if (detail) setDetailRisk(detail.risk)
+      if (explanation) setRiskExplanation(explanation)
     } catch (err) { console.error("Detail error:", err) }
     finally { setLoadingDetail(false) }
   }
@@ -569,142 +575,353 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
         </div>
       </div>
 
-      {/* DETAIL MODAL */}
-      {selectedAnomaly && (
+      {/* ═══════════ DETAIL MODAL ═══════════ */}
+      {selectedAnomaly && (() => {
+        const s = selectedAnomaly
+        const re = riskExplanation
+        const sanctioned = Number(s.sanctioned_amount || 0)
+        const expenditure = Number(s.expenditure || 0)
+        const completion = Number(s.completion_percentage || 0)
+        const utilization = sanctioned > 0 ? (expenditure / sanctioned * 100) : 0
+        const overspend = re?.overspend || (sanctioned > 0 && expenditure > sanctioned ? expenditure - sanctioned : null)
+        const overspendPct = re?.overspend_pct || (overspend ? (overspend / sanctioned * 100) : null)
+        const reasons = s.reasons || []
+        const indicatorCount = re?.indicator_count ?? reasons.length
+        const dataConfidence = re?.data_confidence || (sanctioned > 0 && expenditure === 0 && completion === 0 ? "Low" : (completion > 0 && expenditure > 0 ? "High" : "Medium"))
+        const riskSignals = re?.risk_signals || []
+        const aiRecommendation = re?.ai_recommendation || ""
+
+        // Severity mapping for reasons
+        const reasonSeverity = (r) => {
+          const rl = r.toLowerCase()
+          if (rl.includes("exceeds sanctioned") || rl.includes("0% physical") || rl.includes("disbursements made")) return "CRITICAL"
+          if (rl.includes("high expenditure") || rl.includes("high-value") || rl.includes("ml") || rl.includes("anomaly")) return "HIGH"
+          if (rl.includes("completed but") || rl.includes("very low fund") || rl.includes("high completion")) return "MEDIUM"
+          return "LOW"
+        }
+        const severityColor = (sev) => {
+          if (sev === "CRITICAL") return "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300 border-red-200 dark:border-red-800"
+          if (sev === "HIGH") return "bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300 border-orange-200 dark:border-orange-800"
+          if (sev === "MEDIUM") return "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 border-amber-200 dark:border-amber-800"
+          return "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300 border-blue-200 dark:border-blue-800"
+        }
+        const reasonExplanation = (r) => {
+          const rl = r.toLowerCase()
+          if (rl.includes("exceeds sanctioned")) return `Expenditure (₹${expenditure.toLocaleString("en-IN")}) recorded against sanctioned amount (₹${sanctioned.toLocaleString("en-IN")}) — ${(utilization).toFixed(1)}% utilization. This may indicate costs beyond approved limits and requires verification.`
+          if (rl.includes("high expenditure") && rl.includes("low physical completion")) return `₹${expenditure.toLocaleString("en-IN")} expenditure recorded while reported completion is only ${completion}%. The financial-physical gap may indicate premature payments or recording discrepancies.`
+          if (rl.includes("disbursements made") || rl.includes("0% physical completion")) return `₹${expenditure.toLocaleString("en-IN")} spent with 0% reported physical progress. This may indicate that records have not been updated, or work has not commenced. Verification is recommended.`
+          if (rl.includes("high-value project")) return `Sanctioned amount of ₹${sanctioned.toLocaleString("en-IN")} with only ${completion}% reported progress. Large-value projects with low progress may require prioritized field verification.`
+          if (rl.includes("completed but")) return `Project status is recorded as "${s.status}" but physical progress is ${completion}%. This inconsistency may indicate a data recording issue.`
+          if (rl.includes("high completion recorded")) return `${completion}% physical progress recorded but expenditure is ₹0. This may indicate a data recording gap.`
+          if (rl.includes("very low fund")) return `Only ${utilization.toFixed(1)}% fund utilization with ${completion}% completion on a ₹${sanctioned.toLocaleString("en-IN")} project. Both financial and physical indicators suggest limited activity.`
+          if (rl.includes("ml") || rl.includes("anomaly") || rl.includes("statistical")) return `The ML model identified this project as a statistical outlier compared to peer projects with similar attributes. This is an automated flag for further human review.`
+          return r
+        }
+
+        return (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 sm:p-4 backdrop-blur-2xs" onClick={() => setSelectedAnomaly(null)}>
-          <div onClick={(e) => e.stopPropagation()} className="flex max-h-[90vh] sm:max-h-[85vh] w-full sm:max-w-2xl flex-col rounded-t-2xl sm:rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-[#1f2937]">
+          <div onClick={(e) => e.stopPropagation()} className="flex max-h-[92vh] sm:max-h-[88vh] w-full sm:max-w-3xl flex-col rounded-t-2xl sm:rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-[#1f2937]">
+
+            {/* ── HEADER ── */}
             <div className="flex items-start justify-between border-b border-gray-200 p-5 dark:border-gray-700">
-              <div>
+              <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-mono text-xs font-bold text-gray-400">#{selectedAnomaly.project_id}</span>
+                  <span className="font-mono text-xs font-bold text-gray-400">#{s.project_id}</span>
                   <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${
-                    selectedAnomaly.risk_level === "High" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
-                    : selectedAnomaly.risk_level === "Medium" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
+                    s.risk_level === "High" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+                    : s.risk_level === "Medium" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
+                    : s.risk_level === "Low" ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
                     : "bg-gray-100 text-gray-600 dark:bg-gray-700"
                   }`}>
-                    {selectedAnomaly.risk_level} Risk — Score {selectedAnomaly.risk_score}/100
+                    {s.risk_level} Risk — Score {s.risk_score}/100
                   </span>
-                  {selectedAnomaly.ml_anomaly && (
+                  {s.ml_anomaly && (
                     <span className="rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">ML Anomaly</span>
                   )}
-                  {getStaleProgressFlag(selectedAnomaly) && (
+                  {getStaleProgressFlag(s) && (
                     <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-600 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300">
-                      <span>⚠</span>
-                      <span>Data Update Notice</span>
+                      <span>⚠</span><span>Data Update Notice</span>
                     </span>
                   )}
+                  <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${
+                    dataConfidence === "High" ? "border-green-200 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-950 dark:text-green-300"
+                    : dataConfidence === "Medium" ? "border-yellow-200 bg-yellow-50 text-yellow-700 dark:border-yellow-800 dark:bg-yellow-950 dark:text-yellow-300"
+                    : "border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300"
+                  }`}>Data: {dataConfidence}</span>
                 </div>
-                <h3 className="mt-2 text-lg font-bold text-gray-900 dark:text-white">{selectedAnomaly.project_name}</h3>
-                <p className="text-xs text-gray-500">📍 {selectedAnomaly.state || "N/A"} — {selectedAnomaly.constituency || "N/A"}</p>
+                <h3 className="mt-2 text-lg font-bold text-gray-900 dark:text-white leading-tight">{s.project_name}</h3>
+                <p className="text-xs text-gray-500 mt-0.5">📍 {s.state || "N/A"} — {s.constituency || "N/A"} {s.project_type ? `· ${s.project_type}` : ""}</p>
               </div>
-              <button onClick={() => setSelectedAnomaly(null)} className="rounded p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">✕</button>
+              <button onClick={() => setSelectedAnomaly(null)} className="ml-3 flex-shrink-0 rounded p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">✕</button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+            {/* ── SCROLLABLE BODY ── */}
+            <div className="flex-1 overflow-y-auto p-5 space-y-5">
               {loadingDetail ? (
                 <div className="p-8 text-center">
                   <div className="inline-block h-6 w-6 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent" />
-                  <p className="mt-2 text-xs text-gray-500">Loading project details...</p>
+                  <p className="mt-2 text-xs text-gray-500">Loading detailed risk assessment...</p>
                 </div>
               ) : (
                 <>
+                  {/* ── RISK SCORE GAUGE ── */}
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-5 dark:border-gray-700 dark:bg-[#111827]">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Risk Score</p>
+                        <div className="flex items-baseline gap-2 mt-1">
+                          <span className="font-mono text-4xl font-bold text-gray-900 dark:text-white">{s.risk_score}</span>
+                          <span className="font-mono text-lg text-gray-400">/ 100</span>
+                        </div>
+                        <div className="flex items-center gap-2 mt-2">
+                          <span className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${
+                            s.risk_level === "High" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+                            : s.risk_level === "Medium" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
+                            : s.risk_level === "Low" ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
+                            : "bg-gray-100 text-gray-600 dark:bg-gray-700"
+                          }`}>{s.risk_level} Risk</span>
+                          <span className="text-[11px] text-gray-500">{indicatorCount} indicator{indicatorCount !== 1 ? "s" : ""} triggered</span>
+                          {s.ml_anomaly && <span className="text-[11px] font-semibold text-purple-600 dark:text-purple-400">· ML Outlier</span>}
+                        </div>
+                      </div>
+                    </div>
+                    {/* Gauge bar */}
+                    <div className="mt-4">
+                      <div className="h-3 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
+                        <div className={`h-full rounded-full transition-all duration-500 ${
+                          s.risk_score >= 60 ? "bg-red-500" : s.risk_score >= 30 ? "bg-amber-500" : s.risk_score > 0 ? "bg-blue-500" : "bg-gray-300"
+                        }`} style={{ width: `${Math.max(2, s.risk_score)}%` }} />
+                      </div>
+                      <div className="flex justify-between mt-1 text-[9px] text-gray-400">
+                        <span>0</span><span>25</span><span>50</span><span>75</span><span>100</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ── DATA CONFIDENCE ── */}
+                  <div className={`rounded-xl border p-4 ${
+                    dataConfidence === "High" ? "border-green-200 bg-green-50/50 dark:border-green-900/40 dark:bg-green-950/20"
+                    : dataConfidence === "Medium" ? "border-yellow-200 bg-yellow-50/50 dark:border-yellow-900/40 dark:bg-yellow-950/20"
+                    : "border-red-200 bg-red-50/50 dark:border-red-900/40 dark:bg-red-950/20"
+                  }`}>
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs font-bold uppercase tracking-wider ${
+                        dataConfidence === "High" ? "text-green-600 dark:text-green-400"
+                        : dataConfidence === "Medium" ? "text-yellow-600 dark:text-yellow-400"
+                        : "text-red-600 dark:text-red-400"
+                      }`}>Data Confidence: {dataConfidence}</span>
+                    </div>
+                    <p className="mt-1.5 text-xs text-gray-600 dark:text-gray-400">
+                      {dataConfidence === "Low"
+                        ? "Progress data may be missing or outdated. This assessment is based on incomplete project records and should be interpreted with caution."
+                        : dataConfidence === "Medium"
+                        ? "Some project fields are missing or zero. Assessment is based on partially available records."
+                        : "Project data appears complete. Risk assessment is based on full financial and progress information."
+                      }
+                    </p>
+                    {dataConfidence === "Low" && (expenditure === 0 && completion === 0 && sanctioned > 0) && (
+                      <p className="mt-1.5 text-[10px] text-gray-500 dark:text-gray-400 italic">This indicator does not confirm project delay or irregularity — it reflects potential data freshness gaps.</p>
+                    )}
+                  </div>
+
+                  {/* ── FINANCIAL OVERVIEW ── */}
                   <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#111827]">
                     <h4 className="mb-3 text-xs font-bold uppercase tracking-wider text-gray-400">Financial Overview</h4>
-                    <div className="grid grid-cols-3 gap-4">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                       <div>
                         <p className="text-[10px] font-bold uppercase text-gray-400">Sanctioned</p>
-                        <p className="font-mono text-sm font-bold">{formatMoney(selectedAnomaly.sanctioned_amount)}</p>
+                        <p className="font-mono text-sm font-bold text-blue-700 dark:text-blue-400">{formatMoney(sanctioned)}</p>
                       </div>
                       <div>
                         <p className="text-[10px] font-bold uppercase text-gray-400">Expenditure</p>
-                        <p className="font-mono text-sm font-bold">{formatMoney(selectedAnomaly.expenditure)}</p>
+                        <p className="font-mono text-sm font-bold">{formatMoney(expenditure)}</p>
                       </div>
                       <div>
                         <p className="text-[10px] font-bold uppercase text-gray-400">Progress</p>
-                        <p className="font-mono text-sm font-bold">{selectedAnomaly.completion_percentage}%</p>
+                        <p className="font-mono text-sm font-bold">{completion}%</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-bold uppercase text-gray-400">Utilization</p>
+                        <p className="font-mono text-sm font-bold">{utilization.toFixed(1)}%</p>
                       </div>
                     </div>
-                    {selectedAnomaly.sanctioned_amount > 0 && (
+                    {overspend !== null && overspend > 0 && (
+                      <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 dark:border-red-900/40 dark:bg-red-950/20">
+                        <div className="flex items-center gap-3 text-xs">
+                          <span className="font-bold text-red-600 dark:text-red-400">Overspend:</span>
+                          <span className="font-mono font-bold text-red-700 dark:text-red-300">+{formatMoney(overspend)}</span>
+                          <span className="text-red-500 dark:text-red-400">Over sanction: +{overspendPct.toFixed(1)}%</span>
+                        </div>
+                      </div>
+                    )}
+                    {sanctioned > 0 && (
                       <div className="mt-3">
                         <div className="h-2 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
-                          <div className="h-full rounded-full bg-blue-600" style={{ width: `${Math.min(100, (selectedAnomaly.expenditure || 0) / selectedAnomaly.sanctioned_amount * 100)}%` }} />
+                          <div className={`h-full rounded-full ${utilization > 100 ? "bg-red-500" : "bg-blue-600"}`} style={{ width: `${Math.min(100, utilization)}%` }} />
                         </div>
-                        <p className="mt-1 text-[10px] text-gray-500">
-                          Utilization: {((selectedAnomaly.expenditure || 0) / selectedAnomaly.sanctioned_amount * 100).toFixed(1)}%
-                        </p>
                       </div>
                     )}
                   </div>
 
-                  {selectedAnomaly.reasons && selectedAnomaly.reasons.length > 0 && (
-                    <div className="rounded-xl border border-red-200 bg-red-50/50 p-4 dark:border-red-900/40 dark:bg-red-950/20">
-                      <h4 className="mb-3 text-xs font-bold uppercase tracking-wider text-red-600 dark:text-red-400">Why This Record Was Flagged</h4>
-                      <div className="space-y-2">
-                        {selectedAnomaly.reasons.map((reason, i) => (
-                          <div key={i} className="flex items-start gap-2">
-                            <span className="mt-0.5 text-xs text-red-500">⚠</span>
-                            <div>
-                              <p className="text-xs font-semibold text-red-700 dark:text-red-400">{reason}</p>
-                              <p className="mt-0.5 text-[10px] text-gray-500 dark:text-gray-400">
-                                {reason.includes("exceeds sanctioned") && "Expenditure exceeds the approved sanctioned amount — audit review required."}
-                                {reason.includes("High expenditure") && "Expenditure-to-sanction ratio is high while physical completion is disproportionately low."}
-                                {reason.includes("0% physical completion") && "Funds have been disbursed but no physical progress is recorded — potential stalled or fictitious work."}
-                                {reason.includes("completed but physical progress") && "Status contradicts the actual physical completion metric."}
-                                {reason.includes("High-value project") && "Large sanctioned value with minimal on-ground progress."}
-                                {reason.includes("High completion recorded") && "Physical progress recorded without corresponding financial expenditure — possible data error."}
-                                {reason.includes("Very low fund") && "Major discrepancy between financial utilization and physical progress."}
-                                {reason.includes("ML") && "Multi-variable statistical deviation detected across financial and progress dimensions by the Isolation Forest model."}
-                              </p>
-                            </div>
-                          </div>
-                        ))}
+                  {/* ── RISK DETECTION BREAKDOWN ── */}
+                  {riskSignals.length > 0 && (
+                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#111827]">
+                      <h4 className="mb-3 text-xs font-bold uppercase tracking-wider text-gray-400">Risk Detection Breakdown</h4>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b border-gray-200 dark:border-gray-700">
+                              <th className="pb-2 text-left font-bold text-gray-500">Signal</th>
+                              <th className="pb-2 text-right font-bold text-gray-500">Value</th>
+                              <th className="pb-2 text-right font-bold text-gray-500">Impact</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {riskSignals.map((sig, i) => (
+                              <tr key={i} className="border-b border-gray-100 dark:border-gray-700/50 last:border-0">
+                                <td className="py-2 font-semibold text-gray-700 dark:text-gray-300">{sig.signal}</td>
+                                <td className="py-2 text-right font-mono font-bold text-gray-900 dark:text-white">{sig.value}</td>
+                                <td className="py-2 text-right">
+                                  <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                                    sig.impact === "HIGH" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+                                    : sig.impact === "MEDIUM" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
+                                    : sig.impact === "LOW" ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
+                                    : "bg-gray-100 text-gray-500 dark:bg-gray-700"
+                                  }`}>{sig.impact}</span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
                     </div>
                   )}
 
-                  {detailRisk && (
-                    <div className="rounded-xl border border-blue-200 bg-blue-50/50 p-4 dark:border-blue-900/40 dark:bg-blue-950/20">
-                      <h4 className="mb-2 text-xs font-bold uppercase tracking-wider text-blue-700 dark:text-blue-300">Detailed Risk Assessment</h4>
-                      <div className="flex gap-4 font-mono text-xs">
-                        <span>Risk Score: <strong>{detailRisk.risk_score}/100</strong></span>
-                        <span>Level: <strong>{detailRisk.risk_level}</strong></span>
-                        {detailRisk.ml_anomaly && <span>ML: <strong className="text-purple-600">Anomaly Detected</strong></span>}
+                  {/* ── WHY THIS RECORD WAS FLAGGED ── */}
+                  {reasons.length > 0 && (
+                    <div className="rounded-xl border border-red-200 bg-red-50/50 p-4 dark:border-red-900/40 dark:bg-red-950/20">
+                      <h4 className="mb-3 text-xs font-bold uppercase tracking-wider text-red-600 dark:text-red-400">Why This Record Was Flagged</h4>
+                      <div className="space-y-3">
+                        {[...reasons].sort((a, b) => {
+                          const order = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 }
+                          return (order[reasonSeverity(a)] ?? 4) - (order[reasonSeverity(b)] ?? 4)
+                        }).map((reason, i) => {
+                          const sev = reasonSeverity(reason)
+                          return (
+                            <div key={i} className="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-[#1f2937]">
+                              <div className="flex items-center gap-2 mb-1.5">
+                                <span className={`rounded border px-1.5 py-0.5 text-[9px] font-bold ${severityColor(sev)}`}>{sev}</span>
+                                <span className="text-xs font-bold text-gray-800 dark:text-gray-200">{reason}</span>
+                              </div>
+                              <p className="text-[11px] text-gray-600 dark:text-gray-400 leading-relaxed pl-1">
+                                {reasonExplanation(reason)}
+                              </p>
+                            </div>
+                          )
+                        })}
                       </div>
+                    </div>
+                  )}
+
+                  {/* ── DATA UPDATE NOTICE ── */}
+                  {getStaleProgressFlag(s) && (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800/60 dark:bg-amber-950/40">
+                      <h4 className="mb-2 text-xs font-bold uppercase tracking-wider text-amber-700 dark:text-amber-300">⚠ Data Update Notice</h4>
+                      <p className="text-xs text-amber-800 dark:text-amber-200">
+                        Reported progress or expenditure may not reflect the latest project status. A risk score indicates an anomaly based on available data and does not by itself confirm project delay or irregularity.
+                      </p>
+                      <div className="mt-2 grid grid-cols-3 gap-2 text-[10px]">
+                        <div><span className="font-bold text-amber-600 dark:text-amber-400">Sanctioned:</span> {formatMoney(sanctioned)}</div>
+                        <div><span className="font-bold text-amber-600 dark:text-amber-400">Recorded Expenditure:</span> ₹0</div>
+                        <div><span className="font-bold text-amber-600 dark:text-amber-400">Recorded Progress:</span> 0%</div>
+                      </div>
+                      <p className="mt-2 text-[10px] italic text-amber-600/70 dark:text-amber-400/70">This indicator does not confirm project delay or irregularity.</p>
+                    </div>
+                  )}
+
+                  {/* ── AI RECOMMENDATION ── */}
+                  {aiRecommendation && (
+                    <div className="rounded-xl border border-indigo-200 bg-indigo-50/50 p-4 dark:border-indigo-900/40 dark:bg-indigo-950/20">
+                      <h4 className="mb-2 text-xs font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">🤖 AI Recommendation</h4>
+                      <p className="text-xs text-gray-700 dark:text-gray-300 leading-relaxed">{aiRecommendation}</p>
                     </div>
                   )}
                 </>
               )}
             </div>
 
-              {getStaleProgressFlag(selectedAnomaly) && (
-                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800/60 dark:bg-amber-950/40">
-                  <h4 className="mb-2 text-xs font-bold uppercase tracking-wider text-amber-700 dark:text-amber-300">⚠ Data Update Notice</h4>
-                  <p className="text-xs text-amber-800 dark:text-amber-200">
-                    Reported progress or expenditure may not reflect the latest project status. A high-risk score indicates an anomaly based on available data and does not by itself confirm project delay or irregularity.
-                  </p>
-                  <div className="mt-2 grid grid-cols-3 gap-2 text-[10px]">
-                    <div><span className="font-bold text-amber-600 dark:text-amber-400">Sanctioned:</span> {formatMoney(selectedAnomaly.sanctioned_amount)}</div>
-                    <div><span className="font-bold text-amber-600 dark:text-amber-400">Recorded Expenditure:</span> ₹0</div>
-                    <div><span className="font-bold text-amber-600 dark:text-amber-400">Recorded Progress:</span> 0%</div>
-                  </div>
-                  <p className="mt-2 text-[10px] italic text-amber-600/70 dark:text-amber-400/70">This indicator does not confirm project delay or irregularity.</p>
-                </div>
-              )}
-
-            <div className="border-t border-gray-200 p-4 flex justify-between dark:border-gray-700">
+            {/* ── FOOTER ── */}
+            <div className="border-t border-gray-200 p-4 flex flex-wrap items-center justify-between gap-2 dark:border-gray-700">
               <button onClick={() => setSelectedAnomaly(null)} className="rounded-lg border border-gray-300 px-4 py-2 text-xs font-bold text-gray-700 dark:border-gray-600 dark:text-gray-200">Close</button>
-              <button
-                onClick={() => {
-                  window.dispatchEvent(new CustomEvent("navigate-to-project", { detail: { query: String(selectedAnomaly.project_id) } }))
-                  setSelectedAnomaly(null)
-                }}
-                className="rounded-lg bg-[#031632] px-4 py-2 text-xs font-bold text-white dark:bg-blue-600">
-                View Full Project →
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    // Generate Audit Summary
+                    const re2 = riskExplanation
+                    const lines = [
+                      `AUDIT SUMMARY — Project #${s.project_id}`,
+                      `="=".repeat(40)`,
+                      ``,
+                      `Project: ${s.project_name}`,
+                      `ID: ${s.project_id}`,
+                      `State: ${s.state || "N/A"}`,
+                      `Constituency: ${s.constituency || "N/A"}`,
+                      `Type: ${s.project_type || "N/A"}`,
+                      `Status: ${s.status || "N/A"}`,
+                      ``,
+                      `FINANCIAL DATA`,
+                      `Sanctioned: ${formatMoney(sanctioned)}`,
+                      `Expenditure: ${formatMoney(expenditure)}`,
+                      `Utilization: ${utilization.toFixed(1)}%`,
+                      overspend ? `Overspend: +${formatMoney(overspend)} (+${overspendPct?.toFixed(1)}%)` : null,
+                      `Physical Progress: ${completion}%`,
+                      ``,
+                      `RISK ASSESSMENT`,
+                      `Risk Score: ${s.risk_score}/100`,
+                      `Risk Level: ${s.risk_level}`,
+                      `ML Anomaly: ${s.ml_anomaly ? "Yes" : "No"}`,
+                      `Data Confidence: ${dataConfidence}`,
+                      `Indicators Triggered: ${indicatorCount}`,
+                      ``,
+                      `DETECTED ANOMALIES`,
+                      ...reasons.map((r, i) => `  ${i + 1}. [${reasonSeverity(r)}] ${r}`),
+                      ``,
+                      `AI RECOMMENDATION`,
+                      aiRecommendation || "No specific recommendation.",
+                      ``,
+                      `SUGGESTED ACTION`,
+                      s.risk_level === "High" ? `Prioritize for verification. This project has ${indicatorCount} active risk indicators and a high-risk classification.`
+                      : s.risk_level === "Medium" ? `Schedule for periodic review. ${indicatorCount} moderate indicators detected.`
+                      : `Continue standard monitoring.`,
+                      ``,
+                      `This summary is generated from available project records and automated risk analysis.`,
+                      `It is intended to support — not replace — human verification and contextual review.`,
+                    ].filter(Boolean).join("\n")
+                    const blob = new Blob([lines], { type: "text/plain" })
+                    const url = URL.createObjectURL(blob)
+                    const a = document.createElement("a")
+                    a.href = url
+                    a.download = `audit-summary-${s.project_id}.txt`
+                    a.click()
+                    URL.revokeObjectURL(url)
+                  }}
+                  className="rounded-lg border border-gray-300 px-3 py-2 text-[11px] font-bold text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700">
+                  📄 Generate Audit Summary
+                </button>
+                <button
+                  onClick={() => {
+                    window.dispatchEvent(new CustomEvent("navigate-to-project", { detail: { query: String(s.project_id) } }))
+                    setSelectedAnomaly(null)
+                  }}
+                  className="rounded-lg bg-[#031632] px-4 py-2 text-xs font-bold text-white dark:bg-blue-600">
+                  View Full Project →
+                </button>
+              </div>
             </div>
           </div>
         </div>
-      )}
+        )
+      })()}
     </div>
   )
 })
