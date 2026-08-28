@@ -122,6 +122,18 @@ const HBarChart = memo(function HBarChart({ items, maxCount, barColor = "bg-blue
   )
 })
 
+/* ──────────── Data Update Notice (same as Projects.jsx) ──────────── */
+const STALE_THRESHOLD = 1000000 // ₹10 lakh
+function getStaleProgressFlag(project) {
+  const sanctioned = Number(project.sanctioned_amount || 0)
+  const expenditure = Number(project.expenditure || 0)
+  const completion = Number(project.completion_percentage || 0)
+  if (sanctioned >= STALE_THRESHOLD && completion === 0 && expenditure === 0) {
+    return true
+  }
+  return false
+}
+
 /* ═══════════════ MAIN COMPONENT ═══════════════ */
 const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown, fy }) {
   const [summary, setSummary] = useState({ total_projects_checked: 0, high_risk: 0, medium_risk: 0, low_risk: 0, total_anomalies: 0 })
@@ -255,17 +267,17 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
         {/* KPI CARDS */}
         <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-4">
           {[
-            { label: "Total Checked", value: summary.total_projects_checked, icon: "🔍", accent: "border-l-blue-500", text: "text-blue-600 dark:text-blue-400" },
-            { label: "High Risk", value: summary.high_risk, icon: "🔴", accent: "border-l-red-500", text: "text-red-600 dark:text-red-400" },
-            { label: "Medium Risk", value: summary.medium_risk, icon: "🟡", accent: "border-l-amber-500", text: "text-amber-600 dark:text-amber-400" },
-            { label: "Total Anomalies", value: summary.total_anomalies, icon: "📊", accent: "border-l-purple-500", text: "text-purple-600 dark:text-purple-400" },
+            { label: "Total Checked", value: summary.total_projects_checked, icon: "🔍", text: "text-blue-600 dark:text-blue-400" },
+            { label: "High Risk", value: summary.high_risk, icon: "🔴", text: "text-red-600 dark:text-red-400" },
+            { label: "Medium Risk", value: summary.medium_risk, icon: "🟡", text: "text-amber-600 dark:text-amber-400" },
+            { label: "Total Anomalies", value: summary.total_anomalies, icon: "📊", text: "text-purple-600 dark:text-purple-400" },
           ].map((card) => (
-            <div key={card.label} className={`rounded-xl border border-gray-200 border-l-4 ${card.accent} bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]`}>
+            <div key={card.label} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
               <div className="flex items-center justify-between">
                 <p className="text-[11px] font-bold uppercase tracking-wider text-gray-400">{card.label}</p>
                 <span className="text-lg">{card.icon}</span>
               </div>
-              <p className={`mt-1 font-mono text-2xl font-bold ${card.text}`}>{card.value.toLocaleString("en-IN")}</p>
+              <p className={`mt-1 font-mono text-3xl font-bold ${card.text}`}>{card.value.toLocaleString("en-IN")}</p>
             </div>
           ))}
         </div>
@@ -491,7 +503,12 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                         <td className="px-4 py-2.5 text-right font-mono text-xs tabular-nums">{formatMoney(a.expenditure)}</td>
                         <td className="px-4 py-2.5 text-center font-mono text-xs font-bold">{a.completion_percentage}%</td>
                         <td className="px-4 py-2.5 text-center">
-                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${a.risk_level === "High" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300" : a.risk_level === "Medium" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300" : a.risk_level === "Low" ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300"}`}>{a.risk_level}</span>
+                          <div className="flex items-center justify-center gap-1">
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${a.risk_level === "High" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300" : a.risk_level === "Medium" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300" : a.risk_level === "Low" ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300"}`}>{a.risk_level}</span>
+                            {getStaleProgressFlag(a) && (
+                              <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-1 py-0.5 text-[9px] font-bold text-amber-600 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300" title="Data Update Notice: Reported progress or expenditure may not reflect the latest project status. A risk score indicates an anomaly based on available data and does not by itself confirm project delay or irregularity.">⚠</span>
+                            )}
+                          </div>
                         </td>
                         <td className="px-4 py-2.5 text-center font-mono text-sm font-bold">{a.risk_score}</td>
                         <td className="px-4 py-2.5 text-center">{a.ml_anomaly ? <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">ML</span> : <span className="text-gray-300">—</span>}</td>
@@ -511,6 +528,9 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="font-mono text-[10px] font-bold text-gray-400">#{a.project_id}</span>
                           <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${a.risk_level === "High" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300" : a.risk_level === "Medium" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300" : "bg-gray-100 text-gray-600 dark:bg-gray-700"}`}>{a.risk_level}</span>
+                          {getStaleProgressFlag(a) && (
+                            <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-1 py-0.5 text-[9px] font-bold text-amber-600 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300" title="Data Update Notice: Reported progress or expenditure may not reflect the latest project status.">⚠</span>
+                          )}
                           {a.ml_anomaly && <span className="rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">ML</span>}
                         </div>
                         <p className="mt-1 truncate font-semibold text-sm text-gray-900 dark:text-white" title={a.project_name}>{a.project_name || "Unnamed"}</p>
@@ -566,6 +586,12 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                   </span>
                   {selectedAnomaly.ml_anomaly && (
                     <span className="rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">ML Anomaly</span>
+                  )}
+                  {getStaleProgressFlag(selectedAnomaly) && (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-600 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300">
+                      <span>⚠</span>
+                      <span>Data Update Notice</span>
+                    </span>
                   )}
                 </div>
                 <h3 className="mt-2 text-lg font-bold text-gray-900 dark:text-white">{selectedAnomaly.project_name}</h3>
@@ -649,6 +675,21 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                 </>
               )}
             </div>
+
+              {getStaleProgressFlag(selectedAnomaly) && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800/60 dark:bg-amber-950/40">
+                  <h4 className="mb-2 text-xs font-bold uppercase tracking-wider text-amber-700 dark:text-amber-300">⚠ Data Update Notice</h4>
+                  <p className="text-xs text-amber-800 dark:text-amber-200">
+                    Reported progress or expenditure may not reflect the latest project status. A high-risk score indicates an anomaly based on available data and does not by itself confirm project delay or irregularity.
+                  </p>
+                  <div className="mt-2 grid grid-cols-3 gap-2 text-[10px]">
+                    <div><span className="font-bold text-amber-600 dark:text-amber-400">Sanctioned:</span> {formatMoney(selectedAnomaly.sanctioned_amount)}</div>
+                    <div><span className="font-bold text-amber-600 dark:text-amber-400">Recorded Expenditure:</span> ₹0</div>
+                    <div><span className="font-bold text-amber-600 dark:text-amber-400">Recorded Progress:</span> 0%</div>
+                  </div>
+                  <p className="mt-2 text-[10px] italic text-amber-600/70 dark:text-amber-400/70">This indicator does not confirm project delay or irregularity.</p>
+                </div>
+              )}
 
             <div className="border-t border-gray-200 p-4 flex justify-between dark:border-gray-700">
               <button onClick={() => setSelectedAnomaly(null)} className="rounded-lg border border-gray-300 px-4 py-2 text-xs font-bold text-gray-700 dark:border-gray-600 dark:text-gray-200">Close</button>
