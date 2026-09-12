@@ -1,5 +1,179 @@
 import { useEffect, useState } from "react"
-import { getProjectDetail, getSimilarProjects, getRiskExplanation, getAnomalyExplanation } from "../services/api"
+import { getProjectDetail, getSimilarProjects, getRiskExplanation, getAnomalyExplanation, getProjectTimeline, getProjectActivity, getInvestigation, saveProject as apiSaveProject, unsaveProject } from "../services/api"
+import { useAuth } from "../context/AuthContext"
+import {
+  DigitalAuditCard,
+  EvidenceGapPanel,
+  InvestigationWorkspace,
+  AnomalyExplorerPanel,
+  WhatIfSimulator,
+  PeerBenchmarkPanel,
+  AuditCasePanel,
+} from "./AuditIntelligence"
+import { parseReasons } from "../utils/reasons"
+
+// ── Timeline helpers ─────────────────────────────────────────
+
+const TIMELINE_STYLES = {
+  recommendation: { dot: "bg-blue-500", label: "text-blue-600 dark:text-blue-400" },
+  expenditure: { dot: "bg-purple-500", label: "text-purple-600 dark:text-purple-400" },
+  completion: { dot: "bg-green-500", label: "text-green-600 dark:text-green-400" },
+  status: { dot: "bg-gray-400", label: "text-gray-600 dark:text-gray-400" },
+}
+
+function fmtDate(d) {
+  if (!d) return null
+  try {
+    return new Date(d + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })
+  } catch { return d }
+}
+
+function TimelineSection({ timeline }) {
+  const { events, delay_intelligence: di, meta } = timeline
+  if (!events || events.length === 0) {
+    return (
+      <div className="rounded-xl border border-gray-200 bg-gray-50/50 p-4 text-center dark:border-gray-700 dark:bg-[#111827]">
+        <p className="text-xs font-semibold text-gray-500">No timeline events could be matched for this project.</p>
+        <p className="mt-1 text-[0.625rem] text-gray-400">Lifecycle records for this work are not present in the available MPLADS datasets.</p>
+      </div>
+    )
+  }
+
+  const statusColor =
+    di?.status === "AT RISK" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+    : di?.status === "COMPLETED" ? "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300"
+    : di?.status === "ON TRACK" ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
+    : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300"
+
+  return (
+    <div className="space-y-4">
+      {/* Lifecycle events */}
+      <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-[#111827]">
+        <div className="mb-3 flex items-center justify-between">
+          <h4 className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">Project Lifecycle</h4>
+          <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[0.5625rem] font-bold text-gray-500 dark:bg-gray-800">{meta?.data_period?.from ? `Data period: ${meta.data_period.from} → ${meta.data_period.to}` : ""}</span>
+        </div>
+        <div className="relative pl-5">
+          <div className="absolute bottom-2 left-[5px] top-2 w-px bg-gray-200 dark:bg-gray-700" />
+          {events.map((ev, i) => {
+            const st = TIMELINE_STYLES[ev.event_type] || TIMELINE_STYLES.status
+            return (
+              <div key={i} className="relative pb-4 last:pb-0">
+                <span className={`absolute -left-5 top-1 h-2.5 w-2.5 rounded-full ring-4 ring-white dark:ring-[#111827] ${st.dot}`} />
+                <div className="flex flex-wrap items-baseline justify-between gap-x-2">
+                  <p className={`text-xs font-bold ${st.label}`}>{ev.title}</p>
+                  <p className="font-mono text-[0.625rem] font-semibold text-gray-500">{fmtDate(ev.date)}</p>
+                </div>
+                <p className="mt-0.5 text-[0.6875rem] leading-relaxed text-gray-600 dark:text-gray-400">{ev.description}</p>
+                <p className="mt-0.5 text-[0.5625rem] text-gray-400">
+                  Source: {ev.source_dataset} · Match: {ev.match_confidence === "mp_verified" ? "MP-verified" : "exact"}
+                </p>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Delay Intelligence */}
+      {di && (
+        <div className="rounded-xl border border-gray-200 bg-gray-50/50 p-4 dark:border-gray-700 dark:bg-[#111827]">
+          <div className="mb-3 flex items-center justify-between">
+            <h4 className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">Delay Intelligence</h4>
+            <span className={`rounded px-2 py-0.5 text-[0.625rem] font-bold ${statusColor}`}>{di.status}</span>
+          </div>
+
+          {/* Timeline metrics */}
+          {di.timeline_metrics && Object.keys(di.timeline_metrics).length > 0 && (
+            <div className="mb-3 grid grid-cols-2 gap-2">
+              {Object.entries(di.timeline_metrics).map(([k, v]) => (
+                <div key={k} className="rounded-lg border border-gray-200 bg-white p-2 dark:border-gray-700">
+                  <p className="text-[0.5625rem] font-bold uppercase tracking-wider text-gray-400">
+                    {k.replace(/_/g, " ").replace(/^days /, "Days ")}
+                  </p>
+                  <p className="font-mono text-sm font-bold">{v} days</p>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Financial vs physical */}
+          {di.financial_physical && (
+            <div className="mb-3 rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <p className="text-[0.5625rem] font-bold uppercase tracking-wider text-gray-400">Financial Utilization</p>
+                  <p className="font-mono text-base font-bold text-purple-600 dark:text-purple-400">{di.financial_physical.financial_utilization_pct ?? "N/A"}%</p>
+                </div>
+                <div>
+                  <p className="text-[0.5625rem] font-bold uppercase tracking-wider text-gray-400">Physical Completion</p>
+                  <p className="font-mono text-base font-bold text-blue-600 dark:text-blue-400">{di.financial_physical.physical_completion_pct ?? "N/A"}%</p>
+                </div>
+              </div>
+              <p className="mt-2 text-[0.625rem] font-semibold text-gray-500">{di.financial_physical.verdict}</p>
+            </div>
+          )}
+
+          {/* Observed indicators */}
+          {di.observed_indicators?.length > 0 ? (
+            <div className="mb-3">
+              <p className="mb-1.5 text-[0.5625rem] font-bold uppercase tracking-wider text-gray-400">Observed Indicators</p>
+              <div className="space-y-1.5">
+                {di.observed_indicators.map((ind, i) => (
+                  <div key={i} className={`flex items-start gap-2 rounded-lg p-2 ${
+                    ind.severity === "high" ? "bg-red-50 dark:bg-red-950/20"
+                    : ind.severity === "medium" ? "bg-amber-50 dark:bg-amber-950/20"
+                    : "bg-gray-100 dark:bg-gray-800"
+                  }`}>
+                    <span className={`mt-0.5 h-1.5 w-1.5 flex-shrink-0 rounded-full ${ind.severity === "high" ? "bg-red-500" : ind.severity === "medium" ? "bg-amber-500" : "bg-gray-400"}`} />
+                    <div>
+                      <p className="text-[0.6875rem] font-bold text-gray-700 dark:text-gray-200">{ind.indicator}</p>
+                      <p className="text-[0.625rem] text-gray-500 dark:text-gray-400">{ind.detail}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <p className="mb-3 text-[0.625rem] text-gray-400">No adverse indicators observed from available data.</p>
+          )}
+
+          {/* Formal delay — explicitly not calculable */}
+          <div className="mb-2 rounded-lg border border-gray-200 bg-white p-2.5 dark:border-gray-700">
+            <p className="text-[0.625rem] text-gray-500 dark:text-gray-400">{di.delay_note}</p>
+          </div>
+
+          {/* Recorded reason / possible factors — only when data supports them */}
+          {di.recorded_reason && (
+            <div className="mb-2 rounded-lg border border-blue-200 bg-blue-50 p-2.5 dark:border-blue-900/40 dark:bg-blue-950/20">
+              <p className="text-[0.5625rem] font-bold uppercase tracking-wider text-blue-600 dark:text-blue-400">Recorded reason ({di.recorded_reason_source || "source dataset"})</p>
+              <p className="text-[0.6875rem] text-gray-700 dark:text-gray-300">{di.recorded_reason}</p>
+            </div>
+          )}
+          {di.possible_factors?.length > 0 && (
+            <div className="rounded-lg border border-gray-200 bg-white p-2.5 dark:border-gray-700">
+              <p className="text-[0.5625rem] font-bold uppercase tracking-wider text-gray-400">Possible contributing factors (inference)</p>
+              <ul className="mt-1 list-disc pl-4 text-[0.625rem] text-gray-600 dark:text-gray-400">
+                {di.possible_factors.map((f, i) => <li key={i}>{f}</li>)}
+              </ul>
+            </div>
+          )}
+          {!di.possible_factors && (
+            <p className="text-[0.5625rem] italic text-gray-400">{di.recorded_reason_note}</p>
+          )}
+        </div>
+      )}
+
+      {/* Data source / freshness disclaimer */}
+      {meta?.disclaimer && (
+        <div className="rounded-lg border border-gray-200 bg-gray-50 p-2.5 dark:border-gray-700 dark:bg-[#111827]">
+          <p className="text-[0.5625rem] leading-relaxed text-gray-400">
+            <span className="font-bold text-gray-500">Historical dataset:</span> {meta.disclaimer}
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
 
 function formatMoney(value) {
   const number = Number(value || 0)
@@ -12,12 +186,8 @@ function formatMoney(value) {
 function getBadges(risk, project) {
   const badges = []
   if (!risk) return badges
-  // reasons may be a JSON string (from DB) or an array (from predict_risk)
-  let reasons = risk.reasons || []
-  if (typeof reasons === 'string') {
-    try { reasons = JSON.parse(reasons) } catch { reasons = [] }
-  }
-  if (!Array.isArray(reasons)) reasons = []
+  // reasons may be a comma-separated string (DB) or an array (predict_risk)
+  const reasons = parseReasons(risk.reasons)
   const sanctioned = Number(project.sanctioned_amount || 0)
   const expenditure = Number(project.expenditure || 0)
   const completion = Number(project.completion_percentage || 0)
@@ -40,12 +210,9 @@ function getBadges(risk, project) {
 }
 
 // Generate audit recommendation based on risk reasons
-function getAuditRecommendation(reasons) {
-  // Parse string reasons from DB if needed
-  if (typeof reasons === 'string') {
-    try { reasons = JSON.parse(reasons) } catch { reasons = [] }
-  }
-  if (!Array.isArray(reasons) || reasons.length === 0) return null
+function getAuditRecommendation(rawReasons) {
+  const reasons = parseReasons(rawReasons)
+  if (reasons.length === 0) return null
   const recommendations = []
   for (const reason of reasons) {
     const r = reason.toLowerCase()
@@ -69,15 +236,54 @@ function getAuditRecommendation(reasons) {
   return recommendations
 }
 
+function SaveProjectButton({ projectId }) {
+  const { user } = useAuth()
+  const [saved, setSaved] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState("")
+
+  if (!user) return null
+
+  const toggle = async () => {
+    setBusy(true); setMsg("")
+    try {
+      if (saved) { await unsaveProject(projectId); setSaved(false) }
+      else { await apiSaveProject(projectId); setSaved(true); setMsg("Saved") }
+    } catch (e) { setMsg(e.message || "Failed") }
+    finally { setBusy(false); setTimeout(() => setMsg(""), 2500) }
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        onClick={toggle}
+        disabled={busy}
+        className={`rounded-lg px-3 py-2 text-xs font-bold transition disabled:opacity-50 ${
+          saved
+            ? "border border-amber-400 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
+            : "border border-gray-300 text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-800"
+        }`}
+      >
+        {busy ? "…" : saved ? "★ Saved" : "☆ Save project"}
+      </button>
+      {msg && <span className="text-[0.6875rem] font-semibold text-green-600 dark:text-green-400">{msg}</span>}
+    </div>
+  )
+}
+
 function ProjectDetail({ projectId, onClose }) {
   const [detail, setDetail] = useState(null)
   const [similar, setSimilar] = useState(null)
   const [loading, setLoading] = useState(true)
   const [loadingSimilar, setLoadingSimilar] = useState(false)
   const [activeTab, setActiveTab] = useState("overview")
+  const [timeline, setTimeline] = useState(null)
+  const [activity, setActivity] = useState(null)
   const [riskExplanation, setRiskExplanation] = useState(null)
   const [anomalyExplanation, setAnomalyExplanation] = useState(null)
   const [loadingExplanation, setLoadingExplanation] = useState(false)
+  const [investigation, setInvestigation] = useState(null)
+  const [auditSection, setAuditSection] = useState("evidence")
 
   useEffect(() => {
     if (!projectId) return
@@ -85,11 +291,18 @@ function ProjectDetail({ projectId, onClose }) {
     setDetail(null)
     setSimilar(null)
     setActiveTab("overview")
+    setTimeline(null)
+    setActivity(null)
+    setInvestigation(null)
+    setAuditSection("evidence")
 
     Promise.all([
       getProjectDetail(projectId),
       getSimilarProjects(projectId, 5).catch(() => null),
-    ]).then(([d, s]) => {
+      getInvestigation(projectId).catch(() => null),
+    ]).then(([d, s, inv]) => {
+      setInvestigation(inv)
+      if (inv?.investigation) setAuditSection("investigation")
       setDetail(d)
       setSimilar(s)
       // Load risk + anomaly explanations in parallel
@@ -134,12 +347,8 @@ function ProjectDetail({ projectId, onClose }) {
 
   const proj = detail.project
   const risk = detail.risk
-  // Parse reasons — may be a JSON string from DB or an array from predict_risk()
-  let parsedReasons = risk?.reasons || []
-  if (typeof parsedReasons === 'string') {
-    try { parsedReasons = JSON.parse(parsedReasons) } catch { parsedReasons = [] }
-  }
-  if (!Array.isArray(parsedReasons)) parsedReasons = []
+  // Reasons may be a comma-separated string (risk_scores) or an array (predict_risk)
+  const parsedReasons = parseReasons(risk?.reasons)
   const sanctioned = Number(proj.sanctioned_amount || 0)
   const expenditure = Number(proj.expenditure || 0)
   const completion = Number(proj.completion_percentage || 0)
@@ -150,8 +359,8 @@ function ProjectDetail({ projectId, onClose }) {
   const recommendations = getAuditRecommendation(parsedReasons)
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-2xs transition-opacity" onClick={onClose}>
-      <div className="absolute right-0 top-0 h-full w-full sm:w-[560px] max-w-[92vw] overflow-y-auto border-l border-gray-200 bg-white p-4 sm:p-6 text-gray-900 shadow-2xl dark:border-gray-700 dark:bg-[#1f2937] dark:text-white" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-[80] bg-black/50 backdrop-blur-2xs transition-opacity" onClick={onClose}>
+      <div className="absolute right-0 top-0 h-full w-full sm:w-[720px] max-w-[95vw] overflow-y-auto border-l border-gray-200 bg-white p-4 sm:p-6 text-gray-900 shadow-2xl dark:border-gray-700 dark:bg-[#1f2937] dark:text-white" onClick={(e) => e.stopPropagation()}>
 
         {/* Header */}
         <div className="flex items-start justify-between">
@@ -165,7 +374,10 @@ function ProjectDetail({ projectId, onClose }) {
               }`}>{proj.status}</span>
             )}
           </div>
-          <button onClick={onClose} className="rounded-lg p-1.5 text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700">✕</button>
+          <div className="flex items-center gap-2">
+            <SaveProjectButton projectId={proj.id} />
+            <button onClick={onClose} className="rounded-lg p-1.5 text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700">✕</button>
+          </div>
         </div>
 
         <h2 className="mt-3 text-lg font-bold leading-snug">{proj.project_name || "Unnamed Project"}</h2>
@@ -179,7 +391,7 @@ function ProjectDetail({ projectId, onClose }) {
         {proj.data_quality_flag === "POSSIBLY_STALE" && (
           <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/60 dark:bg-amber-950/30">
             <div className="flex items-center gap-2"><span className="text-sm">⚠</span><span className="text-xs font-bold text-amber-700 dark:text-amber-300">Data Update Notice</span></div>
-            <p className="mt-1.5 text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">Reported progress or expenditure may not reflect the latest project status. A high-risk score indicates an anomaly based on available data and does not by itself confirm project delay or irregularity.</p>
+            <p className="mt-1.5 text-[0.6875rem] leading-relaxed text-amber-600 dark:text-amber-400">Reported progress or expenditure may not reflect the latest project status. A high-risk score indicates an anomaly based on available data and does not by itself confirm project delay or irregularity.</p>
           </div>
         )}
 
@@ -187,7 +399,7 @@ function ProjectDetail({ projectId, onClose }) {
         {badges.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-1.5">
             {badges.map((b, i) => (
-              <span key={i} title={b.detail} className={`rounded px-2 py-0.5 text-[10px] font-bold cursor-help ${
+              <span key={i} title={b.detail} className={`rounded px-2 py-0.5 text-[0.625rem] font-bold cursor-help ${
                 b.color === "red" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
                 : b.color === "amber" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
                 : b.color === "orange" ? "bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300"
@@ -198,12 +410,23 @@ function ProjectDetail({ projectId, onClose }) {
           </div>
         )}
 
+        {/* Digital Audit Card — understand the project in seconds */}
+        <div className="mt-4">
+          <DigitalAuditCard
+            detail={detail}
+            investigation={investigation}
+            onStartInvestigation={() => { setActiveTab("audit"); setAuditSection("investigation") }}
+          />
+        </div>
+
         {/* Tabs */}
-        <div className="mt-5 flex gap-1 border-b border-gray-200 dark:border-gray-700">
+        <div className="mt-5 flex flex-wrap gap-1 border-b border-gray-200 dark:border-gray-700">
           {[
             { id: "overview", label: "Overview" },
             { id: "financial", label: "Financial" },
             { id: "risk", label: "Risk & Audit" },
+            { id: "audit", label: "Investigate" },
+            { id: "timeline", label: "Timeline" },
             ...(similar?.similar_projects?.length > 0 ? [{ id: "similar", label: "Similar" }] : []),
           ].map((tab) => (
             <button key={tab.id} onClick={() => setActiveTab(tab.id)}
@@ -245,7 +468,7 @@ function ProjectDetail({ projectId, onClose }) {
                   <div className={`h-full rounded-full transition-all duration-500 ${utilization > 100 ? "bg-red-500" : "bg-blue-600"}`}
                     style={{ width: `${Math.min(100, utilization)}%` }} />
                 </div>
-                <div className="mt-1.5 flex justify-between text-[10px] text-gray-400">
+                <div className="mt-1.5 flex justify-between text-[0.625rem] text-gray-400">
                   <span>Spent: {formatMoney(expenditure)}</span>
                   <span>Remaining: {formatMoney(remaining)}</span>
                 </div>
@@ -255,14 +478,14 @@ function ProjectDetail({ projectId, onClose }) {
                 <h4 className="mb-3 text-xs font-bold uppercase tracking-wider text-gray-400">Expenditure vs Physical Progress</h4>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <p className="text-[10px] font-bold text-gray-400">Financial Utilization</p>
+                    <p className="text-[0.625rem] font-bold text-gray-400">Financial Utilization</p>
                     <p className="font-mono text-lg font-bold">{utilization.toFixed(1)}%</p>
                     <div className="mt-1 h-2 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
                       <div className="h-full rounded-full bg-purple-600" style={{ width: `${Math.min(100, utilization)}%` }} />
                     </div>
                   </div>
                   <div>
-                    <p className="text-[10px] font-bold text-gray-400">Physical Progress</p>
+                    <p className="text-[0.625rem] font-bold text-gray-400">Physical Progress</p>
                     <p className="font-mono text-lg font-bold">{completion}%</p>
                     <div className="mt-1 h-2 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
                       <div className="h-full rounded-full bg-blue-600" style={{ width: `${Math.min(100, completion)}%` }} />
@@ -281,6 +504,14 @@ function ProjectDetail({ projectId, onClose }) {
                   </div>
                 )}
               </div>
+              {/* Expenditure Activity / history */}
+              <LazyFetch
+                store={[activity, setActivity]}
+                loader={() => getProjectActivity(projectId)}
+                loadingLabel="Loading expenditure activity..."
+                render={(a) => <ActivitySection activity={a} />}
+              />
+
               {/* Flag suspicious cases */}
               {expenditure > sanctioned && sanctioned > 0 && (
                 <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300">
@@ -306,7 +537,7 @@ function ProjectDetail({ projectId, onClose }) {
                 }`}>
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-[10px] font-bold uppercase text-gray-500">Risk Level</p>
+                      <p className="text-[0.625rem] font-bold uppercase text-gray-500">Risk Level</p>
                       <p className={`text-lg font-bold ${
                         risk.risk_level === "High" ? "text-red-600 dark:text-red-400"
                         : risk.risk_level === "Medium" ? "text-amber-600 dark:text-amber-400"
@@ -314,7 +545,7 @@ function ProjectDetail({ projectId, onClose }) {
                       }`}>{risk.risk_level || "None"}</p>
                     </div>
                     <div className="text-right">
-                      <p className="text-[10px] font-bold uppercase text-gray-500">Score</p>
+                      <p className="text-[0.625rem] font-bold uppercase text-gray-500">Score</p>
                       <p className="font-mono text-2xl font-bold">{risk.risk_score}<span className="text-sm text-gray-400">/100</span></p>
                     </div>
                   </div>
@@ -328,7 +559,7 @@ function ProjectDetail({ projectId, onClose }) {
               {/* Triggered Rules */}
               {parsedReasons && parsedReasons.length > 0 && (
                 <div className="space-y-2">
-                  <h4 className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Triggered Rules ({parsedReasons.length})</h4>
+                  <h4 className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">Triggered Rules ({parsedReasons.length})</h4>
                   {parsedReasons.map((reason, i) => (
                     <div key={i} className="rounded-lg border border-red-100 bg-red-50/50 p-3 dark:border-red-900/40 dark:bg-red-950/20">
                       <p className="text-xs font-semibold text-red-700 dark:text-red-400">{reason}</p>
@@ -375,7 +606,7 @@ function ProjectDetail({ projectId, onClose }) {
               {risk?.ml_anomaly && (
                 <div className="rounded-lg border border-purple-200 bg-purple-50 p-3 dark:border-purple-900/60 dark:bg-purple-950/30">
                   <p className="text-xs font-bold text-purple-700 dark:text-purple-300">✨ ML Statistical Outlier Detected</p>
-                  <p className="mt-1 text-[10px] text-purple-600 dark:text-purple-400">Isolation Forest model flagged this project as a multi-dimensional statistical anomaly.</p>
+                  <p className="mt-1 text-[0.625rem] text-purple-600 dark:text-purple-400">Isolation Forest model flagged this project as a multi-dimensional statistical anomaly.</p>
                 </div>
               )}
 
@@ -383,16 +614,16 @@ function ProjectDetail({ projectId, onClose }) {
               {riskExplanation && (
                 <div className="rounded-xl border border-blue-200 bg-blue-50/40 p-4 dark:border-blue-900/40 dark:bg-blue-950/20">
                   <div className="flex items-center gap-2 mb-3">
-                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-600 text-[10px] text-white">AI</span>
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-600 text-[0.625rem] text-white">AI</span>
                     <h4 className="text-xs font-bold uppercase tracking-wider text-blue-700 dark:text-blue-300">Risk Explanation</h4>
                   </div>
                   <p className="text-xs text-gray-600 dark:text-gray-300 mb-3">{riskExplanation.summary}</p>
                   {riskExplanation.contributing_factors?.length > 0 && (
                     <div className="space-y-1.5">
-                      <p className="text-[10px] font-bold uppercase text-gray-400">Contributing Factors:</p>
+                      <p className="text-[0.625rem] font-bold uppercase text-gray-400">Contributing Factors:</p>
                       {riskExplanation.contributing_factors.map((f, i) => (
                         <div key={i} className="flex items-start gap-2 text-xs">
-                          <span className={`mt-0.5 flex-shrink-0 rounded px-1 py-0.5 text-[9px] font-bold ${
+                          <span className={`mt-0.5 flex-shrink-0 rounded px-1 py-0.5 text-[0.5625rem] font-bold ${
                             f.source === "ml" ? "bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300"
                             : f.source === "rule" ? "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300"
                             : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300"
@@ -403,7 +634,7 @@ function ProjectDetail({ projectId, onClose }) {
                     </div>
                   )}
                   {riskExplanation.data_sufficiency === "limited" && (
-                    <p className="mt-2 text-[10px] italic text-gray-400">Note: Explanation is based on limited available data.</p>
+                    <p className="mt-2 text-[0.625rem] italic text-gray-400">Note: Explanation is based on limited available data.</p>
                   )}
                 </div>
               )}
@@ -415,8 +646,8 @@ function ProjectDetail({ projectId, onClose }) {
                     <span className="mt-0.5 text-sm">⚠</span>
                     <div>
                       <p className="text-xs font-semibold text-amber-700 dark:text-amber-300">Possible stale progress data</p>
-                      <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">{riskExplanation.data_quality.reason}</p>
-                      <p className="mt-1.5 text-[10px] italic text-amber-400 dark:text-amber-500">This indicator does not confirm project delay or irregularity.</p>
+                      <p className="mt-1 text-[0.6875rem] text-amber-600 dark:text-amber-400">{riskExplanation.data_quality.reason}</p>
+                      <p className="mt-1.5 text-[0.625rem] italic text-amber-400 dark:text-amber-500">This indicator does not confirm project delay or irregularity.</p>
                     </div>
                   </div>
                 </div>
@@ -429,19 +660,19 @@ function ProjectDetail({ projectId, onClose }) {
                   {anomalyExplanation.detected_anomalies.map((anomaly, i) => (
                     <div key={i} className="mb-3 last:mb-0">
                       <div className="flex items-center gap-2 mb-1">
-                        <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                        <span className={`rounded px-1.5 py-0.5 text-[0.625rem] font-bold ${
                           anomaly.severity === "High" ? "bg-red-100 text-red-700"
                           : anomaly.severity === "Medium" ? "bg-amber-100 text-amber-700"
                           : "bg-gray-100 text-gray-600"
                         }`}>{anomaly.severity}</span>
                         <span className="text-xs font-bold">{anomaly.type}</span>
-                        <span className="text-[9px] px-1 py-0.5 rounded bg-gray-100 text-gray-500">{anomaly.source}</span>
+                        <span className="text-[0.5625rem] px-1 py-0.5 rounded bg-gray-100 text-gray-500">{anomaly.source}</span>
                       </div>
                       <p className="text-xs text-gray-600 dark:text-gray-300">{anomaly.what}</p>
                       {anomaly.factors?.length > 0 && (
                         <div className="mt-1.5 space-y-0.5">
                           {anomaly.factors.map((f, fi) => (
-                            <p key={fi} className="text-[10px] text-gray-500">• {f}</p>
+                            <p key={fi} className="text-[0.625rem] text-gray-500">• {f}</p>
                           ))}
                         </div>
                       )}
@@ -459,10 +690,60 @@ function ProjectDetail({ projectId, onClose }) {
             </>
           )}
 
+          {activeTab === "audit" && (
+            <>
+              {/* Sub-sections — keeps the drawer scannable */}
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  { id: "evidence", label: "Evidence Gaps" },
+                  { id: "investigation", label: investigation?.investigation ? `Investigation (${investigation.progress_pct}%)` : "Investigation" },
+                  { id: "explorer", label: "Anomaly Explorer" },
+                  { id: "simulate", label: "What-If" },
+                  { id: "case", label: "Audit Case" },
+                ].map((s) => (
+                  <button
+                    key={s.id}
+                    onClick={() => setAuditSection(s.id)}
+                    className={`rounded-lg px-3 py-2 text-[0.875rem] font-bold transition ${
+                      auditSection === s.id
+                        ? "bg-[#031632] text-white dark:bg-blue-600"
+                        : "border border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+                    }`}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+
+              {auditSection === "evidence" && <EvidenceGapPanel projectId={projectId} />}
+              {auditSection === "investigation" && (
+                <InvestigationWorkspace projectId={projectId} onWorkspaceChange={setInvestigation} />
+              )}
+              {auditSection === "explorer" && <AnomalyExplorerPanel projectId={projectId} />}
+              {auditSection === "simulate" && <WhatIfSimulator detail={detail} />}
+              {auditSection === "case" && <AuditCasePanel projectId={projectId} />}
+            </>
+          )}
+
+          {activeTab === "timeline" && (
+            <LazyFetch
+              store={[timeline, setTimeline]}
+              loader={() => getProjectTimeline(projectId)}
+              loadingLabel="Loading timeline..."
+              render={(t) => <TimelineSection timeline={t} />}
+            />
+          )}
+
           {activeTab === "similar" && similar && (
             <>
+              {/* Peer benchmarking against comparable projects */}
+              <PeerBenchmarkPanel
+                projectId={projectId}
+                onOpenProject={(id) => { if (id !== projectId) window.dispatchEvent(new CustomEvent("open-project", { detail: { projectId: id } })) }}
+              />
+
               <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-[#111827]">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Comparison Criteria</p>
+                <p className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">Comparison Criteria</p>
                 <p className="mt-1 text-xs">
                   State: <strong>{similar.criteria.state}</strong> | Type: <strong>{similar.criteria.project_type}</strong> | Range: <strong>{similar.criteria.sanctioned_range}</strong>
                 </p>
@@ -473,17 +754,17 @@ function ProjectDetail({ projectId, onClose }) {
                     <div key={sp.id} className="rounded-lg border border-gray-200 bg-gray-50/50 p-3 dark:border-gray-700 dark:bg-[#111827]">
                       <div className="flex items-start justify-between">
                         <div>
-                          <span className="font-mono text-[10px] font-bold text-gray-400">#{sp.id}</span>
+                          <span className="font-mono text-[0.625rem] font-bold text-gray-400">#{sp.id}</span>
                           <p className="text-xs font-semibold">{sp.project_name}</p>
-                          <p className="text-[10px] text-gray-500">{sp.constituency || "N/A"}</p>
+                          <p className="text-[0.625rem] text-gray-500">{sp.constituency || "N/A"}</p>
                         </div>
-                        <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                        <span className={`rounded px-1.5 py-0.5 text-[0.625rem] font-bold ${
                           sp.risk_level === "High" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
                           : sp.risk_level === "Medium" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
                           : "bg-gray-100 text-gray-600 dark:bg-gray-700"
                         }`}>{sp.risk_level} ({sp.risk_score})</span>
                       </div>
-                      <div className="mt-2 grid grid-cols-4 gap-2 text-[10px]">
+                      <div className="mt-2 grid grid-cols-4 gap-2 text-[0.625rem]">
                         <div><p className="text-gray-400">Sanctioned</p><p className="font-bold">{formatMoney(sp.sanctioned_amount)}</p></div>
                         <div><p className="text-gray-400">Spent</p><p className="font-bold">{formatMoney(sp.expenditure)}</p></div>
                         <div><p className="text-gray-400">Utilization</p><p className="font-bold">{sp.sanctioned_amount > 0 ? ((sp.expenditure / sp.sanctioned_amount) * 100).toFixed(0) : 0}%</p></div>
@@ -504,12 +785,187 @@ function ProjectDetail({ projectId, onClose }) {
 }
 
 // Sub-components
+
+// Shared lazy loader used by both Timeline and Financial tabs so the
+// fetch happens once per drawer regardless of which tab is opened first.
+// Distinguishes a real empty result from a failed request (retry offered).
+function LazyFetch({ store, loader, render, loadingLabel }) {
+  const [data, setData] = store
+  const [status, setStatus] = useState("idle") // idle | loading | done | error
+
+  useEffect(() => {
+    if (data || status === "loading") return
+    setStatus("loading")
+    loader()
+      .then((d) => { setData(d); setStatus("done") })
+      .catch(() => setStatus("error"))
+  }, [data, status, loader])
+
+  if (status === "loading") {
+    return (
+      <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 p-3">
+        <div className="h-4 w-4 animate-spin rounded-full border-2 border-blue-600 border-r-transparent" />
+        <span className="text-xs text-gray-400">{loadingLabel}</span>
+      </div>
+    )
+  }
+  if (status === "error" && !data) {
+    return (
+      <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-center">
+        <p className="text-xs text-gray-500">Could not load data.</p>
+        <button onClick={() => setStatus("idle")} className="mt-2 rounded bg-[#031632] px-3 py-1 text-[0.625rem] font-bold text-white dark:bg-blue-600">Retry</button>
+      </div>
+    )
+  }
+  if (!data) return null
+  return render(data)
+}
+
+// ── Expenditure Activity ─────────────────────────────────────
+
+function fmtMonth(ym) {
+  if (!ym) return ""
+  try { return new Date(ym + "-01T00:00:00").toLocaleDateString("en-IN", { month: "short", year: "2-digit" }) } catch { return ym }
+}
+
+function fmtDay(d) {
+  if (!d) return "N/A"
+  try { return new Date(d + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) } catch { return d }
+}
+
+function ActivitySection({ activity }) {
+  const [showTx, setShowTx] = useState(false)
+  const hasData = activity.transaction_count > 0
+
+  if (!hasData) {
+    return (
+      <div className="rounded-xl border border-gray-200 bg-gray-50/50 p-4 dark:border-gray-700 dark:bg-[#111827]">
+        <h4 className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">Expenditure Activity</h4>
+        <p className="mt-2 text-xs font-semibold text-gray-500">No expenditure activity recorded in the current dataset.</p>
+        <p className="mt-1 text-[0.625rem] text-gray-400">The project is not automatically classified as delayed on this basis.</p>
+      </div>
+    )
+  }
+
+  const monthly = activity.monthly_activity || []
+  const maxAmt = Math.max(...monthly.map(m => m.amount), 1)
+  const statusChip =
+    activity.activity_status === "extended_gap" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+    : activity.activity_status === "long_gap" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
+    : "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300"
+  const statusLabel =
+    activity.activity_status === "extended_gap" ? "⚠ Extended activity gap"
+    : activity.activity_status === "long_gap" ? "⚠ Long activity gap"
+    : "✓ No significant gap detected"
+
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-[#111827]">
+      <div className="mb-3 flex items-center justify-between">
+        <h4 className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">Expenditure Activity</h4>
+        <span className={`rounded px-2 py-0.5 text-[0.625rem] font-bold ${statusChip}`}>{statusLabel}</span>
+      </div>
+
+      {/* Summary card */}
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div><p className="text-[0.5625rem] font-bold uppercase text-gray-400">Total</p><p className="font-mono text-sm font-bold">{formatMoney(activity.total_expenditure)}</p></div>
+        <div><p className="text-[0.5625rem] font-bold uppercase text-gray-400">Transactions</p><p className="font-mono text-sm font-bold">{activity.transaction_count}</p></div>
+        <div><p className="text-[0.5625rem] font-bold uppercase text-gray-400">First activity</p><p className="text-[0.6875rem] font-semibold">{fmtDay(activity.first_activity_date)}</p></div>
+        <div><p className="text-[0.5625rem] font-bold uppercase text-gray-400">Latest activity</p><p className="text-[0.6875rem] font-semibold">{fmtDay(activity.latest_activity_date)}</p></div>
+      </div>
+      {activity.days_since_latest_activity != null && (
+        <p className="mt-2 text-[0.625rem] text-gray-500 dark:text-gray-400">{activity.days_since_latest_activity} days since latest recorded expenditure activity.</p>
+      )}
+
+      {/* Monthly chart — CSS bars, gaps visible as empty slots */}
+      {monthly.length > 0 && (
+        <div className="mt-3">
+          <p className="mb-1.5 text-[0.5625rem] font-bold uppercase tracking-wider text-gray-400">Monthly recorded expenditure</p>
+          <div className="flex items-end gap-1 overflow-x-auto pb-1" style={{ height: 88 }}>
+            {monthly.map((m) => (
+              <div key={m.month} className="group relative flex min-w-[26px] flex-1 flex-col items-center justify-end" style={{ height: "100%" }}>
+                <div
+                  className="w-full rounded-t bg-purple-500/80 transition-all group-hover:bg-purple-600 dark:bg-purple-600/70"
+                  style={{ height: `${Math.max(4, (m.amount / maxAmt) * 70)}px` }}
+                />
+                <span className="mt-0.5 text-[0.5rem] text-gray-400">{fmtMonth(m.month)}</span>
+                <div className="pointer-events-none absolute bottom-full z-10 mb-1 hidden whitespace-nowrap rounded bg-gray-900 px-2 py-1 text-[0.5625rem] text-white shadow-lg group-hover:block dark:bg-gray-700">
+                  <div className="font-bold">{fmtMonth(m.month)}</div>
+                  <div>{formatMoney(m.amount)}</div>
+                  <div>{m.transaction_count} record{m.transaction_count > 1 ? "s" : ""}</div>
+                  {m.payment_statuses?.length > 0 && <div className="text-gray-300">{m.payment_statuses.join(", ")}</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Activity indicators (calculated) */}
+      {activity.indicators?.length > 0 && (
+        <div className="mt-3">
+          <p className="mb-1.5 text-[0.5625rem] font-bold uppercase tracking-wider text-gray-400">Activity Indicators</p>
+          <div className="space-y-1.5">
+            {activity.indicators.map((ind, i) => (
+              <div key={i} className={`flex items-start gap-2 rounded-lg p-2 ${ind.severity === "high" ? "bg-red-50 dark:bg-red-950/20" : "bg-amber-50 dark:bg-amber-950/20"}`}>
+                <span className={`mt-0.5 h-1.5 w-1.5 flex-shrink-0 rounded-full ${ind.severity === "high" ? "bg-red-500" : "bg-amber-500"}`} />
+                <div>
+                  <p className="text-[0.6875rem] font-bold text-gray-700 dark:text-gray-200">⚠ {ind.indicator}</p>
+                  <p className="text-[0.625rem] text-gray-500 dark:text-gray-400">{ind.detail}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Largest gaps summary */}
+      {activity.largest_gap && (
+        <p className="mt-2 text-[0.625rem] text-gray-500 dark:text-gray-400">
+          Largest recorded gap: {activity.largest_gap.gap_days} days ({fmtDay(activity.largest_gap.start_date)} → {fmtDay(activity.largest_gap.end_date)}).
+        </p>
+      )}
+
+      {/* View expenditure history */}
+      <button onClick={() => setShowTx(!showTx)} className="mt-3 text-[0.625rem] font-bold text-blue-600 hover:underline dark:text-blue-400">
+        {showTx ? "Hide expenditure history" : `View expenditure history (${Math.min(activity.transaction_count, activity.transactions_returned)}${activity.transactions_truncated ? "+" : ""})`}
+      </button>
+          {showTx && (
+        <div className="mt-2 max-h-52 space-y-1 overflow-y-auto rounded-lg border border-gray-200 p-2 dark:border-gray-700">
+          {activity.transactions_truncated && <p className="text-[0.5625rem] italic text-gray-400">Showing the {activity.transactions_returned} most recent of {activity.transaction_count} recorded transactions.</p>}
+          <ActivityTransactions transactions={activity.transactions} />
+        </div>
+      )}
+
+      {/* Data note */}
+      <p className="mt-3 rounded-lg bg-gray-50 p-2 text-[0.5625rem] leading-relaxed text-gray-400 dark:bg-gray-800/60">{activity.disclaimer}</p>
+      <p className="mt-1 text-[0.5625rem] text-gray-400">Gap thresholds: ≥{activity.thresholds.long_gap_days}d long gap · ≥{activity.thresholds.extended_gap_days}d extended gap · Match: {activity.match_confidence === "mp_verified" ? "MP-verified" : activity.match_confidence === "key_exact" ? "exact key" : "n/a"}</p>
+    </div>
+  )
+}
+
+// Renders transaction rows from the activity payload.
+function ActivityTransactions({ transactions }) {
+  const txs = transactions || []
+  if (txs.length === 0) return <p className="text-[0.625rem] text-gray-400">No transaction rows to display.</p>
+  return (
+    <>
+      {txs.map((t, i) => (
+        <div key={i} className="flex items-center justify-between rounded bg-gray-50 px-2 py-1 dark:bg-gray-800/60">
+          <span className="text-[0.625rem] text-gray-500">{fmtDay(t.date)}</span>
+          <span className="font-mono text-[0.625rem] font-bold">{formatMoney(t.amount)}</span>
+          {t.payment_status && <span className="text-[0.5625rem] text-gray-400">{t.payment_status}</span>}
+        </div>
+      ))}
+    </>
+  )
+}
+
 function InfoGrid({ items }) {
   return (
     <div className="grid grid-cols-2 gap-2">
       {items.map((item) => (
         <div key={item.label} className="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-[#111827]">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{item.label}</p>
+          <p className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">{item.label}</p>
           <p className="mt-0.5 text-sm font-semibold">{item.value}</p>
         </div>
       ))}
@@ -520,7 +976,7 @@ function InfoGrid({ items }) {
 function MetricCard({ label, value, color }) {
   return (
     <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#111827]">
-      <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{label}</p>
+      <p className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">{label}</p>
       <p className={`mt-1 font-mono text-lg font-bold text-${color}-600 dark:text-${color}-400`}>{value}</p>
     </div>
   )

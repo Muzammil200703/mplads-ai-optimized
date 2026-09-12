@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef, memo } from "react"
+import { lazy, Suspense, useEffect, useState, useCallback, useRef, memo } from "react"
 import {
   getProjects,
   searchProjects,
@@ -6,8 +6,11 @@ import {
   getConstituencies,
   getProjectDetail,
 } from "../services/api"
-import ProjectDetail from "../components/ProjectDetail"
+// Heavy drawer (project detail + full Audit Intelligence suite) is code-split:
+// it only loads when a user actually opens a project.
+const ProjectDetail = lazy(() => import("../components/ProjectDetail"))
 import { formatMoney, formatNumber } from "../utils/format"
+import { TableRowsSkeleton, MobileCardsSkeleton } from "../components/Skeletons"
 
 function getRiskScoreBadge(project) {
   // Use the backend risk data (single source of truth from risk_scores table)
@@ -81,6 +84,16 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
   const [showComparison, setShowComparison] = useState(false)
   const [projectSearchApplied, setProjectSearchApplied] = useState(false)
   const rowsPerPage = 15
+
+  // Open another project's drawer from inside an open drawer (e.g. peer comparison)
+  useEffect(() => {
+    const handler = (e) => {
+      const id = e.detail?.projectId
+      if (id) setSelectedProjectId(Number(id))
+    }
+    window.addEventListener("open-project", handler)
+    return () => window.removeEventListener("open-project", handler)
+  }, [])
 
   // Use a ref to track the previous projectSearchQuery to detect changes
   const prevProjectQueryRef = useRef(null)
@@ -223,11 +236,11 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
     setSortBy("")
     setSortDir("desc")
     setCurrentPage(1)
-    setGlobalSearchApplied(false)
+    setProjectSearchApplied(false)
   }
 
   return (
-    <div className="min-h-screen bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-gray-100">
+    <div className="min-h-full bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-gray-100">
       <div className="mx-auto max-w-[1440px] space-y-4 sm:space-y-6">
 
         {/* PROJECT SEARCH CONTEXT BANNER */}
@@ -351,7 +364,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
 
           {/* SORT ROW */}
           <div className="mt-4 flex flex-wrap items-center gap-1.5 sm:gap-3 border-t border-gray-100 pt-3 dark:border-gray-700/60">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Sort:</span>
+            <span className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">Sort:</span>
             {[
               { value: "", label: "Default" },
               { value: "id", label: "Project ID" },
@@ -373,7 +386,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
                   }
                   setCurrentPage(1)
                 }}
-                className={`rounded-lg px-3 py-1.5 text-[11px] font-bold transition ${
+                className={`rounded-lg px-3 py-1.5 text-[0.6875rem] font-bold transition ${
                   sortBy === opt.value
                     ? "bg-[#031632] text-white dark:bg-blue-600"
                     : "border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:bg-[#1f2937] dark:text-gray-300"
@@ -389,7 +402,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
               <button
                 type="button"
                 onClick={() => { setSortBy(""); setCurrentPage(1) }}
-                className="rounded-lg border border-gray-200 px-2 py-1.5 text-[10px] font-bold text-gray-400 hover:text-gray-700 dark:border-gray-600 dark:hover:text-gray-200"
+                className="rounded-lg border border-gray-200 px-2 py-1.5 text-[0.625rem] font-bold text-gray-400 hover:text-gray-700 dark:border-gray-600 dark:hover:text-gray-200"
               >
                 ✕ Clear
               </button>
@@ -426,10 +439,10 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
 
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm transition-colors dark:border-gray-700/80 dark:bg-[#1f2937]">
           {loading ? (
-            <div className="p-16 text-center text-gray-500 dark:text-gray-400">
-              <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent" />
-              <p className="mt-3 text-sm font-medium">Fetching records from backend database...</p>
-            </div>
+            <>
+              <TableRowsSkeleton rows={8} cols={6} className="hidden lg:block" />
+              <MobileCardsSkeleton rows={5} />
+            </>
           ) : (
             <>
               <div className="overflow-x-auto">
@@ -437,7 +450,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
                 <div className="hidden lg:block overflow-x-auto">
                 <table className="w-full min-w-[900px]">
                   <thead>
-                    <tr className="border-b-2 border-gray-200 bg-gray-50 text-left text-[10px] font-bold uppercase tracking-widest text-gray-500 dark:border-gray-700 dark:bg-[#172033] dark:text-gray-400">
+                    <tr className="border-b-2 border-gray-200 bg-gray-50 text-left text-[0.625rem] font-bold uppercase tracking-widest text-gray-500 dark:border-gray-700 dark:bg-[#172033] dark:text-gray-400">
                       <th className="px-3 py-3 w-10"></th>
                       <th className="px-3 py-3 w-20">ID</th>
                       <th className="px-3 py-3">Work Name & Category</th>
@@ -468,14 +481,14 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
                               className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                             />
                           </td>
-                          <td className="px-3 py-2.5 font-mono text-[11px] font-bold text-gray-500 dark:text-gray-400">
+                          <td className="px-3 py-2.5 font-mono text-[0.6875rem] font-bold text-gray-500 dark:text-gray-400">
                             #{proj.id}
                           </td>
                           <td className="px-3 py-2.5 max-w-[280px]">
                             <p className="truncate font-semibold text-gray-900 dark:text-white" title={proj.project_name}>
                               {proj.project_name || "Unnamed Project"}
                             </p>
-                            <p className="mt-0.5 truncate text-[11px] text-gray-400 dark:text-gray-500">
+                            <p className="mt-0.5 truncate text-[0.6875rem] text-gray-400 dark:text-gray-500">
                               {proj.project_type || "General"}
                             </p>
                           </td>
@@ -483,7 +496,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
                             <p className="font-medium text-gray-800 dark:text-gray-200 truncate">
                               {proj.constituency || proj.state || "N/A"}
                             </p>
-                            <p className="mt-0.5 text-[11px] text-gray-400 dark:text-gray-500 truncate">{proj.state}</p>
+                            <p className="mt-0.5 text-[0.6875rem] text-gray-400 dark:text-gray-500 truncate">{proj.state}</p>
                           </td>
                           <td className="px-3 py-2.5 text-right font-mono text-xs font-semibold tabular-nums text-gray-800 dark:text-gray-200">
                             {formatMoney(proj.sanctioned_amount)}
@@ -497,11 +510,11 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
                             </span>
                           </td>
                           <td className="p-4 text-center">
-                            <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${riskBadge.badge}`}>
+                            <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[0.625rem] font-bold uppercase tracking-wide ${riskBadge.badge}`}>
                               {riskBadge.icon} {riskBadge.label}
                             </span>
                             {getStaleProgressFlag(proj) && (
-                              <span className="ml-1 inline-flex items-center gap-0.5 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[9px] font-bold text-amber-600 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300" title="Data Update Notice: Reported progress or expenditure may not reflect the latest project status. A risk score indicates an anomaly based on available data and does not by itself confirm project delay or irregularity.">
+                              <span className="ml-1 inline-flex items-center gap-0.5 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[0.5625rem] font-bold text-amber-600 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300" title="Data Update Notice: Reported progress or expenditure may not reflect the latest project status. A risk score indicates an anomaly based on available data and does not by itself confirm project delay or irregularity.">
                                 ⚠
                               </span>
                             )}
@@ -512,7 +525,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
                                 e.stopPropagation()
                                 handleOpenDetail(proj)
                               }}
-                              className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-gray-500 transition-all duration-100 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600 dark:border-gray-600 dark:bg-gray-700/50 dark:text-gray-400 dark:hover:border-blue-600 dark:hover:bg-blue-900/40 dark:hover:text-blue-400"
+                              className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1 text-[0.625rem] font-bold uppercase tracking-wider text-gray-500 transition-all duration-100 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600 dark:border-gray-600 dark:bg-gray-700/50 dark:text-gray-400 dark:hover:border-blue-600 dark:hover:bg-blue-900/40 dark:hover:text-blue-400"
                               title="View project details"
                             >
                               View
@@ -538,23 +551,23 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-mono text-[10px] font-bold text-gray-400">#{proj.id}</span>
-                              <span className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-bold ${riskBadge.badge}`}>
+                              <span className="font-mono text-[0.625rem] font-bold text-gray-400">#{proj.id}</span>
+                              <span className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[0.625rem] font-bold ${riskBadge.badge}`}>
                                 {riskBadge.icon} {riskBadge.label}
                               </span>
                               {getStaleProgressFlag(proj) && (
-                                <span className="inline-flex items-center gap-0.5 rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[9px] font-bold text-amber-600 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300" title="Data Update Notice: Reported progress or expenditure may not reflect the latest project status.">
+                                <span className="inline-flex items-center gap-0.5 rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[0.5625rem] font-bold text-amber-600 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300" title="Data Update Notice: Reported progress or expenditure may not reflect the latest project status.">
                                   ⚠
                                 </span>
                               )}
-                              <span className="rounded-md border border-gray-200 bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200">
+                              <span className="rounded-md border border-gray-200 bg-gray-100 px-1.5 py-0.5 text-[0.625rem] font-medium dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200">
                                 {proj.status || "Ongoing"}
                               </span>
                             </div>
                             <p className="mt-1 truncate font-semibold text-sm text-gray-900 dark:text-white" title={proj.project_name}>
                               {proj.project_name || "Unnamed Project"}
                             </p>
-                            <p className="mt-0.5 text-[11px] text-gray-400 dark:text-gray-500">
+                            <p className="mt-0.5 text-[0.6875rem] text-gray-400 dark:text-gray-500">
                               {proj.constituency || ""}{proj.constituency && proj.state ? ", " : ""}{proj.state || "N/A"} • {proj.project_type || "General"}
                             </p>
                           </div>
@@ -601,7 +614,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
                   {compareIds.length >= 2 && (
                     <button
                       onClick={() => setShowComparison(true)}
-                      className="rounded-lg bg-blue-600 px-3 py-1.5 text-[10px] font-bold text-white transition hover:bg-blue-700"
+                      className="rounded-lg bg-blue-600 px-3 py-1.5 text-[0.625rem] font-bold text-white transition hover:bg-blue-700"
                     >
                       Compare {compareIds.length} Projects
                     </button>
@@ -609,7 +622,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
                   {compareIds.length > 0 && (
                     <button
                       onClick={() => setCompareIds([])}
-                      className="rounded-lg border border-gray-300 px-2 py-1 text-[10px] font-bold text-gray-500 hover:text-gray-700 dark:border-gray-600 dark:hover:text-gray-200"
+                      className="rounded-lg border border-gray-300 px-2 py-1 text-[0.625rem] font-bold text-gray-500 hover:text-gray-700 dark:border-gray-600 dark:hover:text-gray-200"
                     >
                       Clear ({compareIds.length})
                     </button>
@@ -645,7 +658,9 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
 
       {/* Project Detail Panel */}
       {selectedProjectId && (
-        <ProjectDetail projectId={selectedProjectId} onClose={() => setSelectedProjectId(null)} />
+        <Suspense fallback={null}>
+          <ProjectDetail projectId={selectedProjectId} onClose={() => setSelectedProjectId(null)} />
+        </Suspense>
       )}
 
       {/* Comparison Modal */}
@@ -695,7 +710,7 @@ function ComparisonModal({ projectIds, onClose, onRemove }) {
               <table className="w-full text-left text-xs">
                 <thead>
                   <tr className="border-b border-gray-200 dark:border-gray-700">
-                    <th className="p-3 text-[10px] font-bold uppercase text-gray-400">Metric</th>
+                    <th className="p-3 text-[0.625rem] font-bold uppercase text-gray-400">Metric</th>
                     {projects.map((p) => (
                       <th key={p.id} className="p-3">
                         <div className="flex items-center gap-2">

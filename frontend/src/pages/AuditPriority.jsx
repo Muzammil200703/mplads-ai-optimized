@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, memo } from "react"
 import { getAuditPriority, getAuditPrioritySummary, getStates, getConstituencies, getProjectDetail } from "../services/api"
 import { formatMoney } from "../utils/format"
+import { MobileCardsSkeleton } from "../components/Skeletons"
 
 /* ─── Reason chip helpers ─── */
 const REASON_CHIPS = {
@@ -41,6 +42,26 @@ function getReasonDetail(reason, p) {
   return reason
 }
 
+/* ─── Tier helpers ─── */
+const TIER_STYLE = {
+  P1: { chip: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300", bar: "bg-red-500", text: "text-red-600 dark:text-red-400" },
+  P2: { chip: "bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300", bar: "bg-orange-500", text: "text-orange-600 dark:text-orange-400" },
+  P3: { chip: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300", bar: "bg-amber-500", text: "text-amber-600 dark:text-amber-400" },
+  P4: { chip: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300", bar: "bg-blue-500", text: "text-blue-600 dark:text-blue-400" },
+}
+const TIER_DEFAULT = { chip: "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300", bar: "bg-gray-400", text: "text-gray-600 dark:text-gray-400" }
+
+function tierStyle(tier) {
+  return TIER_STYLE[tier] || TIER_DEFAULT
+}
+
+function money(v) {
+  const n = Number(v || 0)
+  if (n >= 10000000) return `₹${(n / 10000000).toFixed(2)} Cr`
+  if (n >= 100000) return `₹${(n / 100000).toFixed(2)} L`
+  return `₹${n.toLocaleString("en-IN")}`
+}
+
 /* ═══════════════ MAIN COMPONENT ═══════════════ */
 const AuditPriority = memo(function AuditPriority({ fy }) {
   const [priorities, setPriorities] = useState([])
@@ -49,15 +70,22 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
   const [error, setError] = useState("")
   const [states, setStates] = useState([])
   const [constituencies, setConstituencies] = useState([])
-  const [summary, setSummary] = useState({ total_flagged: 0, high_risk: 0, medium_risk: 0, critical: 0, ml_anomalies: 0 })
+  const [summary, setSummary] = useState({
+    total_flagged: 0, high_risk: 0, medium_risk: 0, ml_anomalies: 0,
+    tiers: { P1: { count: 0 }, P2: { count: 0 }, P3: { count: 0 }, P4: { count: 0 } },
+    tier_labels: { P1: "Immediate Review", P2: "High Priority", P3: "Review", P4: "Monitor" },
+    total_sanctioned_under_review: 0,
+  })
 
   const [filterState, setFilterState] = useState("")
   const [filterConstituency, setFilterConstituency] = useState("")
   const [filterSeverity, setFilterSeverity] = useState("")
+  const [filterTier, setFilterTier] = useState("")
   const [searchQuery, setSearchQuery] = useState("")
-  const [sortBy, setSortBy] = useState("risk_score")
-  const [sortDir, setSortDir] = useState("desc")
+  const [sortBy, setSortBy] = useState("audit_priority")
+  const [sortDir, setSortDir] = useState("asc")
   const [currentPage, setCurrentPage] = useState(1)
+  const [expanded, setExpanded] = useState(null)
   const rowsPerPage = 20
 
   const [selectedProject, setSelectedProject] = useState(null)
@@ -94,6 +122,7 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
       if (filterConstituency) params.constituency = filterConstituency
       if (fy) params.fy = fy
       if (filterSeverity) params.risk_level = filterSeverity
+      if (filterTier) params.tier = filterTier
       if (searchQuery.trim()) params.q = searchQuery.trim()
       if (sortBy) { params.sort_by = sortBy; params.sort_dir = sortDir }
 
@@ -106,13 +135,13 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
     } finally {
       setLoading(false)
     }
-  }, [filterState, filterConstituency, fy, filterSeverity, searchQuery, currentPage, sortBy, sortDir])
+  }, [filterState, filterConstituency, fy, filterSeverity, filterTier, searchQuery, currentPage, sortBy, sortDir])
 
   useEffect(() => { fetchData() }, [fetchData])
 
   const handleReset = () => {
-    setFilterState(""); setFilterConstituency(""); setFilterSeverity("")
-    setSearchQuery(""); setSortBy("risk_score"); setSortDir("desc")
+    setFilterState(""); setFilterConstituency(""); setFilterSeverity(""); setFilterTier("")
+    setSearchQuery(""); setSortBy("audit_priority"); setSortDir("asc")
     setCurrentPage(1)
   }
 
@@ -130,52 +159,93 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
   const totalPages = Math.max(1, Math.ceil(totalCount / rowsPerPage))
 
   return (
-    <div className="min-h-screen bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-[#f3f4f6]">
+    <div className="min-h-full bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-[#f3f4f6]">
       <div className="mx-auto max-w-[1440px] space-y-4 sm:space-y-5">
 
         {/* ═══ HEADER ═══ */}
-        <div>
-          <h2 className="text-2xl font-bold text-[#031632] dark:text-white">Audit Priority</h2>
-          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400 max-w-2xl">
-            Projects ranked by risk score for audit prioritization. Rule-based priority derived from financial discrepancies, physical progress, expenditure patterns, and detected anomalies.
-          </p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-2xl font-bold text-[#031632] dark:text-white">Audit Priority</h2>
+            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400 max-w-3xl">
+              Audit priority queue for MPLADS works. Each work is ranked by a composite priority score built from the
+              risk score, financial exposure, the financial/physical progress mismatch and the evidence gap — with a
+              floor applied from the stored risk classification.
+            </p>
+          </div>
+          <div className="rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-right shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
+            <p className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">Total priority projects</p>
+            <p className="font-mono text-2xl font-bold text-[#031632] dark:text-white">{(summary.total_flagged || 0).toLocaleString("en-IN")}</p>
+            <p className="mt-0.5 text-[0.625rem] text-gray-400">
+              Funds under review: <span className="font-mono font-bold">{money(summary.total_sanctioned_under_review)}</span>
+            </p>
+          </div>
         </div>
 
         {/* ═══ DISCLAIMER ═══ */}
-        <div className="rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-[11px] text-gray-500 dark:border-gray-700 dark:bg-[#1f2937] dark:text-gray-400">
-          Projects are ranked using financial discrepancies, physical progress, expenditure patterns, and detected anomalies. A high priority score indicates that a project deserves review; it does not by itself establish wrongdoing.
+        <div className="rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-[0.6875rem] text-gray-500 dark:border-gray-700 dark:bg-[#1f2937] dark:text-gray-400">
+          Projects are ranked using financial discrepancies, physical progress, expenditure patterns, and detected
+          anomalies. A high priority score indicates that a project deserves review; it does not by itself establish
+          wrongdoing. Priority scoring adds no new data — it only orders the works that existing detection has flagged.
         </div>
 
-        {/* ═══ SUMMARY CARDS ═══ */}
+        {/* ═══ TIER SUMMARY CARDS ═══ */}
         <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-4">
-          {[
-            { label: "Critical (Score ≥ 80)", value: summary.critical, icon: "🔴", text: "text-red-600 dark:text-red-400" },
-            { label: "High Risk", value: summary.high_risk, icon: "🟠", text: "text-orange-600 dark:text-orange-400" },
-            { label: "Medium Risk", value: summary.medium_risk, icon: "🟡", text: "text-amber-600 dark:text-amber-400" },
-            { label: "Total Flagged", value: summary.total_flagged, icon: "📊", text: "text-blue-600 dark:text-blue-400" },
-          ].map((card) => (
-            <div key={card.label} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
-              <div className="flex items-center justify-between">
-                <p className="text-[11px] font-bold uppercase tracking-wider text-gray-400">{card.label}</p>
-                <span className="text-lg">{card.icon}</span>
-              </div>
-              <p className={`mt-1 font-mono text-3xl font-bold ${card.text}`}>{card.value.toLocaleString("en-IN")}</p>
-            </div>
-          ))}
+          {["P1", "P2", "P3", "P4"].map((code) => {
+            const tier = summary.tiers?.[code] || { count: 0, sanctioned_under_review: 0 }
+            const style = tierStyle(code)
+            return (
+              <button
+                key={code}
+                onClick={() => { setFilterTier(filterTier === code ? "" : code); setCurrentPage(1) }}
+                className={`rounded-xl border bg-white p-4 text-left shadow-sm transition dark:bg-[#1f2937] ${
+                  filterTier === code ? "border-[#031632] ring-1 ring-[#031632]/20 dark:border-blue-500" : "border-gray-200 hover:border-gray-300 dark:border-gray-700"
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className={`rounded px-1.5 py-0.5 text-[0.625rem] font-bold ${style.chip}`}>{code}</span>
+                  <span className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">{summary.tier_labels?.[code] || ""}</span>
+                </div>
+                <p className={`mt-1.5 font-mono text-3xl font-bold ${style.text}`}>{(tier.count || 0).toLocaleString("en-IN")}</p>
+                <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
+                  <div className={`h-full rounded-full ${style.bar}`} style={{ width: `${summary.total_flagged ? Math.max(2, (tier.count / summary.total_flagged) * 100) : 0}%` }} />
+                </div>
+                <p className="mt-1 text-[0.5625rem] text-gray-400">Sanctioned: <span className="font-mono">{money(tier.sanctioned_under_review)}</span></p>
+              </button>
+            )
+          })}
+        </div>
+
+        {/* ═══ SECONDARY STATS ═══ */}
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-1 rounded-lg border border-gray-200 bg-white px-4 py-2 text-[0.6875rem] text-gray-500 dark:border-gray-700 dark:bg-[#1f2937] dark:text-gray-400">
+          <span>High risk level: <span className="font-mono font-bold text-red-600 dark:text-red-400">{(summary.high_risk || 0).toLocaleString("en-IN")}</span></span>
+          <span>Medium risk level: <span className="font-mono font-bold text-amber-600 dark:text-amber-400">{(summary.medium_risk || 0).toLocaleString("en-IN")}</span></span>
+          <span>ML outliers: <span className="font-mono font-bold text-purple-600 dark:text-purple-400">{(summary.ml_anomalies || 0).toLocaleString("en-IN")}</span></span>
+          <span className="text-gray-400">Tier = composite priority score, floored by risk level (High → at least P2).</span>
         </div>
 
         {/* ═══ FILTERS ═══ */}
         <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-6">
             <div>
-              <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Search</label>
+              <label className="block text-[0.625rem] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Search</label>
               <input value={searchQuery} onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1) }}
                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); fetchData() } }}
                 placeholder="Project name or ID..."
                 className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white" />
             </div>
             <div>
-              <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Risk Level</label>
+              <label className="block text-[0.625rem] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Priority Tier</label>
+              <select value={filterTier} onChange={(e) => { setFilterTier(e.target.value); setCurrentPage(1) }}
+                className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
+                <option value="">All Tiers</option>
+                <option value="P1">P1 — Immediate Review</option>
+                <option value="P2">P2 — High Priority</option>
+                <option value="P3">P3 — Review</option>
+                <option value="P4">P4 — Monitor</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-[0.625rem] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Risk Level</label>
               <select value={filterSeverity} onChange={(e) => { setFilterSeverity(e.target.value); setCurrentPage(1) }}
                 className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
                 <option value="">All Levels</option>
@@ -185,7 +255,7 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
               </select>
             </div>
             <div>
-              <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">State</label>
+              <label className="block text-[0.625rem] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">State</label>
               <select value={filterState} onChange={(e) => { setFilterState(e.target.value); setCurrentPage(1) }}
                 className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
                 <option value="">All States</option>
@@ -193,7 +263,7 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
               </select>
             </div>
             <div>
-              <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Constituency</label>
+              <label className="block text-[0.625rem] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Constituency</label>
               <select value={filterConstituency} disabled={!filterState}
                 onChange={(e) => { setFilterConstituency(e.target.value); setCurrentPage(1) }}
                 className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
@@ -207,8 +277,9 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
           </div>
           {/* Sort */}
           <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-gray-100 pt-3 dark:border-gray-700/60">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Sort:</span>
+            <span className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">Sort:</span>
             {[
+              { value: "audit_priority", label: "Audit Priority" },
               { value: "risk_score", label: "Risk Score" },
               { value: "sanctioned_amount", label: "Sanctioned" },
               { value: "expenditure", label: "Expenditure" },
@@ -218,10 +289,10 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
             ].map((opt) => (
               <button key={opt.value} onClick={() => {
                 if (sortBy === opt.value) setSortDir((d) => d === "asc" ? "desc" : "asc")
-                else { setSortBy(opt.value); setSortDir(opt.value === "id" || opt.value === "state" ? "asc" : "desc") }
+                else { setSortBy(opt.value); setSortDir(opt.value === "id" || opt.value === "state" || opt.value === "audit_priority" ? "asc" : "desc") }
                 setCurrentPage(1)
               }}
-                className={`rounded-lg px-3 py-1.5 text-[11px] font-bold transition ${sortBy === opt.value ? "bg-[#031632] text-white dark:bg-blue-600" : "border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:bg-[#1f2937] dark:text-gray-300"}`}>
+                className={`rounded-lg px-3 py-1.5 text-[0.6875rem] font-bold transition ${sortBy === opt.value ? "bg-[#031632] text-white dark:bg-blue-600" : "border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:bg-[#1f2937] dark:text-gray-300"}`}>
                 {opt.label}{sortBy === opt.value && <span className="ml-1">{sortDir === "asc" ? "↑" : "↓"}</span>}
               </button>
             ))}
@@ -236,10 +307,23 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
         {/* ═══ PRIORITY LIST ═══ */}
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
           {loading ? (
-            <div className="p-16 text-center">
-              <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent" />
-              <p className="mt-3 text-sm font-medium">Loading audit priorities...</p>
-            </div>
+            <>
+              <div className="hidden lg:block divide-y divide-gray-100 dark:divide-gray-700/60">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className="flex items-center gap-4 px-5 py-4">
+                    <div className="animate-pulse rounded bg-gray-200/80 dark:bg-[#2c3849]/80 h-8 w-8 shrink-0" />
+                    <div className="flex-1 space-y-2">
+                      <div className="animate-pulse rounded bg-gray-200/80 dark:bg-[#2c3849]/80 h-4 w-2/3" />
+                      <div className="animate-pulse rounded bg-gray-200/80 dark:bg-[#2c3849]/80 h-3 w-1/3" />
+                    </div>
+                    <div className="animate-pulse rounded-full bg-gray-200/80 dark:bg-[#2c3849]/80 h-6 w-16" />
+                  </div>
+                ))}
+              </div>
+              <div className="lg:hidden">
+                <MobileCardsSkeleton rows={5} />
+              </div>
+            </>
           ) : priorities.length === 0 ? (
             <div className="p-16 text-center text-sm text-gray-500">No audit priorities match the current filters.</div>
           ) : (
@@ -255,13 +339,16 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
                   const visibleReasons = reasons.slice(0, 3)
                   const scoreColor = p.risk_score >= 60 ? "text-red-600 dark:text-red-400" : p.risk_score >= 30 ? "text-amber-600 dark:text-amber-400" : "text-blue-600 dark:text-blue-400"
                   const barColor = p.risk_score >= 60 ? "bg-red-500" : p.risk_score >= 30 ? "bg-amber-500" : "bg-blue-500"
-                  const isCritical = p.risk_score >= 80
+                  const style = tierStyle(p.tier)
+                  const isCritical = p.tier === "P1"
+                  const isExpanded = expanded === p.project_id
 
                   return (
-                    <div key={p.project_id} className="flex items-stretch gap-0 cursor-pointer transition hover:bg-blue-50/30 dark:hover:bg-[#253247]" onClick={() => handleOpenDetail(p)}>
+                    <div key={p.project_id} className="cursor-pointer transition hover:bg-blue-50/30 dark:hover:bg-[#253247]" onClick={() => handleOpenDetail(p)}>
+                      <div className="flex items-stretch gap-0">
                       {/* Priority Rank */}
                       <div className={`flex w-16 flex-shrink-0 flex-col items-center justify-center border-r ${isCritical ? "border-red-200 bg-red-50 dark:border-red-900/40 dark:bg-red-950/20" : "border-gray-100 dark:border-gray-700/60"}`}>
-                        <span className="text-[10px] font-bold uppercase text-gray-400">Rank</span>
+                        <span className="text-[0.625rem] font-bold uppercase text-gray-400">Rank</span>
                         <span className={`font-mono text-xl font-bold ${isCritical ? "text-red-600 dark:text-red-400" : "text-gray-900 dark:text-white"}`}>{p.priority_rank}</span>
                       </div>
 
@@ -271,26 +358,34 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
                           <div className="min-w-0 flex-1">
                             {/* Title Row */}
                             <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-mono text-[10px] font-bold text-gray-400">#{p.project_id}</span>
-                              <span className={`rounded px-2 py-0.5 text-[10px] font-bold ${
+                              <span className={`rounded px-2 py-0.5 text-[0.625rem] font-bold ${style.chip}`} title={(p.explanation || []).join(" ")}>
+                                {p.tier} — {p.tier_label}
+                              </span>
+                              <span className="font-mono text-[0.625rem] font-bold text-gray-400">#{p.project_id}</span>
+                              <span className={`rounded px-2 py-0.5 text-[0.625rem] font-bold ${
                                 p.risk_level === "High" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
                                 : p.risk_level === "Medium" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
                                 : "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
                               }`}>{p.risk_level}</span>
-                              {p.ml_anomaly && <span className="rounded-full bg-purple-100 px-1.5 py-0.5 text-[9px] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">ML</span>}
+                              {p.ml_anomaly && <span className="rounded-full bg-purple-100 px-1.5 py-0.5 text-[0.5625rem] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">ML</span>}
+                              {p.data_quality_flag === "POSSIBLY_STALE" && (
+                                <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[0.5625rem] font-bold text-amber-700 dark:bg-amber-950 dark:text-amber-300" title={p.data_quality_reason}>
+                                  ⚠ Data update required
+                                </span>
+                              )}
                             </div>
                             <h3 className="mt-1 truncate font-semibold text-sm text-gray-900 dark:text-white" title={p.project_name}>{p.project_name || "Unnamed"}</h3>
-                            <p className="text-[11px] text-gray-500">{p.state || "N/A"}{p.constituency ? ` — ${p.constituency}` : ""}</p>
+                            <p className="text-[0.6875rem] text-gray-500">{p.state || "N/A"}{p.constituency ? ` — ${p.constituency}` : ""}</p>
 
                             {/* Why Prioritized Chips */}
                             {visibleReasons.length > 0 && (
                               <div className="mt-2 flex flex-wrap gap-1.5">
                                 {visibleReasons.map((r, i) => {
                                   const chip = getReasonChip(r)
-                                  return <span key={i} className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${chip.color}`}>{chip.label}</span>
+                                  return <span key={i} className={`rounded-md px-2 py-0.5 text-[0.625rem] font-bold ${chip.color}`}>{chip.label}</span>
                                 })}
                                 {reasons.length > 3 && (
-                                  <span className="rounded-md bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-500 dark:bg-gray-700 dark:text-gray-400">+{reasons.length - 3} more</span>
+                                  <span className="rounded-md bg-gray-100 px-2 py-0.5 text-[0.625rem] font-bold text-gray-500 dark:bg-gray-700 dark:text-gray-400">+{reasons.length - 3} more</span>
                                 )}
                               </div>
                             )}
@@ -309,12 +404,64 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
                         </div>
 
                         {/* Financial Mini-Row */}
-                        <div className="mt-3 flex items-center gap-6 text-xs text-gray-600 dark:text-gray-400">
+                        <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-gray-600 dark:text-gray-400">
                           <span>Sanctioned: <strong className="font-mono text-gray-900 dark:text-white">{formatMoney(sanctioned)}</strong></span>
                           <span>Spent: <strong className="font-mono text-gray-900 dark:text-white">{formatMoney(expenditure)}</strong></span>
                           <span>Progress: <strong className="font-mono text-gray-900 dark:text-white">{completion}%</strong></span>
                           <span>Utilization: <strong className={`font-mono ${utilization > 100 ? "text-red-600 dark:text-red-400" : ""}`}>{utilization.toFixed(0)}%</strong></span>
+                          <span>Funds under review: <strong className="font-mono text-gray-900 dark:text-white">{money(p.financial_exposure?.funds_under_review ?? sanctioned)}</strong></span>
                         </div>
+
+                        {/* Audit intelligence row */}
+                        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                          <div className="rounded-lg bg-gray-50 px-2.5 py-1.5 dark:bg-[#0f1524]">
+                            <p className="text-[0.5625rem] font-bold uppercase tracking-wider text-gray-400">Main anomaly</p>
+                            <p className="text-[0.625rem] font-semibold text-gray-700 dark:text-gray-200">{p.primary_anomaly}</p>
+                          </div>
+                          <div className="rounded-lg bg-gray-50 px-2.5 py-1.5 dark:bg-[#0f1524]">
+                            <p className="text-[0.5625rem] font-bold uppercase tracking-wider text-gray-400">Evidence gap</p>
+                            <p className="text-[0.625rem] font-semibold text-gray-700 dark:text-gray-200" title={p.evidence_gap?.summary}>
+                              {p.evidence_gap?.missing_count ?? 0} item(s) unavailable
+                            </p>
+                          </div>
+                          <div className="rounded-lg bg-gray-50 px-2.5 py-1.5 dark:bg-[#0f1524]">
+                            <p className="text-[0.5625rem] font-bold uppercase tracking-wider text-gray-400">Recommended action</p>
+                            <p className="text-[0.625rem] font-semibold text-gray-700 dark:text-gray-200">{p.recommended_action}</p>
+                          </div>
+                        </div>
+
+                        {/* Why this priority (expandable) */}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setExpanded(isExpanded ? null : p.project_id) }}
+                          className="mt-2 text-[0.625rem] font-bold text-blue-600 hover:underline dark:text-blue-400"
+                        >
+                          {isExpanded ? "Hide priority explanation" : "Why this priority?"}
+                        </button>
+                        {isExpanded && (
+                          <div className="mt-2 rounded-lg border border-gray-200 bg-gray-50 p-2.5 dark:border-gray-700 dark:bg-[#0f1524]">
+                            <ul className="space-y-1">
+                              {(p.explanation || []).map((exp, i) => (
+                                <li key={i} className="flex items-start gap-1.5 text-[0.625rem] text-gray-600 dark:text-gray-300">
+                                  <span className="mt-0.5 text-gray-400">•</span><span>{exp}</span>
+                                </li>
+                              ))}
+                            </ul>
+                            <p className="mt-1.5 font-mono text-[0.5625rem] text-gray-400">
+                              score {p.audit_priority_score}/100 · {p.formula || "risk(0-55) + exposure(0-20) + mismatch(0-15) + evidence_gap(0-10)"}
+                            </p>
+                            {p.evidence_gap?.missing_labels?.length > 0 && (
+                              <p className="mt-1 text-[0.5625rem] text-gray-400">
+                                Evidence not available: {p.evidence_gap.missing_labels.join("; ")}
+                              </p>
+                            )}
+                            {(p.recommended_actions || []).length > 1 && (
+                              <p className="mt-1 text-[0.5625rem] text-gray-400">
+                                Further actions: {(p.recommended_actions || []).slice(1).join("; ")}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
                       </div>
                     </div>
                   )
@@ -329,30 +476,33 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
                   const reasons = p.reasons || []
                   const visibleReasons = reasons.slice(0, 2)
                   const scoreColor = p.risk_score >= 60 ? "text-red-600 dark:text-red-400" : p.risk_score >= 30 ? "text-amber-600 dark:text-amber-400" : "text-blue-600 dark:text-blue-400"
-                  const isCritical = p.risk_score >= 80
+                  const isCritical = p.tier === "P1"
 
                   return (
                     <div key={p.project_id} className="p-4 cursor-pointer transition hover:bg-blue-50/30 dark:hover:bg-[#253247]" onClick={() => handleOpenDetail(p)}>
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${isCritical ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300" : "bg-gray-100 text-gray-600 dark:bg-gray-700"}`}>
+                            <span className={`rounded px-1.5 py-0.5 text-[0.625rem] font-bold ${tierStyle(p.tier).chip}`}>
+                              {p.tier} — {p.tier_label}
+                            </span>
+                            <span className={`rounded px-1.5 py-0.5 text-[0.625rem] font-bold ${isCritical ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300" : "bg-gray-100 text-gray-600 dark:bg-gray-700"}`}>
                               #{p.priority_rank}
                             </span>
-                            <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                            <span className={`rounded px-1.5 py-0.5 text-[0.625rem] font-bold ${
                               p.risk_level === "High" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
                               : p.risk_level === "Medium" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
                               : "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
                             }`}>{p.risk_level}</span>
-                            {p.ml_anomaly && <span className="rounded-full bg-purple-100 px-1.5 py-0.5 text-[9px] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">ML</span>}
+                            {p.ml_anomaly && <span className="rounded-full bg-purple-100 px-1.5 py-0.5 text-[0.5625rem] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">ML</span>}
                           </div>
                           <p className="mt-1 truncate font-semibold text-sm text-gray-900 dark:text-white" title={p.project_name}>{p.project_name || "Unnamed"}</p>
-                          <p className="text-[11px] text-gray-500">{p.state || "N/A"}{p.constituency ? `, ${p.constituency}` : ""}</p>
+                          <p className="text-[0.6875rem] text-gray-500">{p.state || "N/A"}{p.constituency ? `, ${p.constituency}` : ""}</p>
                         </div>
                         <div className="text-right shrink-0">
                           <div className="flex items-baseline gap-1">
                             <span className={`font-mono text-xl font-bold ${scoreColor}`}>{p.risk_score}</span>
-                            <span className="font-mono text-[10px] text-gray-400">/100</span>
+                            <span className="font-mono text-[0.625rem] text-gray-400">/100</span>
                           </div>
                         </div>
                       </div>
@@ -361,7 +511,7 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
                         <div className="mt-2 flex flex-wrap gap-1">
                           {visibleReasons.map((r, i) => {
                             const chip = getReasonChip(r)
-                            return <span key={i} className={`rounded px-1.5 py-0.5 text-[9px] font-bold ${chip.color}`}>{chip.label}</span>
+                            return <span key={i} className={`rounded px-1.5 py-0.5 text-[0.5625rem] font-bold ${chip.color}`}>{chip.label}</span>
                           })}
                         </div>
                       )}
@@ -369,6 +519,11 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
                         <div className="flex justify-between"><span className="text-gray-500">Sanctioned</span><span className="font-mono font-semibold">{formatMoney(sanctioned)}</span></div>
                         <div className="flex justify-between"><span className="text-gray-500">Spent</span><span className="font-mono font-semibold">{formatMoney(expenditure)}</span></div>
                         <div className="flex justify-between"><span className="text-gray-500">Progress</span><span className="font-mono font-semibold">{p.completion_percentage}%</span></div>
+                      </div>
+                      <div className="mt-2 rounded-lg bg-gray-50 px-2.5 py-1.5 dark:bg-[#0f1524]">
+                        <p className="text-[0.5625rem] font-bold uppercase tracking-wider text-gray-400">Main anomaly · action</p>
+                        <p className="text-[0.625rem] font-semibold text-gray-700 dark:text-gray-200">{p.primary_anomaly}</p>
+                        <p className="mt-0.5 text-[0.625rem] text-gray-500 dark:text-gray-400">{p.recommended_action}</p>
                       </div>
                     </div>
                   )
@@ -413,6 +568,9 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
             <div className="flex items-start justify-between border-b border-gray-200 p-5 dark:border-gray-700">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 flex-wrap">
+                  <span className={`rounded px-2 py-0.5 text-xs font-bold ${tierStyle(p.tier).chip}`}>
+                    {p.tier} — {p.tier_label}
+                  </span>
                   <span className={`rounded px-2 py-0.5 text-xs font-bold ${
                     p.risk_level === "High" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
                     : p.risk_level === "Medium" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
@@ -424,7 +582,7 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
                     : p.risk_level === "Medium" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
                     : "bg-gray-100 text-gray-600 dark:bg-gray-700"
                   }`}>{p.risk_level} Risk</span>
-                  {p.ml_anomaly && <span className="rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">ML Anomaly</span>}
+                  {p.ml_anomaly && <span className="rounded-full bg-purple-100 px-1.5 py-0.5 text-[0.625rem] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">ML Anomaly</span>}
                 </div>
                 <h3 className="mt-2 text-lg font-bold text-gray-900 dark:text-white leading-tight">{p.project_name}</h3>
                 <p className="text-xs text-gray-500 mt-0.5">📍 {p.state || "N/A"} — {p.constituency || "N/A"}</p>
@@ -444,7 +602,7 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
                   <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#111827]">
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Risk Score</p>
+                        <p className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">Risk Score</p>
                         <div className="flex items-baseline gap-2 mt-1">
                           <span className="font-mono text-3xl font-bold text-gray-900 dark:text-white">{p.risk_score}</span>
                           <span className="font-mono text-sm text-gray-400">/ 100</span>
@@ -456,7 +614,7 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
                         </div>
                       </div>
                       <div className="text-right">
-                        <p className="text-[10px] font-bold uppercase text-gray-400">Priority</p>
+                        <p className="text-[0.625rem] font-bold uppercase text-gray-400">Priority</p>
                         <p className="font-mono text-2xl font-bold text-gray-900 dark:text-white">#{p.priority_rank}</p>
                       </div>
                     </div>
@@ -471,10 +629,10 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
                   <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#111827]">
                     <h4 className="mb-3 text-xs font-bold uppercase tracking-wider text-gray-400">Financial Overview</h4>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                      <div><p className="text-[10px] font-bold uppercase text-gray-400">Sanctioned</p><p className="font-mono text-sm font-bold text-blue-700 dark:text-blue-400">{formatMoney(sanctioned)}</p></div>
-                      <div><p className="text-[10px] font-bold uppercase text-gray-400">Expenditure</p><p className="font-mono text-sm font-bold">{formatMoney(expenditure)}</p></div>
-                      <div><p className="text-[10px] font-bold uppercase text-gray-400">Progress</p><p className="font-mono text-sm font-bold">{completion}%</p></div>
-                      <div><p className="text-[10px] font-bold uppercase text-gray-400">Utilization</p><p className={`font-mono text-sm font-bold ${utilization > 100 ? "text-red-600 dark:text-red-400" : ""}`}>{utilization.toFixed(1)}%</p></div>
+                      <div><p className="text-[0.625rem] font-bold uppercase text-gray-400">Sanctioned</p><p className="font-mono text-sm font-bold text-blue-700 dark:text-blue-400">{formatMoney(sanctioned)}</p></div>
+                      <div><p className="text-[0.625rem] font-bold uppercase text-gray-400">Expenditure</p><p className="font-mono text-sm font-bold">{formatMoney(expenditure)}</p></div>
+                      <div><p className="text-[0.625rem] font-bold uppercase text-gray-400">Progress</p><p className="font-mono text-sm font-bold">{completion}%</p></div>
+                      <div><p className="text-[0.625rem] font-bold uppercase text-gray-400">Utilization</p><p className={`font-mono text-sm font-bold ${utilization > 100 ? "text-red-600 dark:text-red-400" : ""}`}>{utilization.toFixed(1)}%</p></div>
                     </div>
                     {utilization > 100 && (
                       <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs dark:border-red-900/40 dark:bg-red-950/20">
@@ -495,16 +653,57 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
                           return (
                             <div key={i} className="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-[#1f2937]">
                               <div className="flex items-center gap-2 mb-1">
-                                <span className={`rounded px-1.5 py-0.5 text-[9px] font-bold ${chip.color}`}>{chip.label}</span>
+                                <span className={`rounded px-1.5 py-0.5 text-[0.5625rem] font-bold ${chip.color}`}>{chip.label}</span>
                                 <span className="text-xs font-bold text-gray-800 dark:text-gray-200">{reason}</span>
                               </div>
-                              <p className="text-[11px] text-gray-600 dark:text-gray-400 leading-relaxed pl-1">
+                              <p className="text-[0.6875rem] text-gray-600 dark:text-gray-400 leading-relaxed pl-1">
                                 {getReasonDetail(reason, p)}
                               </p>
                             </div>
                           )
                         })}
                       </div>
+                    </div>
+                  )}
+
+                  {/* Why this priority */}
+                  {(p.explanation || []).length > 0 && (
+                    <div className="rounded-xl border border-purple-200 bg-purple-50/50 p-4 dark:border-purple-900/40 dark:bg-purple-950/20">
+                      <h4 className="mb-2 text-xs font-bold uppercase tracking-wider text-purple-700 dark:text-purple-300">
+                        Why this priority ({p.tier} — {p.tier_label})
+                      </h4>
+                      <ul className="space-y-1">
+                        {(p.explanation || []).map((exp, i) => (
+                          <li key={i} className="flex items-start gap-1.5 text-[0.6875rem] text-gray-600 dark:text-gray-300">
+                            <span className="mt-0.5 text-purple-500">•</span><span>{exp}</span>
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="mt-2 font-mono text-[0.625rem] text-gray-400">
+                        composite score {p.audit_priority_score}/100 · {p.formula || "risk(0-55) + exposure(0-20) + mismatch(0-15) + evidence_gap(0-10)"}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Evidence gap + recommended actions */}
+                  {p.evidence_gap && (
+                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#111827]">
+                      <h4 className="mb-2 text-xs font-bold uppercase tracking-wider text-gray-400">Evidence gap & recommended actions</h4>
+                      <p className="text-[0.6875rem] text-gray-600 dark:text-gray-300">{p.evidence_gap.summary}</p>
+                      {(p.evidence_gap.missing_labels || []).length > 0 && (
+                        <p className="mt-1 text-[0.625rem] text-gray-500 dark:text-gray-400">
+                          Not available: {(p.evidence_gap.missing_labels || []).join("; ")}
+                        </p>
+                      )}
+                      {(p.recommended_actions || []).length > 0 && (
+                        <ul className="mt-2 space-y-1">
+                          {(p.recommended_actions || []).map((a, i) => (
+                            <li key={i} className="flex items-start gap-1.5 text-[0.6875rem] text-gray-600 dark:text-gray-300">
+                              <span className="mt-0.5 text-blue-600 dark:text-blue-400">→</span><span>{a}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                     </div>
                   )}
 
@@ -519,6 +718,11 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
                       </div>
                     </div>
                   )}
+
+                  <p className="text-[0.625rem] leading-relaxed text-gray-400">
+                    Priority indicates that a work deserves review based on its recorded values. It does not by itself
+                    establish delay, irregularity or wrongdoing.
+                  </p>
                 </>
               )}
             </div>

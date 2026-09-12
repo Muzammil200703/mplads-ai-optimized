@@ -83,7 +83,7 @@ const StateIntelligence = memo(function StateIntelligence({ onNavigateToProjects
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#f9f9ff] p-4 sm:p-6 dark:bg-[#111827]">
+      <div className="min-h-full bg-[#f9f9ff] p-4 sm:p-6 dark:bg-[#111827]">
         <h1 className="text-2xl font-bold text-[#031632] dark:text-white">State Intelligence</h1>
         <div className="mt-6 rounded-xl border border-gray-200 bg-white p-16 text-center dark:border-gray-700 dark:bg-[#1f2937]">
           <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent" />
@@ -107,7 +107,7 @@ const StateIntelligence = memo(function StateIntelligence({ onNavigateToProjects
   ]
 
   return (
-    <div className="min-h-screen bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-[#f3f4f6]">
+    <div className="min-h-full bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-[#f3f4f6]">
       <div className="mx-auto max-w-[1440px] space-y-4 sm:space-y-6">
         <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
           <div>
@@ -130,7 +130,7 @@ const StateIntelligence = memo(function StateIntelligence({ onNavigateToProjects
 
         {/* Sort Controls */}
         <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Sort:</span>
+          <span className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">Sort:</span>
           {[
             { value: "total_projects", label: "Works" },
             { value: "total_sanctioned_amount", label: "Sanctioned" },
@@ -143,7 +143,7 @@ const StateIntelligence = memo(function StateIntelligence({ onNavigateToProjects
             <button
               key={opt.value}
               onClick={() => handleSort(opt.value)}
-              className={`rounded-lg px-3 py-1.5 text-[11px] font-bold transition ${
+              className={`rounded-lg px-3 py-1.5 text-[0.6875rem] font-bold transition ${
                 sortBy === opt.value
                   ? "bg-[#031632] text-white dark:bg-blue-600"
                   : "border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:bg-[#1f2937] dark:text-gray-300"
@@ -160,7 +160,7 @@ const StateIntelligence = memo(function StateIntelligence({ onNavigateToProjects
           <h3 className="mb-3 text-sm font-bold uppercase tracking-wider text-gray-400">State / Constituency Benchmarking</h3>
           <div className="flex flex-wrap items-end gap-3">
             <div className="flex-1 min-w-[150px]">
-              <label className="mb-1 block text-[10px] font-bold uppercase text-gray-400">State</label>
+              <label className="mb-1 block text-[0.625rem] font-bold uppercase text-gray-400">State</label>
               <select
                 value={benchState}
                 onChange={(e) => { setBenchState(e.target.value); setBenchData(null) }}
@@ -171,7 +171,7 @@ const StateIntelligence = memo(function StateIntelligence({ onNavigateToProjects
               </select>
             </div>
             <div className="flex-1 min-w-[150px]">
-              <label className="mb-1 block text-[10px] font-bold uppercase text-gray-400">Constituency (optional)</label>
+              <label className="mb-1 block text-[0.625rem] font-bold uppercase text-gray-400">Constituency (optional)</label>
               <select
                 value={benchConstituency}
                 onChange={(e) => setBenchConstituency(e.target.value)}
@@ -200,9 +200,9 @@ const StateIntelligence = memo(function StateIntelligence({ onNavigateToProjects
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                     {comp.metrics.map((m, mi) => (
                       <div key={mi} className="rounded-lg bg-white p-3 dark:bg-[#1f2937]">
-                        <p className="text-[10px] font-bold uppercase text-gray-400">{m.metric}</p>
+                        <p className="text-[0.625rem] font-bold uppercase text-gray-400">{m.metric}</p>
                         <p className="font-mono text-lg font-bold">{m.selected}{m.unit}</p>
-                        <p className="text-[10px] text-gray-400">Benchmark: {m.benchmark}{m.unit}</p>
+                        <p className="text-[0.625rem] text-gray-400">Benchmark: {m.benchmark}{m.unit}</p>
                         <p className={`mt-1 text-xs font-bold ${m.better ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
                           {m.difference > 0 ? "+" : ""}{m.difference}{m.unit} {m.better ? "↑" : "↓"}
                         </p>
@@ -212,7 +212,7 @@ const StateIntelligence = memo(function StateIntelligence({ onNavigateToProjects
                   {/* Interpretation */}
                   <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50/50 p-3 dark:border-blue-900/40 dark:bg-blue-950/20">
                     {comp.metrics.map((m, mi) => (
-                      <p key={mi} className="text-[11px] text-gray-600 dark:text-gray-400">
+                      <p key={mi} className="text-[0.6875rem] text-gray-600 dark:text-gray-400">
                         {comp.selected_name} {m.metric.toLowerCase()} is {Math.abs(m.difference)}{m.unit} {m.better ? "above" : "below"} {comp.benchmark_name.toLowerCase()} ({m.benchmark}{m.unit}).
                       </p>
                     ))}
@@ -287,8 +287,8 @@ const StateIntelligence = memo(function StateIntelligence({ onNavigateToProjects
                 <div className="flex items-start justify-between">
                   <p className="font-semibold text-sm">{s.state}</p>
                   <div className="flex items-center gap-1.5">
-                    {s.high_risk_projects > 0 && <span className="rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-red-700 dark:bg-red-950 dark:text-red-300">{s.high_risk_projects} High</span>}
-                    {s.ml_anomaly_projects > 0 && <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">{s.ml_anomaly_projects} ML</span>}
+                    {s.high_risk_projects > 0 && <span className="rounded bg-red-100 px-1.5 py-0.5 text-[0.625rem] font-bold text-red-700 dark:bg-red-950 dark:text-red-300">{s.high_risk_projects} High</span>}
+                    {s.ml_anomaly_projects > 0 && <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[0.625rem] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">{s.ml_anomaly_projects} ML</span>}
                   </div>
                 </div>
                 <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">

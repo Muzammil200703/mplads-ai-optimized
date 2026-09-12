@@ -2,6 +2,20 @@ const API_URL = import.meta.env.VITE_API_URL !== undefined
   ? import.meta.env.VITE_API_URL 
   : (import.meta.env.PROD ? "" : "https://mplads-ai-optimized.onrender.com")
 
+// ═══════════════ AUTHENTICATION SESSION ═══════════════
+// Persistent JWT session in localStorage; attached to every request.
+const TOKEN_KEY = "mplads_token"
+export function getToken() {
+  try { return localStorage.getItem(TOKEN_KEY) } catch { return null }
+}
+export function setToken(token) {
+  try {
+    if (token) localStorage.setItem(TOKEN_KEY, token)
+    else localStorage.removeItem(TOKEN_KEY)
+  } catch { /* storage unavailable */ }
+}
+export function clearToken() { setToken(null) }
+
 // ═══════════════ CLIENT-SIDE API CACHE ═══════════════
 // TTL-based cache to avoid refetching filter/static data on every page mount
 const _apiCache = new Map()
@@ -22,13 +36,25 @@ function cacheInvalidate(prefix) {
 
 async function request(endpoint, options = {}) {
   const url = `${API_URL}${endpoint}`
+  const token = getToken()
   const response = await fetch(url, {
     headers: {
       "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(options.headers || {}),
     },
     ...options,
   })
+
+  if (!response.status) {
+    // network-level failure
+  }
+
+  if (response.status === 401 && getToken()) {
+    // Session expired — clear so the UI falls back to signed-out state.
+    clearToken()
+    window.dispatchEvent(new CustomEvent("auth-expired"))
+  }
 
   if (!response.ok) {
     let errorDetail = `API request failed: ${response.status}`
@@ -61,6 +87,35 @@ function buildQuery(params = {}) {
   })
   const qs = q.toString()
   return qs ? `?${qs}` : ""
+}
+
+// ═══════════════ REQUEST DEDUPLICATION ═══════════════
+// Simultaneous identical GETs share one network request.
+const _inflight = new Map()
+
+/**
+ * Cached + deduplicated GET helper.
+ * - Returns cached data when a fresh entry exists (TTL).
+ * - Coalesces concurrent calls for the same key into a single request.
+ * - Caches only successful, non-empty payloads; errors propagate uncached.
+ * Use "data_"-prefixed keys for anything that must be invalidated by
+ * uploadCSV()/triggerSync() (they call cacheInvalidate("data_")).
+ */
+async function cachedGet(key, ttlMs, fetcher) {
+  const cached = cacheGet(key, ttlMs)
+  if (cached !== undefined) return cached
+  if (_inflight.has(key)) return _inflight.get(key)
+  const promise = (async () => {
+    try {
+      const data = await fetcher()
+      if (data !== undefined && data !== null) cacheSet(key, data)
+      return data
+    } finally {
+      _inflight.delete(key)
+    }
+  })()
+  _inflight.set(key, promise)
+  return promise
 }
 
 export async function healthCheck() {
@@ -185,20 +240,46 @@ export async function refreshAnomaliesSummary() {
 }
 
 export async function getProjects(params = {}) {
-  return request(`/projects${buildQuery(params)}`)
+  return cachedGet(`data_projects_${buildQuery(params)}`, 30000, () =>
+    request(`/projects${buildQuery(params)}`))
 }
 
 export async function searchProjects(params = {}) {
   const { signal, ...queryParams } = params
-  return request(`/search/projects${buildQuery(queryParams)}`, signal ? { signal } : {})
+  const options = signal ? { signal } : {}
+  // Abortable calls (live search-as-you-type) bypass the cache;
+  // plain calls get a short TTL so paging back is instant.
+  if (signal) return request(`/search/projects${buildQuery(queryParams)}`, options)
+  return cachedGet(`data_search_${buildQuery(queryParams)}`, 15000, () =>
+    request(`/search/projects${buildQuery(queryParams)}`))
+}
+
+export async function getProjectTimeline(projectId) {
+  // Timeline derives from the static dataset — long cache.
+  return cachedGet(`data_tl_${projectId}`, 300000, async () => {
+    try {
+      return await request(`/projects/${projectId}/timeline`)
+    } catch { return null }
+  })
+}
+
+export async function getProjectActivity(projectId) {
+  // Expenditure activity derives from the static dataset — long cache.
+  return cachedGet(`data_act_${projectId}`, 300000, async () => {
+    try {
+      return await request(`/projects/${projectId}/expenditure-activity`)
+    } catch { return null }
+  })
 }
 
 export async function getProjectDetail(projectId) {
-  return request(`/projects/${projectId}`)
+  return cachedGet(`data_detail_${projectId}`, 60000, () =>
+    request(`/projects/${projectId}`))
 }
 
 export async function getAnomalies(params = {}) {
-  return request(`/anomalies${buildQuery(params)}`)
+  return cachedGet(`data_anom_${buildQuery(params)}`, 30000, () =>
+    request(`/anomalies${buildQuery(params)}`))
 }
 
 export async function getProjectRisk(projectId) {
@@ -247,16 +328,28 @@ export async function getStateIntelligence(params = {}) {
   return data
 }
 
+// State Intelligence drill-down details — derived from static dataset
+export async function getStateDetails(state) {
+  return cachedGet(`state_det_${state}`, 300000, async () => {
+    try {
+      return await request(`/dashboard/state-details/${encodeURIComponent(state)}`)
+    } catch { return null }
+  })
+}
+
 export async function getAuditPriority(params = {}) {
-  return request(`/audit-priority${buildQuery(params)}`)
+  return cachedGet(`data_audit_prio_${buildQuery(params)}`, 60000, () =>
+    request(`/audit-priority${buildQuery(params)}`))
 }
 
 export async function getAuditPrioritySummary(params = {}) {
-  return request(`/audit-priority/summary${buildQuery(params)}`)
+  return cachedGet(`data_audit_prio_sum_${buildQuery(params)}`, 60000, () =>
+    request(`/audit-priority/summary${buildQuery(params)}`))
 }
 
 export async function getSimilarProjects(projectId, limit = 5) {
-  return request(`/projects/${projectId}/similar?limit=${limit}`)
+  return cachedGet(`data_sim_${projectId}_${limit}`, 300000, () =>
+    request(`/projects/${projectId}/similar?limit=${limit}`))
 }
 
 export async function getAnomalyAnalytics(params = {}) {
@@ -278,18 +371,220 @@ export async function getOverview() {
 
 // Feature 1: AI Risk Explanation
 export async function getRiskExplanation(projectId) {
-  return request(`/ai/risk-explanation/${projectId}`)
+  // Derived deterministically from stored risk results — safe to cache.
+  return cachedGet(`data_rex_${projectId}`, 300000, () =>
+    request(`/ai/risk-explanation/${projectId}`))
 }
 
 // Feature 3: Anomaly Explanation
 export async function getAnomalyExplanation(projectId) {
-  return request(`/ai/anomaly-explanation/${projectId}`)
+  return cachedGet(`data_aex_${projectId}`, 300000, () =>
+    request(`/ai/anomaly-explanation/${projectId}`))
 }
 
 // Feature 4: Benchmarking
 export async function getBenchmarking(params = {}) {
-  return request(`/ai/benchmarking${buildQuery(params)}`)
+  return cachedGet(`data_bench_${buildQuery(params)}`, 300000, () =>
+    request(`/ai/benchmarking${buildQuery(params)}`))
+}
+
+// ═══════════════ AUDIT INTELLIGENCE & INVESTIGATION ═══════════════
+
+// Evidence gap detection — "What evidence is missing?"
+export async function getEvidenceGaps(projectId) {
+  return cachedGet(`data_eg_${projectId}`, 300000, () =>
+    request(`/ai/evidence-gaps/${projectId}`))
+}
+
+// Anomaly dimension explorer
+export async function getAnomalyExplorer(projectId) {
+  return cachedGet(`data_axp_${projectId}`, 300000, () =>
+    request(`/ai/anomaly-explorer/${projectId}`))
+}
+
+// Peer benchmarking against comparable projects (statistical comparison)
+export async function getPeerBenchmark(projectId, params = {}) {
+  return cachedGet(`data_peer_${projectId}_${buildQuery(params)}`, 120000, () =>
+    request(`/projects/${projectId}/peer-benchmark${buildQuery(params)}`))
+}
+
+// What-if simulation — recomputes risk on hypothetical values (never persisted)
+export async function simulateRisk(projectId, payload) {
+  return request(`/ai/simulate/${projectId}`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+// Structured audit case + escalation draft
+export async function getAuditCase(projectId) {
+  return cachedGet(`data_case_${projectId}`, 300000, () =>
+    request(`/ai/audit-case/${projectId}`))
+}
+
+// Investigation workspace (persisted workflow state) — NOT cached, always fresh
+export async function getInvestigation(projectId) {
+  return request(`/investigations/${projectId}`)
+}
+
+export async function startInvestigation(projectId) {
+  return request(`/investigations/${projectId}/start`, { method: "POST" })
+}
+
+export async function updateInvestigation(projectId, payload) {
+  return request(`/investigations/${projectId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function updateEvidenceItem(projectId, itemKey, status) {
+  return request(`/investigations/${projectId}/items/${encodeURIComponent(itemKey)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status }),
+  })
+}
+
+export async function getActiveInvestigations() {
+  return request("/investigations/active")
+}
+
+// Data freshness / sync
+export async function getDataFreshness() {
+  const cached = cacheGet("data_freshness", 60000) // 1 min cache
+  if (cached !== undefined) return cached
+  try {
+    const data = await request("/api/data/freshness")
+    if (data) cacheSet("data_freshness", data)
+    return data
+  } catch {
+    return { connected: false, message: "Unable to check data freshness" }
+  }
+}
+
+export async function getDataStats() {
+  const cached = cacheGet("data_stats", 300000) // 5 min cache
+  if (cached !== undefined) return cached
+  try {
+    const data = await request("/api/data/stats")
+    if (data) cacheSet("data_stats", data)
+    return data
+  } catch {
+    return null
+  }
+}
+
+export async function getDataProviders() {
+  const cached = cacheGet("data_providers", 600000) // 10 min cache
+  if (cached !== undefined) return cached
+  try {
+    const data = await request("/api/data/providers")
+    if (data) cacheSet("data_providers", data)
+    return data
+  } catch {
+    return []
+  }
+}
+
+export async function triggerSync(source = "github") {
+  cacheInvalidate("")
+  return request(`/api/data/sync?source=${source}`, { method: "POST" })
+}
+
+export async function uploadCSV(file, delimiter = ",") {
+  const formData = new FormData()
+  formData.append("file", file)
+  formData.append("delimiter", delimiter)
+  cacheInvalidate("data_")
+  const data = await request("/api/data/upload", {
+    method: "POST",
+    headers: {},
+    body: formData,
+  })
+  // A successful upload may also change project/risk data on the server.
+  cacheInvalidate("")
+  return data
 }
 
 // Export cache invalidation for use after data mutations
 export { cacheInvalidate }
+
+// ═══════════════ AUTHENTICATION API ═══════════════
+
+export async function signup(payload) {
+  const data = await request("/auth/signup", { method: "POST", body: JSON.stringify(payload) })
+  setToken(data.token)
+  return data
+}
+
+export async function login(email, password) {
+  const data = await request("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) })
+  setToken(data.token)
+  return data
+}
+
+export function logout() {
+  clearToken()
+}
+
+export async function fetchMe() {
+  return request("/auth/me")
+}
+
+export async function forgotPassword(email) {
+  return request("/auth/forgot-password", { method: "POST", body: JSON.stringify({ email }) })
+}
+
+export async function resetPassword(token, newPassword) {
+  return request("/auth/reset-password", { method: "POST", body: JSON.stringify({ token, new_password: newPassword }) })
+}
+
+export async function listUsers() {
+  return request("/auth/users")
+}
+
+export async function updateUser(userId, payload) {
+  return request(`/auth/users/${userId}`, { method: "PATCH", body: JSON.stringify(payload) })
+}
+
+// ═══════════════ WORKSPACE API (saved projects / investigations / cases) ═══════════════
+
+export async function getSavedProjects() {
+  return request("/auth/me/saved-projects")
+}
+
+export async function saveProject(projectId) {
+  return request(`/auth/me/saved-projects/${projectId}`, { method: "POST" })
+}
+
+export async function unsaveProject(projectId) {
+  return request(`/auth/me/saved-projects/${projectId}`, { method: "DELETE" })
+}
+
+export async function getMyInvestigations() {
+  return request("/auth/me/investigations")
+}
+
+export async function createMyInvestigation(projectId) {
+  return request(`/auth/me/investigations/${projectId}`, { method: "POST" })
+}
+
+export async function updateMyInvestigation(projectId, status) {
+  return request(`/auth/me/investigations/${projectId}`, { method: "PATCH", body: JSON.stringify({ status }) })
+}
+
+export async function getMyAuditCases() {
+  return request("/auth/me/audit-cases")
+}
+
+export async function saveAuditCase(projectId) {
+  return request(`/auth/me/audit-cases/${projectId}`, { method: "POST" })
+}
+
+export async function updateCaseStatus(projectId, status) {
+  return request(`/auth/me/audit-cases/${projectId}`, { method: "PATCH", body: JSON.stringify({ status }) })
+}
+
+export async function getAllInvestigations() {
+  return request("/auth/admin/investigations")
+}

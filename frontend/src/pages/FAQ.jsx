@@ -145,7 +145,7 @@ export default function FAQ() {
   )
 
   return (
-    <div className="min-h-screen bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-gray-100">
+    <div className="min-h-full bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-gray-100">
       <div className="mx-auto max-w-3xl space-y-6">
         {/* Header */}
         <div>

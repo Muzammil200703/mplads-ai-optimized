@@ -87,7 +87,7 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
 
   if (loading) {
     return (
-      <div className={`min-h-screen p-4 sm:p-6 ${pageClasses}`}>
+      <div className={`min-h-full p-4 sm:p-6 ${pageClasses}`}>
         <h1 className="text-xl sm:text-2xl md:text-3xl font-bold">Executive Overview</h1>
         <div className={`mt-6 rounded-xl border p-12 text-center ${cardClasses}`}>
           <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent" />
@@ -98,7 +98,7 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
   }
 
   return (
-    <div className={`min-h-screen p-4 sm:p-6 transition-colors duration-200 ${pageClasses}`}>
+    <div className={`min-h-full p-4 sm:p-6 transition-colors duration-200 ${pageClasses}`}>
       {/* HEADER */}
       <div className="mb-4 sm:mb-6 flex flex-col gap-3 sm:gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
@@ -164,12 +164,12 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
       <div className="grid grid-cols-1 gap-4 sm:gap-5 md:grid-cols-2 xl:grid-cols-4">
         {/* TOTAL WORKS */}
         <div
-          className={`rounded-xl border p-5 sm:p-6 shadow-sm cursor-pointer transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 ${cardClasses}`}
+          className={`rounded-xl border p-3 sm:p-4 shadow-sm cursor-pointer transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 ${cardClasses}`}
           onClick={() => onDrillDown && onDrillDown("Projects")}
         >
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
-              <p className={`text-[11px] font-bold uppercase tracking-wider ${mutedText}`}>
+              <p className={`text-[0.6875rem] font-bold uppercase tracking-wider ${mutedText}`}>
                 Total Monitored Works
               </p>
               <h2 className="mt-2.5 text-2xl sm:text-3xl font-bold font-mono tracking-tight">
@@ -189,10 +189,10 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
         </div>
 
         {/* SANCTIONED AMOUNT */}
-        <div className={`rounded-xl border p-5 sm:p-6 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 ${cardClasses}`}>
+        <div className={`rounded-xl border p-3 sm:p-4 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 ${cardClasses}`}>
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
-              <p className={`text-[11px] font-bold uppercase tracking-wider ${mutedText}`}>
+              <p className={`text-[0.6875rem] font-bold uppercase tracking-wider ${mutedText}`}>
                 Sanctioned Allocation
               </p>
               <h2 className="mt-2.5 text-2xl sm:text-3xl font-bold font-mono tracking-tight">
@@ -211,10 +211,10 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
         </div>
 
         {/* TOTAL EXPENDITURE */}
-        <div className={`rounded-xl border p-5 sm:p-6 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 ${cardClasses}`}>
+        <div className={`rounded-xl border p-3 sm:p-4 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 ${cardClasses}`}>
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
-              <p className={`text-[11px] font-bold uppercase tracking-wider ${mutedText}`}>
+              <p className={`text-[0.6875rem] font-bold uppercase tracking-wider ${mutedText}`}>
                 Cumulative Expenditure
               </p>
               <h2 className="mt-2.5 text-2xl sm:text-3xl font-bold font-mono tracking-tight">
@@ -234,12 +234,12 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
 
         {/* HIGH RISK WORKS */}
         <div
-          className={`rounded-xl border-2 border-l-4 border-l-red-500 border-t-red-200 border-r-red-200 border-b-red-200 dark:border-l-red-500 dark:border-t-red-900/50 dark:border-r-red-900/50 dark:border-b-red-900/50 p-5 sm:p-6 shadow-sm cursor-pointer transition-all duration-200 hover:shadow-lg hover:-translate-y-0.5 ${cardClasses}`}
+          className={`rounded-xl border-2 border-l-4 border-l-red-500 border-t-red-200 border-r-red-200 border-b-red-200 dark:border-l-red-500 dark:border-t-red-900/50 dark:border-r-red-900/50 dark:border-b-red-900/50 p-3 sm:p-4 shadow-sm cursor-pointer transition-all duration-200 hover:shadow-lg hover:-translate-y-0.5 ${cardClasses}`}
           onClick={() => onDrillDown && onDrillDown("Risk Center", { risk_level: "High" })}
         >
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
-              <p className="text-[11px] font-bold uppercase tracking-wider text-red-400 dark:text-red-400">
+              <p className="text-[0.6875rem] font-bold uppercase tracking-wider text-red-400 dark:text-red-400">
                 High-Risk Anomalies
               </p>
               <h2 className="mt-2.5 text-2xl sm:text-3xl font-bold font-mono text-red-500 dark:text-red-400 tracking-tight">
@@ -269,12 +269,38 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
                 Live project distribution, fund allocation, and physical completion rates.
               </p>
             </div>
-            <span className="flex-shrink-0 rounded-lg bg-gray-100 px-2.5 py-1 font-mono text-[11px] font-bold text-gray-600 dark:bg-gray-800 dark:text-gray-300">
+            <span className="flex-shrink-0 rounded-lg bg-gray-100 px-2.5 py-1 font-mono text-[0.6875rem] font-bold text-gray-600 dark:bg-gray-800 dark:text-gray-300">
               {stateData.length} States
             </span>
           </div>
 
           <div className="space-y-3">
+            {topStates.length === 0 && (
+              <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50/70 p-4 dark:border-gray-700 dark:bg-gray-800/40">
+                <p className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                  Portfolio snapshot
+                </p>
+                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <div className="rounded-md bg-white px-3 py-2 dark:bg-gray-800">
+                    <p className="text-[0.625rem] uppercase tracking-wide text-gray-400">Monitored works</p>
+                    <p className="mt-1 text-sm font-bold text-gray-800 dark:text-gray-100">{totalWorks.toLocaleString("en-IN")}</p>
+                  </div>
+                  <div className="rounded-md bg-white px-3 py-2 dark:bg-gray-800">
+                    <p className="text-[0.625rem] uppercase tracking-wide text-gray-400">States & UTs</p>
+                    <p className="mt-1 text-sm font-bold text-gray-800 dark:text-gray-100">{(overview?.total_states || 0).toLocaleString("en-IN")}</p>
+                  </div>
+                  <div className="rounded-md bg-white px-3 py-2 dark:bg-gray-800">
+                    <p className="text-[0.625rem] uppercase tracking-wide text-gray-400">Data connection</p>
+                    <p className={`mt-1 text-sm font-bold ${backendConnected ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400"}`}>
+                      {backendConnected ? "Connected" : "Unavailable"}
+                    </p>
+                  </div>
+                </div>
+                <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
+                  Regional allocation details will appear here when state-level data is available.
+                </p>
+              </div>
+            )}
             {topStates.map((st, idx) => {
               const pct = (st.total_projects / maxProjectsInState) * 100
               return (
@@ -285,14 +311,14 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
                 >
                   <div className="mb-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 text-xs">
                     <div className="flex items-center gap-2">
-                      <span className="flex-shrink-0 inline-flex items-center justify-center h-5 w-5 rounded-full bg-gray-100 dark:bg-gray-700 text-[10px] font-bold text-gray-500 dark:text-gray-400">
+                      <span className="flex-shrink-0 inline-flex items-center justify-center h-5 w-5 rounded-full bg-gray-100 dark:bg-gray-700 text-[0.625rem] font-bold text-gray-500 dark:text-gray-400">
                         {idx + 1}
                       </span>
                       <span className="font-bold text-gray-900 dark:text-white">
                         {st.state}
                       </span>
                     </div>
-                    <div className="flex items-center gap-2 sm:gap-3 font-mono text-[11px] flex-wrap pl-7 sm:pl-0">
+                    <div className="flex items-center gap-2 sm:gap-3 font-mono text-[0.6875rem] flex-wrap pl-7 sm:pl-0">
                       <span className="text-gray-600 dark:text-gray-400">₹{formatCrore(st.total_sanctioned_amount)} Cr</span>
                       <span className="font-bold text-blue-600 dark:text-blue-400">
                         {st.total_projects.toLocaleString("en-IN")} works
@@ -326,7 +352,7 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
                 { label: "Total MPs Registered", value: (overview?.total_mps || 0).toLocaleString("en-IN"), color: "text-gray-900 dark:text-white" },
               ].map((item, i) => (
                 <div key={i} className="flex items-center justify-between py-2.5 border-b border-gray-50 dark:border-gray-700/40 last:border-0 last:pb-0">
-                  <span className="text-gray-500 dark:text-gray-400 text-[11px] uppercase tracking-wide font-sans">{item.label}</span>
+                  <span className="text-gray-500 dark:text-gray-400 text-[0.6875rem] uppercase tracking-wide font-sans">{item.label}</span>
                   <span className={`font-mono font-bold text-xs ${item.color}`}>{item.value}</span>
                 </div>
               ))}
@@ -338,7 +364,7 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
             <div className="flex items-center gap-3">
               <span className={`flex-shrink-0 h-3 w-3 rounded-full ${backendConnected ? "bg-green-500 shadow-sm shadow-green-500/50 animate-pulse" : "bg-red-500"}`} />
               <div className="min-w-0 flex-1">
-                <h4 className="text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+                <h4 className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">
                   Backend Link
                 </h4>
                 <p className="mt-0.5 text-xs font-semibold truncate">
@@ -352,10 +378,10 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
           <div className={`rounded-xl border p-4 sm:p-5 shadow-sm ${cardClasses}`}>
             <div className="mb-3 flex items-center gap-2">
               <span className="text-sm">🏛</span>
-              <h4 className="text-[10px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+              <h4 className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
                 Data Sources & Provenance
               </h4>
-              <span className="ml-auto rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[9px] font-bold text-green-700 dark:border-green-800 dark:bg-green-950/40 dark:text-green-300">
+              <span className="ml-auto rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[0.5625rem] font-bold text-green-700 dark:border-green-800 dark:bg-green-950/40 dark:text-green-300">
                 Official Government Data
               </span>
             </div>
@@ -367,17 +393,18 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
                 { source: "AI Analysis Layer", data: "Risk scoring and anomaly detection derived from available project data" },
               ].map((row, i) => (
                 <div key={i} className="flex flex-col gap-0.5 border-b border-gray-50 py-2 dark:border-gray-700/40 last:border-0 last:pb-0">
-                  <span className="text-[10px] font-bold text-gray-700 dark:text-gray-300">{row.source}</span>
-                  <span className="text-[10px] text-gray-500 dark:text-gray-400">{row.data}</span>
+                  <span className="text-[0.625rem] font-bold text-gray-700 dark:text-gray-300">{row.source}</span>
+                  <span className="text-[0.625rem] text-gray-500 dark:text-gray-400">{row.data}</span>
                 </div>
               ))}
             </div>
-            <p className="mt-2.5 border-t border-gray-50 pt-2 text-[9px] leading-relaxed text-gray-400 dark:border-gray-700/40 dark:text-gray-500">
+            <p className="mt-2.5 border-t border-gray-50 pt-2 text-[0.5625rem] leading-relaxed text-gray-400 dark:border-gray-700/40 dark:text-gray-500">
               Data is sourced from official MPLADS government records and processed by the platform for monitoring and analytical purposes.
             </p>
           </div>
         </div>
       </div>
+
     </div>
   )
 })

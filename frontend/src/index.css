@@ -9,12 +9,58 @@
 /* Apply Inter globally */
 body {
   font-family: var(--font-sans);
+  line-height: 1.45;
+}
+
+/* Font-size preferences enlarge rem-based type across the whole application.
+   Keep flexible regions allowed to shrink and let long labels wrap inside
+   their own region instead of pushing into adjacent content. */
+button,
+a,
+input,
+select,
+textarea {
+  min-width: 0;
+}
+
+button,
+a {
+  overflow-wrap: anywhere;
+}
+
+main,
+main > div,
+main section,
+[role="dialog"] {
+  min-width: 0;
+}
+
+/* Data tables remain usable at larger reading sizes without widening the
+   page or causing neighboring cards to overlap. */
+table {
+  max-width: 100%;
 }
 
 /* Responsive utilities */
 html {
+  font-size: 125%;
   -webkit-text-size-adjust: 100%;
   -webkit-tap-highlight-color: transparent;
+}
+
+/* Application-shell scroll ownership: the document itself never scrolls —
+   the app shell is viewport-locked and <main> is the single page-level
+   scroll container. Background stays fixed to the viewport; overlays and
+   the sidebar scroll independently. */
+html, body,
+#root {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+#root {
+  display: flex;
+  flex-direction: column;
 }
 
 /* Smooth scrolling on mobile */
@@ -22,6 +68,11 @@ html {
   html {
     scroll-behavior: smooth;
   }
+}
+
+/* Prevent background scroll chaining from overlays and nested scrollers */
+body * {
+  overscroll-behavior: contain;
 }
 
 /* Ensure adequate tap targets on mobile inputs/buttons */

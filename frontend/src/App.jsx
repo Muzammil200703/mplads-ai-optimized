@@ -1,8 +1,21 @@
 import { useState, useEffect, lazy, Suspense, memo, useRef } from "react"
-
 import Sidebar from "./components/Sidebar"
 import TopBar from "./components/TopBar"
 import { PageSkeleton } from "./components/Skeleton"
+import { AuthProvider, useAuth } from "./context/AuthContext"
+
+/* Application shell — single scroll-owner architecture:
+   html/body never scroll; <main> is the only page-level scroll container
+   (header and sidebar are viewport-fixed; overlays are viewport-bound).
+   Page roots use min-h-full (not min-h-screen) so they size to <main>. */
+
+const LoginView = lazy(() => import("./pages/Auth").then((m) => ({ default: m.LoginView })))
+const SignupView = lazy(() => import("./pages/Auth").then((m) => ({ default: m.SignupView })))
+const SavedProjectsPage = lazy(() => import("./pages/Workspace").then((m) => ({ default: m.SavedProjectsPage })))
+const MyInvestigationsPage = lazy(() => import("./pages/Workspace").then((m) => ({ default: m.MyInvestigationsPage })))
+const MyAuditCasesPage = lazy(() => import("./pages/Workspace").then((m) => ({ default: m.MyAuditCasesPage })))
+const AdminPage = lazy(() => import("./pages/Workspace").then((m) => ({ default: m.AdminPage })))
+const SettingsPage = lazy(() => import("./pages/Settings"))
 
 // Lazy-load page components — only the active page is loaded
 const Overview = lazy(() => import("./pages/Overview"))
@@ -28,10 +41,13 @@ function useIsMobile() {
   return isMobile
 }
 
-function App() {
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(true)
+function AppShell() {
+  const { user, loading: authLoading } = useAuth()
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [darkMode, setDarkMode] = useState(false)
-  const [currentPage, setCurrentPage] = useState("Overview")
+  const [currentPage, setCurrentPage] = useState(
+    () => (typeof window !== "undefined" && window.location.hash === "#signin" ? "Sign in" : "Overview")
+  )
   // Global search — independent from project search
   const [globalSearchQuery, setGlobalSearchQuery] = useState("")
   // Project search — only set when navigating to Projects
@@ -40,7 +56,7 @@ function App() {
   const [selectedFY, setSelectedFY] = useState("")
 
   const isMobile = useIsMobile()
-  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false)
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(true)
 
   const handleNavigate = (page) => {
     setCurrentPage(page)
@@ -99,6 +115,16 @@ function App() {
     if (isMobile) setMobileDrawerOpen(false)
   }
 
+  // Open a project drawer from a workspace page: switch to Projects, then
+  // dispatch once the page is mounted (retry covers the lazy chunk load).
+  const openProjectFromWorkspace = (projectId) => {
+    setCurrentPage("Projects")
+    if (isMobile) setMobileDrawerOpen(false)
+    const dispatch = () => window.dispatchEvent(new CustomEvent("open-project", { detail: { projectId } }))
+    setTimeout(dispatch, 400)
+    setTimeout(dispatch, 1200)
+  }
+
   // Page state preservation: track which pages have been visited so we keep them mounted
   const visitedPages = useRef(new Set(["Overview"]))
   // Add current page to visited set synchronously (not in useEffect)
@@ -107,6 +133,10 @@ function App() {
   }
 
   const renderPage = () => {
+    // Auth pages render standalone (no sidebar nav entry, still inside shell)
+    if (currentPage === "Sign in") return <LoginView onSwitch={() => setCurrentPage("Sign up")} />
+    if (currentPage === "Sign up") return <SignupView onSwitch={() => setCurrentPage("Sign in")} />
+
     const pages = [
       { key: "Overview", el: <Overview darkMode={darkMode} onDrillDown={handleDrillDown} fy={selectedFY} /> },
       { key: "Projects", el: <Projects projectSearchQuery={projectSearchQuery} onClearProjectSearch={() => setProjectSearchQuery("")} drillDownParams={drillDownParams} onClearDrillDown={() => setDrillDownParams(null)} fy={selectedFY} /> },
@@ -116,6 +146,11 @@ function App() {
       { key: "Audit Priority", el: <AuditPriority fy={selectedFY} /> },
       { key: "Compare Projects", el: <CompareProjects fy={selectedFY} /> },
       { key: "FAQ", el: <FAQ /> },
+      { key: "Settings", el: <SettingsPage darkMode={darkMode} onThemeToggle={() => setDarkMode((previous) => !previous)} /> },
+      { key: "Saved Projects", el: <SavedProjectsPage onOpenProject={openProjectFromWorkspace} /> },
+      { key: "My Investigations", el: <MyInvestigationsPage onOpenProject={openProjectFromWorkspace} /> },
+      { key: "My Audit Cases", el: <MyAuditCasesPage onOpenProject={openProjectFromWorkspace} /> },
+      { key: "Administration", el: <AdminPage /> },
     ]
     return (
       <Suspense fallback={<PageSkeleton cards={4} columns={4} />}>
@@ -128,6 +163,19 @@ function App() {
     )
   }
 
+  // Keep hash in sync so refresh/sign-in returns to the auth page when intended
+  useEffect(() => {
+    if (currentPage === "Sign in") window.location.hash = "signin"
+    else if (window.location.hash === "#signin") window.location.hash = ""
+  }, [currentPage])
+
+  // After successful sign-in/sign-up, leave the auth page
+  useEffect(() => {
+    if (user && (currentPage === "Sign in" || currentPage === "Sign up")) {
+      setCurrentPage("Overview")
+    }
+  }, [user]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const getMainMargin = () => {
     if (isMobile) return "ml-0"
     return sidebarCollapsed ? "ml-16" : "ml-60"
@@ -135,7 +183,7 @@ function App() {
 
   return (
     <div
-      className={`min-h-screen overflow-x-hidden ${
+      className={`h-[100dvh] overflow-hidden ${
         darkMode
           ? "dark bg-[#111827] text-[#f3f4f6]"
           : "bg-[#f9f9ff] text-[#151c27]"
@@ -163,8 +211,6 @@ function App() {
         onMenuClick={toggleSidebar}
         currentPage={currentPage}
         onNavigate={handleNavigate}
-        darkMode={darkMode}
-        onThemeToggle={() => setDarkMode((previous) => !previous)}
         searchQuery={globalSearchQuery}
         onSearchChange={setGlobalSearchQuery}
         onNavigateToResult={handleGlobalSearchNavigate}
@@ -174,11 +220,19 @@ function App() {
       />
 
       <main
-        className={`min-h-screen pt-[64px] lg:pt-[72px] transition-all duration-300 ease-in-out ${getMainMargin()}`}
+        className={`h-full overflow-x-auto overflow-y-auto pt-[64px] lg:pt-[72px] transition-[margin] duration-300 ease-in-out ${getMainMargin()}`}
       >
         {renderPage()}
       </main>
     </div>
+  )
+}
+
+function App() {
+  return (
+    <AuthProvider>
+      <AppShell />
+    </AuthProvider>
   )
 }
 

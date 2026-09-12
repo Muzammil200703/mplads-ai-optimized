@@ -1,0 +1,484 @@
+import { useCallback, useEffect, useState } from "react"
+import { useAuth } from "../context/AuthContext"
+import {
+  getSavedProjects, unsaveProject,
+  getMyInvestigations, updateMyInvestigation,
+  getMyAuditCases, updateCaseStatus,
+  listUsers, updateUser,
+  getAllInvestigations,
+} from "../services/api"
+import { formatMoney } from "../utils/format"
+
+/* ═══════════════════════════════════════════════════════════
+   Investigator workspace pages. Every row is real user data or
+   real project data from the backend — nothing is mocked.
+   ═══════════════════════════════════════════════════════════ */
+
+const RISK_BADGE = {
+  High: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
+  Medium: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+  Low: "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300",
+}
+
+const TIER_BADGE = {
+  P1: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
+  P2: "bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300",
+  P3: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+  P4: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
+}
+
+const INV_STATUSES = ["Open", "Under Review", "Resolved"]
+
+function PageHeader({ title, subtitle, right }) {
+  return (
+    <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+      <div>
+        <h2 className="text-2xl font-bold text-[#031632] dark:text-[#f3f4f6]">{title}</h2>
+        <p className="mt-1 text-sm text-[#44474d] dark:text-[#9ca3af]">{subtitle}</p>
+      </div>
+      {right}
+    </div>
+  )
+}
+
+function StatusSelect({ value, options, onChange, busy }) {
+  return (
+    <select
+      value={value}
+      disabled={busy}
+      onChange={(e) => onChange(e.target.value)}
+      className="rounded-lg border border-[#c5c6ce] bg-white px-2 py-1.5 text-[0.8125rem] font-semibold text-[#151c27] outline-none focus:border-[#031632] disabled:opacity-50 dark:border-[#374151] dark:bg-[#1f2937] dark:text-[#f3f4f6]"
+    >
+      {options.map((s) => <option key={s} value={s}>{s}</option>)}
+    </select>
+  )
+}
+
+function OpenProjectButton({ projectId, onOpenProject }) {
+  return (
+    <button
+      onClick={() => onOpenProject && onOpenProject(projectId)}
+      className="rounded-lg bg-[#031632] px-3 py-1.5 text-[0.8125rem] font-bold text-white transition hover:bg-[#0a2450] dark:bg-blue-600 dark:hover:bg-blue-500"
+    >
+      Open project
+    </button>
+  )
+}
+
+function EmptyState({ icon, title, hint }) {
+  return (
+    <div className="rounded-xl border border-dashed border-[#c5c6ce] bg-white/50 px-4 py-12 text-center sm:px-6 dark:border-[#374151] dark:bg-[#111827]/50">
+      <p className="text-3xl">{icon}</p>
+      <p className="mt-2 font-semibold text-[#031632] dark:text-[#f3f4f6]">{title}</p>
+      <p className="mt-1 text-sm text-[#44474d] dark:text-[#9ca3af]">{hint}</p>
+    </div>
+  )
+}
+
+function LoadingState({ label }) {
+  return (
+    <div className="flex items-center gap-3 rounded-xl border border-[#c5c6ce] bg-white px-4 py-6 dark:border-[#374151] dark:bg-[#111827]">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-blue-600 border-r-transparent" />
+      <span className="text-sm text-[#44474d] dark:text-[#9ca3af]">{label}</span>
+    </div>
+  )
+}
+
+function ErrorState({ message, onRetry }) {
+  return (
+    <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-4 dark:border-red-900/40 dark:bg-red-950/20">
+      <p className="text-sm font-semibold text-red-700 dark:text-red-300">{message}</p>
+      {onRetry && (
+        <button onClick={onRetry} className="mt-2 rounded-lg border border-red-300 px-3 py-1.5 text-[0.8125rem] font-bold text-red-700 hover:bg-red-100 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-950/40">
+          Retry
+        </button>
+      )}
+    </div>
+  )
+}
+
+function RequireRole({ minRole, children }) {
+  const { user, loading, hasRole } = useAuth()
+  if (loading) return <LoadingState label="Checking your session…" />
+  if (!user) {
+    return (
+      <EmptyState icon="🔒" title="Sign in required" hint="Use the Sign in button in the header to access your workspace." />
+    )
+  }
+  if (!hasRole(minRole)) {
+    return (
+      <EmptyState icon="⛔" title={`This page requires the ${minRole} role`} hint={`You are signed in as ${user.name} (${user.role}). Ask an administrator if you need broader access.`} />
+    )
+  }
+  return children
+}
+
+/* ═══════════════ Saved Projects ═══════════════ */
+
+export function SavedProjectsPage({ onOpenProject }) {
+  return (
+    <RequireRole minRole="analyst">
+      <SavedProjectsInner onOpenProject={onOpenProject} />
+    </RequireRole>
+  )
+}
+
+function SavedProjectsInner({ onOpenProject }) {
+  const [items, setItems] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+  const [busyId, setBusyId] = useState(null)
+
+  const load = useCallback(() => {
+    setLoading(true); setError("")
+    getSavedProjects()
+      .then((d) => setItems(d.items || []))
+      .catch((e) => setError(e.message || "Could not load saved projects"))
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const remove = async (projectId) => {
+    setBusyId(projectId)
+    try {
+      await unsaveProject(projectId)
+      setItems((list) => (list || []).filter((i) => i.project_id !== projectId))
+    } catch (e) { setError(e.message || "Could not remove the project") }
+    finally { setBusyId(null) }
+  }
+
+  return (
+    <div className="min-h-full bg-[#f9f9ff] p-4 text-[#151c27] transition-colors duration-200 sm:p-6 dark:bg-[#111827] dark:text-gray-100">
+      <div className="mx-auto max-w-[1440px] space-y-4">
+      <PageHeader
+        title="Saved Projects"
+        subtitle="Projects you bookmarked for your investigation workflow."
+        right={<span className="rounded-lg bg-white px-3 py-1.5 text-sm font-bold text-[#031632] shadow-sm dark:bg-[#111827] dark:text-[#f3f4f6]">{items ? `${items.length} saved` : "…"}</span>}
+      />
+      {loading && <LoadingState label="Loading saved projects…" />}
+      {error && <ErrorState message={error} onRetry={load} />}
+      {!loading && !error && items && items.length === 0 && (
+        <EmptyState icon="☆" title="No saved projects yet" hint="Open any project and use “Save project” to bookmark it here." />
+      )}
+      {!loading && !error && items && items.length > 0 && (
+        <div className="space-y-2.5">
+          {items.map((p) => (
+            <div key={p.project_id} className="rounded-xl border border-[#c5c6ce] bg-white p-4 dark:border-[#374151] dark:bg-[#111827]">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-mono text-xs font-bold text-[#44474d] dark:text-[#9ca3af]">#{p.project_id}</span>
+                    {p.risk_level && <span className={`rounded px-2 py-0.5 text-xs font-bold ${RISK_BADGE[p.risk_level] || "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300"}`}>{p.risk_level} risk</span>}
+                    {p.ml_anomaly && <span className="rounded bg-purple-100 px-2 py-0.5 text-xs font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">ML outlier</span>}
+                    <span className="rounded bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-600 dark:bg-gray-700 dark:text-gray-300">{p.status || "Unknown status"}</span>
+                  </div>
+                  <p className="mt-1.5 truncate text-[0.9375rem] font-semibold text-[#031632] dark:text-[#f3f4f6]">{p.project_name || "Unnamed project"}</p>
+                  <p className="mt-0.5 text-[0.8125rem] text-[#44474d] dark:text-[#9ca3af]">
+                    {p.state} — {p.constituency || "N/A"} · Sanctioned {formatMoney(p.sanctioned_amount ?? 0)} · Spent {formatMoney(p.expenditure ?? 0)}
+                  </p>
+                  <p className="mt-1 text-xs text-[#44474d]/70 dark:text-[#9ca3af]/70">
+                    Risk score {p.risk_score ?? "N/A"}/100 · Saved {p.saved_at?.replace("T", " ").slice(0, 16)}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <OpenProjectButton projectId={p.project_id} onOpenProject={onOpenProject} />
+                  <button
+                    onClick={() => remove(p.project_id)}
+                    disabled={busyId === p.project_id}
+                    className="rounded-lg border border-[#c5c6ce] px-3 py-1.5 text-[0.8125rem] font-bold text-red-600 transition hover:bg-red-50 disabled:opacity-50 dark:border-[#374151] dark:text-red-400 dark:hover:bg-red-950/30"
+                  >
+                    {busyId === p.project_id ? "Removing…" : "Remove"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      </div>
+    </div>
+  )
+}
+
+/* ═══════════════ My Investigations ═══════════════ */
+
+export function MyInvestigationsPage({ onOpenProject }) {
+  return (
+    <RequireRole minRole="analyst">
+      <MyInvestigationsInner onOpenProject={onOpenProject} />
+    </RequireRole>
+  )
+}
+
+function MyInvestigationsInner({ onOpenProject }) {
+  const [items, setItems] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+  const [busyId, setBusyId] = useState(null)
+
+  const load = useCallback(() => {
+    setLoading(true); setError("")
+    getMyInvestigations()
+      .then((d) => setItems(d.items || []))
+      .catch((e) => setError(e.message || "Could not load investigations"))
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const setStatus = async (projectId, status) => {
+    setBusyId(projectId)
+    try {
+      await updateMyInvestigation(projectId, status)
+      setItems((list) => (list || []).map((i) => (i.project_id === projectId ? { ...i, investigation_status: status } : i)))
+    } catch (e) { setError(e.message || "Could not update the investigation") }
+    finally { setBusyId(null) }
+  }
+
+  return (
+    <div className="min-h-full bg-[#f9f9ff] p-4 text-[#151c27] transition-colors duration-200 sm:p-6 dark:bg-[#111827] dark:text-gray-100">
+      <div className="mx-auto max-w-[1440px] space-y-4">
+      <PageHeader
+        title="My Investigations"
+        subtitle="Your investigation history. Evidence checklists live inside each project's drawer."
+        right={<span className="rounded-lg bg-white px-3 py-1.5 text-sm font-bold text-[#031632] shadow-sm dark:bg-[#111827] dark:text-[#f3f4f6]">{items ? `${items.length} total` : "…"}</span>}
+      />
+      {loading && <LoadingState label="Loading investigations…" />}
+      {error && <ErrorState message={error} onRetry={load} />}
+      {!loading && !error && items && items.length === 0 && (
+        <EmptyState icon="🔍" title="No investigations yet" hint="Open a flagged project, start an investigation and it will appear here." />
+      )}
+      {!loading && !error && items && items.length > 0 && (
+        <div className="space-y-2.5">
+          {items.map((inv) => (
+            <div key={inv.investigation_id} className="rounded-xl border border-[#c5c6ce] bg-white p-4 dark:border-[#374151] dark:bg-[#111827]">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-mono text-xs font-bold text-[#44474d] dark:text-[#9ca3af]">#{inv.project_id}</span>
+                    <span className="rounded bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-600 dark:bg-gray-700 dark:text-gray-300">{inv.investigation_status}</span>
+                    {inv.priority_tier && (
+                      <span className={`rounded px-2 py-0.5 text-xs font-bold ${TIER_BADGE[inv.priority_tier] || TIER_BADGE.P4}`}>
+                        {inv.priority_tier} — {inv.priority_label}
+                      </span>
+                    )}
+                    <span className={`rounded px-2 py-0.5 text-xs font-bold ${RISK_BADGE[inv.risk_score_at_start >= 67 ? "High" : inv.risk_score_at_start >= 34 ? "Medium" : "Low"] || ""}`}>
+                      Risk {inv.risk_score_at_start ?? "—"}/100
+                    </span>
+                  </div>
+                  <p className="mt-1.5 truncate text-[0.9375rem] font-semibold text-[#031632] dark:text-[#f3f4f6]">{inv.project_name || "Unnamed project"}</p>
+                  <p className="mt-0.5 text-[0.8125rem] text-[#44474d] dark:text-[#9ca3af]">{inv.state} · {inv.status || "Unknown status"}</p>
+                  {inv.recommendations?.length > 0 && (
+                    <ul className="mt-2 space-y-0.5">
+                      {inv.recommendations.slice(0, 3).map((r, i) => (
+                        <li key={i} className="flex items-start gap-1.5 text-[0.8125rem] text-[#44474d] dark:text-[#9ca3af]">
+                          <span className="mt-0.5 text-blue-600 dark:text-blue-400">→</span><span>{r}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <p className="mt-1.5 text-xs text-[#44474d]/70 dark:text-[#9ca3af]/70">
+                    Started {inv.created_at?.replace("T", " ").slice(0, 16)} · Updated {inv.updated_at?.replace("T", " ").slice(0, 16)}
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-col items-end gap-2">
+                  <OpenProjectButton projectId={inv.project_id} onOpenProject={onOpenProject} />
+                  <StatusSelect value={inv.investigation_status} options={INV_STATUSES} busy={busyId === inv.project_id} onChange={(s) => setStatus(inv.project_id, s)} />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      </div>
+    </div>
+  )
+}
+
+/* ═══════════════ My Audit Cases ═══════════════ */
+
+export function MyAuditCasesPage({ onOpenProject }) {
+  return (
+    <RequireRole minRole="auditor">
+      <MyAuditCasesInner onOpenProject={onOpenProject} />
+    </RequireRole>
+  )
+}
+
+function MyAuditCasesInner({ onOpenProject }) {
+  const [items, setItems] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+  const [busyId, setBusyId] = useState(null)
+
+  const load = useCallback(() => {
+    setLoading(true); setError("")
+    getMyAuditCases()
+      .then((d) => setItems(d.items || []))
+      .catch((e) => setError(e.message || "Could not load audit cases"))
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const setStatus = async (projectId, status) => {
+    setBusyId(projectId)
+    try {
+      await updateCaseStatus(projectId, status)
+      setItems((list) => (list || []).map((c) => (c.project_id === projectId ? { ...c, case_status: status, investigation_status: status } : c)))
+    } catch (e) { setError(e.message || "Could not update the case") }
+    finally { setBusyId(null) }
+  }
+
+  return (
+    <div className="min-h-full bg-[#f9f9ff] p-4 text-[#151c27] transition-colors duration-200 sm:p-6 dark:bg-[#111827] dark:text-gray-100">
+      <div className="mx-auto max-w-[1440px] space-y-4">
+      <PageHeader
+        title="My Audit Cases"
+        subtitle="Cases you saved from the case generator. Case content is always regenerated from live project data."
+        right={<span className="rounded-lg bg-white px-3 py-1.5 text-sm font-bold text-[#031632] shadow-sm dark:bg-[#111827] dark:text-[#f3f4f6]">{items ? `${items.length} cases` : "…"}</span>}
+      />
+      {loading && <LoadingState label="Loading audit cases…" />}
+      {error && <ErrorState message={error} onRetry={load} />}
+      {!loading && !error && items && items.length === 0 && (
+        <EmptyState icon="📁" title="No audit cases yet" hint="Open a project → Investigate → Audit Case → “Save case” to add one." />
+      )}
+      {!loading && !error && items && items.length > 0 && (
+        <div className="space-y-2.5">
+          {items.map((c) => (
+            <div key={c.case_row_id} className="rounded-xl border border-[#c5c6ce] bg-white p-4 dark:border-[#374151] dark:bg-[#111827]">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded bg-[#f0f3ff] px-2 py-0.5 font-mono text-xs font-bold text-[#031632] dark:bg-[#1f2937] dark:text-[#f3f4f6]">{c.case_id}</span>
+                    {c.priority_tier && (
+                      <span className={`rounded px-2 py-0.5 text-xs font-bold ${TIER_BADGE[c.priority_tier] || TIER_BADGE.P4}`}>
+                        {c.priority_tier} — {c.priority_label}
+                      </span>
+                    )}
+                    {c.risk_level && <span className={`rounded px-2 py-0.5 text-xs font-bold ${RISK_BADGE[c.risk_level] || "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300"}`}>{c.risk_level} risk · {c.risk_score}/100</span>}
+                    <span className="rounded bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-600 dark:bg-gray-700 dark:text-gray-300">{c.case_status}</span>
+                    {c.investigation_status && <span className="text-xs text-[#44474d]/70 dark:text-[#9ca3af]/70">investigation: {c.investigation_status}</span>}
+                  </div>
+                  <p className="mt-1.5 truncate text-[0.9375rem] font-semibold text-[#031632] dark:text-[#f3f4f6]">{c.project_name || "Unnamed project"}</p>
+                  <p className="mt-0.5 text-[0.8125rem] text-[#44474d] dark:text-[#9ca3af]">
+                    #{c.project_id} · {c.state} — {c.constituency || "N/A"} · Created {c.created_at?.replace("T", " ").slice(0, 16)}
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-col items-end gap-2">
+                  <OpenProjectButton projectId={c.project_id} onOpenProject={onOpenProject} />
+                  <StatusSelect value={c.case_status} options={INV_STATUSES} busy={busyId === c.project_id} onChange={(s) => setStatus(c.project_id, s)} />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      </div>
+    </div>
+  )
+}
+
+/* ═══════════════ Admin: users + system-wide investigations ═══════════════ */
+
+export function AdminPage() {
+  return (
+    <RequireRole minRole="admin">
+      <AdminInner />
+    </RequireRole>
+  )
+}
+
+function AdminInner() {
+  const [users, setUsers] = useState(null)
+  const [invs, setInvs] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+  const [busyId, setBusyId] = useState(null)
+
+  const load = useCallback(() => {
+    setLoading(true); setError("")
+    Promise.all([listUsers(), getAllInvestigations()])
+      .then(([u, i]) => { setUsers(u.users || []); setInvs(i.items || []) })
+      .catch((e) => setError(e.message || "Could not load admin data"))
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const changeRole = async (userId, role) => {
+    setBusyId(userId)
+    try { await updateUser(userId, { role }); setUsers((list) => (list || []).map((u) => (u.id === userId ? { ...u, role } : u))) }
+    catch (e) { setError(e.message || "Could not update the user") }
+    finally { setBusyId(null) }
+  }
+
+  const toggleActive = async (u) => {
+    setBusyId(u.id)
+    try { await updateUser(u.id, { is_active: !u.is_active }); setUsers((list) => (list || []).map((x) => (x.id === u.id ? { ...x, is_active: !u.is_active } : x))) }
+    catch (e) { setError(e.message || "Could not update the user") }
+    finally { setBusyId(null) }
+  }
+
+  return (
+    <div>
+      <PageHeader title="Administration" subtitle="User accounts and system-wide investigation activity." />
+      {loading && <LoadingState label="Loading admin data…" />}
+      {error && <ErrorState message={error} onRetry={load} />}
+
+      {!loading && users && (
+        <div className="mb-6 rounded-xl border border-[#c5c6ce] bg-white p-4 dark:border-[#374151] dark:bg-[#111827]">
+          <h3 className="mb-3 text-lg font-bold text-[#031632] dark:text-[#f3f4f6]">Users ({users.length})</h3>
+          <div className="space-y-2">
+            {users.map((u) => (
+              <div key={u.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#c5c6ce] px-3 py-2.5 dark:border-[#374151]">
+                <div className="min-w-0">
+                  <p className="truncate text-[0.9375rem] font-semibold text-[#031632] dark:text-[#f3f4f6]">{u.name} {!u.is_active && <span className="ml-1 rounded bg-red-100 px-1.5 py-0.5 text-xs font-bold text-red-700 dark:bg-red-950 dark:text-red-300">disabled</span>}</p>
+                  <p className="truncate text-[0.8125rem] text-[#44474d] dark:text-[#9ca3af]">{u.email} · joined {u.created_at?.slice(0, 10)}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={u.role}
+                    disabled={busyId === u.id}
+                    onChange={(e) => changeRole(u.id, e.target.value)}
+                    className="rounded-lg border border-[#c5c6ce] bg-white px-2 py-1.5 text-[0.8125rem] font-semibold dark:border-[#374151] dark:bg-[#1f2937] dark:text-[#f3f4f6]"
+                  >
+                    {["public", "analyst", "auditor", "admin"].map((r) => <option key={r} value={r}>{r}</option>)}
+                  </select>
+                  <button
+                    onClick={() => toggleActive(u)}
+                    disabled={busyId === u.id}
+                    className="rounded-lg border border-[#c5c6ce] px-3 py-1.5 text-[0.8125rem] font-bold text-[#151c27] transition hover:bg-gray-50 disabled:opacity-50 dark:border-[#374151] dark:text-[#f3f4f6] dark:hover:bg-[#1f2937]"
+                  >
+                    {u.is_active ? "Deactivate" : "Activate"}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!loading && invs && (
+        <div className="rounded-xl border border-[#c5c6ce] bg-white p-4 dark:border-[#374151] dark:bg-[#111827]">
+          <h3 className="mb-3 text-lg font-bold text-[#031632] dark:text-[#f3f4f6]">System-wide investigations ({invs.length})</h3>
+          {invs.length === 0 ? (
+            <p className="text-sm text-[#44474d] dark:text-[#9ca3af]">No user investigations recorded yet.</p>
+          ) : (
+            <div className="space-y-2">
+              {invs.map((i) => (
+                <div key={i.investigation_id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[#c5c6ce] px-3 py-2.5 dark:border-[#374151]">
+                  <div className="min-w-0">
+                    <p className="truncate text-[0.875rem] font-semibold text-[#031632] dark:text-[#f3f4f6]">#{i.project_id} {i.project_name}</p>
+                    <p className="text-[0.8125rem] text-[#44474d] dark:text-[#9ca3af]">{i.user_name} ({i.user_email}) · {i.investigation_status} · {i.priority_tier || "—"} · updated {i.updated_at?.replace("T", " ").slice(0, 16)}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}

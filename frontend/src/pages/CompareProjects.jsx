@@ -282,7 +282,7 @@ export default function CompareProjects({ fy }) {
   const colWidth = Math.max(260, Math.floor(1000 / Math.max(enriched.length, 1)))
 
   return (
-    <div className="min-h-screen bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-gray-100">
+    <div className="min-h-full bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-gray-100">
       <div className="mx-auto max-w-[1440px] space-y-5">
 
         {/* HEADER */}
@@ -305,7 +305,7 @@ export default function CompareProjects({ fy }) {
             {hasComparison && (
               <button
                 onClick={handleClearSearch}
-                className="text-[10px] font-bold uppercase tracking-wider text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
               >
                 {searchFocused ? "Done" : "+ Search More"}
               </button>
@@ -333,7 +333,7 @@ export default function CompareProjects({ fy }) {
 
           {showSearchResults && (
             <div className="mt-3 max-h-72 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-700">
-              <div className="bg-gray-50 px-4 py-2 text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:bg-[#172033]">
+              <div className="bg-gray-50 px-4 py-2 text-[0.625rem] font-bold uppercase tracking-wider text-gray-400 dark:bg-[#172033]">
                 {searchTotal.toLocaleString("en-IN")}+ results — showing first {results.length}
               </div>
               {results.map((proj) => {
@@ -348,12 +348,12 @@ export default function CompareProjects({ fy }) {
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <span className="font-mono text-[10px] font-bold text-gray-400">#{proj.id}</span>
+                        <span className="font-mono text-[0.625rem] font-bold text-gray-400">#{proj.id}</span>
                         <span className="truncate text-sm font-semibold text-gray-900 dark:text-white">
                           {proj.project_name || "Unnamed Project"}
                         </span>
                       </div>
-                      <p className="mt-0.5 text-[11px] text-gray-400 dark:text-gray-500">
+                      <p className="mt-0.5 text-[0.6875rem] text-gray-400 dark:text-gray-500">
                         {proj.state || "N/A"}{proj.constituency ? ` · ${proj.constituency}` : ""} · {fmtMoney(proj.sanctioned_amount)}
                       </p>
                     </div>
@@ -361,7 +361,7 @@ export default function CompareProjects({ fy }) {
                       onMouseDown={(e) => e.preventDefault()}
                       onClick={() => isSelected ? handleRemove(proj.id) : handleAdd(proj)}
                       disabled={!isSelected && isFull}
-                      className={`shrink-0 rounded-lg px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider transition ${
+                      className={`shrink-0 rounded-lg px-3 py-1.5 text-[0.625rem] font-bold uppercase tracking-wider transition ${
                         isSelected
                           ? "border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 dark:border-red-800 dark:bg-red-950/50 dark:text-red-300"
                           : isFull
@@ -386,7 +386,7 @@ export default function CompareProjects({ fy }) {
         {/* SELECTED PROJECTS CHIPS */}
         {selected.length > 0 && (
           <div className="rounded-xl border border-blue-200 bg-blue-50/50 p-4 dark:border-blue-800 dark:bg-blue-950/30">
-            <div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-blue-500 dark:text-blue-400">
+            <div className="mb-2 text-[0.625rem] font-bold uppercase tracking-wider text-blue-500 dark:text-blue-400">
               Comparing {selected.length}/{MAX_COMPARE} Projects
             </div>
             <div className="flex flex-wrap gap-2">
@@ -397,7 +397,7 @@ export default function CompareProjects({ fy }) {
                     key={s.id}
                     className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-800 shadow-sm dark:border-blue-800 dark:bg-[#1f2937] dark:text-blue-200"
                   >
-                    <span className="font-mono text-[10px] font-bold text-blue-400">#{s.id}</span>
+                    <span className="font-mono text-[0.625rem] font-bold text-blue-400">#{s.id}</span>
                     <span className="max-w-[180px] truncate">{p.project_name || "Unnamed"}</span>
                     <button
                       onClick={() => handleRemove(s.id)}
@@ -468,7 +468,7 @@ export default function CompareProjects({ fy }) {
                   <thead>
                     <tr className="border-b border-gray-200 dark:border-gray-700">
                       <th className="sticky left-0 z-20 bg-gray-50 p-4 text-left align-top dark:bg-[#172033]">
-                        <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400">
+                        <span className="text-[0.6875rem] font-bold uppercase tracking-wider text-gray-400">
                           Metric
                         </span>
                       </th>
@@ -504,7 +504,7 @@ export default function CompareProjects({ fy }) {
                             >
                               {p.project_name || "Unnamed Project"}
                             </p>
-                            <p className="text-[11px] text-gray-400 dark:text-gray-500">
+                            <p className="text-[0.6875rem] text-gray-400 dark:text-gray-500">
                               {p.state || "N/A"}{p.constituency ? ` · ${p.constituency}` : ""}
                             </p>
                           </div>
@@ -573,7 +573,7 @@ export default function CompareProjects({ fy }) {
                                   key={p.id}
                                   className="border-l border-gray-100 p-4 dark:border-gray-700/60"
                                 >
-                                  <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-bold uppercase ${riskBadgeClass(val)}`}>
+                                  <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[0.6875rem] font-bold uppercase ${riskBadgeClass(val)}`}>
                                     {val}
                                   </span>
                                 </td>
@@ -589,7 +589,7 @@ export default function CompareProjects({ fy }) {
                                   className="border-l border-gray-100 p-4 dark:border-gray-700/60"
                                 >
                                   <span
-                                    className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-bold uppercase ${
+                                    className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[0.6875rem] font-bold uppercase ${
                                       isYes
                                         ? "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/70 dark:text-amber-300"
                                         : "border-green-200 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-950/70 dark:text-green-300"
@@ -659,7 +659,7 @@ export default function CompareProjects({ fy }) {
                                         </li>
                                       ))}
                                       {reasons.length > 5 && (
-                                        <li className="text-[10px] font-semibold text-gray-400 dark:text-gray-500">
+                                        <li className="text-[0.625rem] font-semibold text-gray-400 dark:text-gray-500">
                                           +{reasons.length - 5} more
                                         </li>
                                       )}

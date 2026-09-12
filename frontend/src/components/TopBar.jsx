@@ -1,4 +1,5 @@
 import { getFYs } from "../services/api"
+import ProfileMenu from "./ProfileMenu"
 import { useEffect, useState, useRef, useCallback } from "react"
 
 // ─── Search History (localStorage) ──────────────────────────────────
@@ -47,8 +48,6 @@ function TopBar({
   onMenuClick,
   currentPage,
   onNavigate,
-  darkMode,
-  onThemeToggle,
   searchQuery,
   onSearchChange,
   onNavigateToResult,
@@ -172,10 +171,13 @@ function TopBar({
     >
       <div
         className={`
-flex h-full items-center gap-1.5 px-2 sm:gap-3 sm:px-4 lg:gap-4 lg:px-5 transition-all duration-300 ${
-          isMobile ? "pl-2" : collapsed ? "pl-16" : "pl-60"
+flex h-full min-w-0 items-center gap-1.5 px-2 sm:gap-3 sm:px-4 lg:gap-4 lg:px-5 transition-all duration-300 ${
+          isMobile || collapsed ? "" : "pl-60"
         }
         `}
+        style={{
+          paddingLeft: isMobile ? "1.25rem" : collapsed ? "0.75rem" : undefined,
+        }}
       >
         {/* MENU BUTTON */}
         <button
@@ -204,7 +206,7 @@ flex h-full items-center gap-1.5 px-2 sm:gap-3 sm:px-4 lg:gap-4 lg:px-5 transiti
         </button>
 
         {/* NAVIGATION */}
-        <nav className="hidden items-center gap-1 lg:gap-1.5 lg:flex">
+        <nav className="hidden shrink-0 items-center gap-1 lg:gap-1.5 lg:flex">
           {navigation.map((item) => {
             const active = currentPage === item
             return (
@@ -214,7 +216,7 @@ flex h-full items-center gap-1.5 px-2 sm:gap-3 sm:px-4 lg:gap-4 lg:px-5 transiti
                 className={`
                   relative whitespace-nowrap
                   rounded-md px-2.5 py-1.5
-                  text-[13px] font-medium
+                  text-[0.8125rem] font-medium
                   transition-all duration-150
                   ${
                     active
@@ -239,16 +241,28 @@ flex h-full items-center gap-1.5 px-2 sm:gap-3 sm:px-4 lg:gap-4 lg:px-5 transiti
         </nav>
 
         {/* SEARCH + HISTORY DROPDOWN */}
-        <div className="relative min-w-0 flex-1" ref={historyRef}>
+        <div className="relative min-w-0 flex-[1_1_0%]" ref={historyRef}>
           <span
             className="
-              pointer-events-none absolute left-3
-              top-1/2 -translate-y-1/2
-              text-sm text-[#75777e]
+              pointer-events-none absolute inset-y-0 left-3
+              flex items-center
+              text-[#75777e]
               dark:text-[#9ca3af]
             "
           >
-            🔍
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="h-[1.125rem] w-[1.125rem]"
+              aria-hidden="true"
+            >
+              <circle cx="11" cy="11" r="8" />
+              <path d="m21 21-4.3-4.3" />
+            </svg>
           </span>
 
           <input
@@ -307,14 +321,14 @@ flex h-full items-center gap-1.5 px-2 sm:gap-3 sm:px-4 lg:gap-4 lg:px-5 transiti
               ) : (
                 <>
                   <div className="flex items-center justify-between border-b border-[#f0f1f3] px-4 py-2 dark:border-[#374151]">
-                    <span className="text-[11px] font-semibold uppercase tracking-wide text-[#9ca3af] dark:text-[#6b7280]">
+                    <span className="text-[0.6875rem] font-semibold uppercase tracking-wide text-[#9ca3af] dark:text-[#6b7280]">
                       Recent Searches
                     </span>
                     <button
                       onMouseDown={(e) => e.preventDefault()}
                       onClick={handleClearHistory}
                       className="
-                        text-[11px] font-medium text-[#bb0011]
+                        text-[0.6875rem] font-medium text-[#bb0011]
                         transition-colors hover:text-[#930010]
                         dark:text-[#f87171] dark:hover:text-[#fca5a5]
                       "
@@ -362,7 +376,7 @@ flex h-full items-center gap-1.5 px-2 sm:gap-3 sm:px-4 lg:gap-4 lg:px-5 transiti
         >
           <span
             className="
-              text-[11px] font-semibold uppercase tracking-wide
+              text-[0.6875rem] font-semibold uppercase tracking-wide
               text-[#75777e] dark:text-[#6b7280]
             "
           >
@@ -390,35 +404,8 @@ flex h-full items-center gap-1.5 px-2 sm:gap-3 sm:px-4 lg:gap-4 lg:px-5 transiti
           </select>
         </div>
 
-        {/* DARK MODE */}
-        <button
-          onClick={onThemeToggle}
-          className="
-            flex h-10 w-10 shrink-0
-            items-center justify-center
-            rounded-lg text-lg
-            transition-all duration-150
-            hover:bg-[#eef1f8] dark:hover:bg-[#1f2937]
-          "
-          aria-label="Toggle dark mode"
-          title={darkMode ? "Switch to light mode" : "Switch to dark mode"}
-        >
-          {darkMode ? "☀️" : "🌙"}
-        </button>
-
-        {/* PROFILE */}
-        <button
-          className="
-            flex h-10 w-10 shrink-0
-            items-center justify-center
-            rounded-lg text-lg
-            transition-all duration-150
-            hover:bg-[#eef1f8] dark:hover:bg-[#1f2937]
-          "
-          aria-label="Profile"
-        >
-          👤
-        </button>
+        {/* PROFILE / SIGN-IN */}
+        <ProfileMenu onNavigate={onNavigate} />
       </div>
     </header>
   )

@@ -118,7 +118,7 @@ function Reports() {
   }
 
   return (
-    <div className="min-h-screen bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-[#f3f4f6]">
+    <div className="min-h-full bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-[#f3f4f6]">
       <div className="mx-auto max-w-[1440px] space-y-4 sm:space-y-6">
         <div>
           <h2 className="text-2xl font-bold text-[#031632] dark:text-white">
@@ -144,7 +144,7 @@ function Reports() {
               </h3>
               <div className="space-y-3">
                 <div>
-                  <label className="block text-[11px] font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">Report Type</label>
+                  <label className="block text-[0.6875rem] font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">Report Type</label>
                   <select value={reportType} onChange={(e) => setReportType(e.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
                     <option>Project Audit Report</option>
                     <option>Anomaly Summary Report</option>
@@ -154,7 +154,7 @@ function Reports() {
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">State Scope</label>
+                  <label className="block text-[0.6875rem] font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">State Scope</label>
                   <select value={selectedState} onChange={(e) => setSelectedState(e.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
                     <option value="">All States (Nationwide)</option>
                     {states.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -162,7 +162,7 @@ function Reports() {
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">Constituency Scope</label>
+                  <label className="block text-[0.6875rem] font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">Constituency Scope</label>
                   <select value={selectedConstituency} disabled={!selectedState} onChange={(e) => setSelectedConstituency(e.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
                     <option value="">{selectedState ? "All Constituencies" : "Select State First"}</option>
                     {constituencies.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -171,7 +171,7 @@ function Reports() {
 
                 {reportType === "Anomaly Summary Report" && (
                   <div>
-                    <label className="block text-[11px] font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">Risk Level</label>
+                    <label className="block text-[0.6875rem] font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">Risk Level</label>
                     <select value={selectedRiskLevel} onChange={(e) => setSelectedRiskLevel(e.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
                       <option value="">All Risk Levels</option>
                       <option value="High">High Risk</option>
@@ -182,7 +182,7 @@ function Reports() {
                 )}
 
                 <div>
-                  <label className="block text-[11px] font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">Export Format</label>
+                  <label className="block text-[0.6875rem] font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">Export Format</label>
                   <select value={format} onChange={(e) => setFormat(e.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
                     <option>CSV Dataset (.csv)</option>
                     <option>JSON Report (.json)</option>
@@ -191,7 +191,7 @@ function Reports() {
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">Sort By</label>
+                  <label className="block text-[0.6875rem] font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">Sort By</label>
                   <div className="mt-1 flex gap-2">
                     <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className="flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
                       <option value="">Default Order</option>
@@ -215,11 +215,11 @@ function Reports() {
                 {/* Export count preview */}
                 {exportCount !== null && (
                   <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-center dark:border-blue-900/60 dark:bg-blue-950/30">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-blue-600 dark:text-blue-300">Full Dataset Export</p>
+                    <p className="text-[0.625rem] font-bold uppercase tracking-wider text-blue-600 dark:text-blue-300">Full Dataset Export</p>
                     <p className="mt-1 font-mono text-lg font-bold text-blue-800 dark:text-blue-200">
                       {exportCount.toLocaleString("en-IN")} records
                     </p>
-                    <p className="text-[10px] text-blue-500 dark:text-blue-400">
+                    <p className="text-[0.625rem] text-blue-500 dark:text-blue-400">
                       Server-side query — all matching records will be exported
                     </p>
                   </div>
@@ -269,15 +269,15 @@ function Reports() {
                   </p>
                   <div className="mt-4 grid grid-cols-3 gap-4 text-center">
                     <div>
-                      <p className="text-[10px] font-bold uppercase text-gray-400">Report Type</p>
+                      <p className="text-[0.625rem] font-bold uppercase text-gray-400">Report Type</p>
                       <p className="mt-1 text-xs font-semibold">{reportType}</p>
                     </div>
                     <div>
-                      <p className="text-[10px] font-bold uppercase text-gray-400">Scope</p>
+                      <p className="text-[0.625rem] font-bold uppercase text-gray-400">Scope</p>
                       <p className="mt-1 text-xs font-semibold">{selectedState || "Nationwide"}</p>
                     </div>
                     <div>
-                      <p className="text-[10px] font-bold uppercase text-gray-400">Format</p>
+                      <p className="text-[0.625rem] font-bold uppercase text-gray-400">Format</p>
                       <p className="mt-1 text-xs font-semibold">{format}</p>
                     </div>
                   </div>
@@ -288,7 +288,7 @@ function Reports() {
                     <span className="mt-0.5 text-green-500">✓</span>
                     <div>
                       <p className="text-xs font-bold text-green-700 dark:text-green-400">Export includes all matching records</p>
-                      <p className="mt-0.5 text-[10px] text-green-600 dark:text-green-500">
+                      <p className="mt-0.5 text-[0.625rem] text-green-600 dark:text-green-500">
                         The server queries the database directly. Filters for state, constituency, risk level, and status
                         are applied at the SQL level for maximum efficiency.
                       </p>

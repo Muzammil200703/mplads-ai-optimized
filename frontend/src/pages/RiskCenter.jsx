@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, memo } from "react"
 import { getAnomalies, getAnomaliesSummary, getStates, getConstituencies, getProjectDetail, getAnomalyAnalytics, getRiskExplanation } from "../services/api"
+import { TableRowsSkeleton, CardsSkeleton, MobileCardsSkeleton } from "../components/Skeletons"
 import { formatMoney, formatNumber } from "../utils/format"
 
 /* ──────────── Donut Chart (pure CSS) ──────────── */
@@ -256,7 +257,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
   const rd = analytics?.risk_distribution || { high: 0, medium: 0, low: 0, none: 0 }
 
   return (
-    <div className="min-h-screen bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-[#f3f4f6]">
+    <div className="min-h-full bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-[#f3f4f6]">
       <div className="mx-auto max-w-[1440px] space-y-4 sm:space-y-6">
 
         {/* HEADER */}
@@ -280,7 +281,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
           ].map((card) => (
             <div key={card.label} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
               <div className="flex items-center justify-between">
-                <p className="text-[11px] font-bold uppercase tracking-wider text-gray-400">{card.label}</p>
+                <p className="text-[0.6875rem] font-bold uppercase tracking-wider text-gray-400">{card.label}</p>
                 <span className="text-lg">{card.icon}</span>
               </div>
               <p className={`mt-1 font-mono text-3xl font-bold ${card.text}`}>{card.value.toLocaleString("en-IN")}</p>
@@ -327,7 +328,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
             {/* FY Distribution — compact vertical bar chart */}
             <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
               <h3 className="mb-1 text-sm font-bold text-gray-600 dark:text-gray-300">Anomalies by Financial Year</h3>
-              <p className="mb-4 text-[11px] text-gray-400 dark:text-gray-500">Number of flagged projects per FY period</p>
+              <p className="mb-4 text-[0.6875rem] text-gray-400 dark:text-gray-500">Number of flagged projects per FY period</p>
               {analytics.fy_distribution && analytics.fy_distribution.length > 0 ? (
                 <FYearChart items={analytics.fy_distribution} />
               ) : (
@@ -392,7 +393,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
         <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-5">
             <div>
-              <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Search</label>
+              <label className="block text-[0.625rem] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Search</label>
               <input
                 value={searchQuery}
                 onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1) }}
@@ -402,7 +403,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
               />
             </div>
             <div>
-              <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Severity</label>
+              <label className="block text-[0.625rem] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Severity</label>
               <select value={filterSeverity} onChange={(e) => { setFilterSeverity(e.target.value); setCurrentPage(1) }}
                 className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
                 <option value="">All Severity</option>
@@ -413,7 +414,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
               </select>
             </div>
             <div>
-              <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">State</label>
+              <label className="block text-[0.625rem] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">State</label>
               <select value={filterState} onChange={(e) => { setFilterState(e.target.value); setCurrentPage(1) }}
                 className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
                 <option value="">All States</option>
@@ -421,7 +422,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
               </select>
             </div>
             <div>
-              <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Constituency</label>
+              <label className="block text-[0.625rem] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Constituency</label>
               <select value={filterConstituency} disabled={!filterState}
                 onChange={(e) => { setFilterConstituency(e.target.value); setCurrentPage(1) }}
                 className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
@@ -445,7 +446,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
 
         {/* SORT ROW */}
         <div className="flex flex-wrap items-center gap-1.5 sm:gap-3">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Sort:</span>
+          <span className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">Sort:</span>
           {[
             { value: "risk_score", label: "Risk Score" },
             { value: "sanctioned_amount", label: "Sanctioned" },
@@ -460,7 +461,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                 else { setSortBy(opt.value); setSortDir(opt.value === "project_name" || opt.value === "id" ? "asc" : "desc") }
                 setCurrentPage(1)
               }}
-              className={`rounded-lg px-3 py-1.5 text-[11px] font-bold transition ${sortBy === opt.value ? "bg-[#031632] text-white dark:bg-blue-600" : "border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:bg-[#1f2937] dark:text-gray-300"}`}>
+              className={`rounded-lg px-3 py-1.5 text-[0.6875rem] font-bold transition ${sortBy === opt.value ? "bg-[#031632] text-white dark:bg-blue-600" : "border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:bg-[#1f2937] dark:text-gray-300"}`}>
               {opt.label}{sortBy === opt.value && <span className="ml-1">{sortDir === "asc" ? "↑" : "↓"}</span>}
             </button>
           ))}
@@ -469,10 +470,10 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
         {/* ANOMALY TABLE */}
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
           {loading ? (
-            <div className="p-16 text-center">
-              <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent" />
-              <p className="mt-3 text-sm font-medium">Running anomaly diagnostics...</p>
-            </div>
+            <>
+              <TableRowsSkeleton rows={8} cols={5} className="hidden lg:block" />
+              <MobileCardsSkeleton rows={5} />
+            </>
           ) : anomalies.length === 0 ? (
             <div className="p-16 text-center text-sm text-gray-500">No anomalies match the current filters.</div>
           ) : (
@@ -481,7 +482,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
               <div className="hidden lg:block overflow-x-auto">
                 <table className="w-full min-w-[900px]">
                   <thead>
-                    <tr className="border-b-2 border-gray-200 bg-gray-50 text-left text-[10px] font-bold uppercase tracking-widest text-gray-500 dark:border-gray-700 dark:bg-[#172033] dark:text-gray-400">
+                    <tr className="border-b-2 border-gray-200 bg-gray-50 text-left text-[0.625rem] font-bold uppercase tracking-widest text-gray-500 dark:border-gray-700 dark:bg-[#172033] dark:text-gray-400">
                       <th className="px-4 py-3">Project</th>
                       <th className="px-4 py-3">State / Constituency</th>
                       <th className="px-4 py-3 text-right">Sanctioned</th>
@@ -497,9 +498,9 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                     {anomalies.map((a) => (
                       <tr key={a.project_id} className="cursor-pointer border-b border-gray-100 transition hover:bg-blue-50/40 dark:border-gray-700/60 dark:hover:bg-[#253247]" onClick={() => handleOpenDetail(a)}>
                         <td className="px-4 py-2.5">
-                          <span className="font-mono text-[10px] font-bold text-gray-400">#{a.project_id}</span>
+                          <span className="font-mono text-[0.625rem] font-bold text-gray-400">#{a.project_id}</span>
                           <p className="max-w-[250px] truncate text-sm font-semibold text-gray-900 dark:text-white" title={a.project_name}>{a.project_name || "Unnamed"}</p>
-                          <p className="text-[11px] text-gray-400">{a.project_type || "General"}</p>
+                          <p className="text-[0.6875rem] text-gray-400">{a.project_type || "General"}</p>
                         </td>
                         <td className="px-4 py-2.5 text-xs">
                           <p className="font-semibold">{a.state || "N/A"}</p>
@@ -510,14 +511,14 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                         <td className="px-4 py-2.5 text-center font-mono text-xs font-bold">{a.completion_percentage}%</td>
                         <td className="px-4 py-2.5 text-center">
                           <div className="flex items-center justify-center gap-1">
-                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${a.risk_level === "High" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300" : a.risk_level === "Medium" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300" : a.risk_level === "Low" ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300"}`}>{a.risk_level}</span>
+                            <span className={`rounded-full px-2 py-0.5 text-[0.625rem] font-bold ${a.risk_level === "High" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300" : a.risk_level === "Medium" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300" : a.risk_level === "Low" ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300"}`}>{a.risk_level}</span>
                             {getStaleProgressFlag(a) && (
-                              <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-1 py-0.5 text-[9px] font-bold text-amber-600 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300" title="Data Update Notice: Reported progress or expenditure may not reflect the latest project status. A risk score indicates an anomaly based on available data and does not by itself confirm project delay or irregularity.">⚠</span>
+                              <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-1 py-0.5 text-[0.5625rem] font-bold text-amber-600 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300" title="Data Update Notice: Reported progress or expenditure may not reflect the latest project status. A risk score indicates an anomaly based on available data and does not by itself confirm project delay or irregularity.">⚠</span>
                             )}
                           </div>
                         </td>
                         <td className="px-4 py-2.5 text-center font-mono text-sm font-bold">{a.risk_score}</td>
-                        <td className="px-4 py-2.5 text-center">{a.ml_anomaly ? <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">ML</span> : <span className="text-gray-300">—</span>}</td>
+                        <td className="px-4 py-2.5 text-center">{a.ml_anomaly ? <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[0.625rem] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">ML</span> : <span className="text-gray-300">—</span>}</td>
                         <td className="px-4 py-2.5 text-center"><button onClick={(e) => { e.stopPropagation(); handleOpenDetail(a) }} className="rounded p-1 text-gray-600 hover:bg-gray-200 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700">👁</button></td>
                       </tr>
                     ))}
@@ -532,15 +533,15 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="font-mono text-[10px] font-bold text-gray-400">#{a.project_id}</span>
-                          <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${a.risk_level === "High" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300" : a.risk_level === "Medium" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300" : "bg-gray-100 text-gray-600 dark:bg-gray-700"}`}>{a.risk_level}</span>
+                          <span className="font-mono text-[0.625rem] font-bold text-gray-400">#{a.project_id}</span>
+                          <span className={`rounded-full px-1.5 py-0.5 text-[0.625rem] font-bold ${a.risk_level === "High" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300" : a.risk_level === "Medium" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300" : "bg-gray-100 text-gray-600 dark:bg-gray-700"}`}>{a.risk_level}</span>
                           {getStaleProgressFlag(a) && (
-                            <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-1 py-0.5 text-[9px] font-bold text-amber-600 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300" title="Data Update Notice: Reported progress or expenditure may not reflect the latest project status.">⚠</span>
+                            <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-1 py-0.5 text-[0.5625rem] font-bold text-amber-600 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300" title="Data Update Notice: Reported progress or expenditure may not reflect the latest project status.">⚠</span>
                           )}
-                          {a.ml_anomaly && <span className="rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">ML</span>}
+                          {a.ml_anomaly && <span className="rounded-full bg-purple-100 px-1.5 py-0.5 text-[0.625rem] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">ML</span>}
                         </div>
                         <p className="mt-1 truncate font-semibold text-sm text-gray-900 dark:text-white" title={a.project_name}>{a.project_name || "Unnamed"}</p>
-                        <p className="text-[11px] text-gray-500">{a.state || "N/A"}{a.constituency ? `, ${a.constituency}` : ""}</p>
+                        <p className="text-[0.6875rem] text-gray-500">{a.state || "N/A"}{a.constituency ? `, ${a.constituency}` : ""}</p>
                       </div>
                       <div className="text-right shrink-0">
                         <p className="font-mono text-sm font-bold">Score {a.risk_score}</p>
@@ -636,14 +637,14 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                     {s.risk_level} Risk — Score {s.risk_score}/100
                   </span>
                   {s.ml_anomaly && (
-                    <span className="rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">ML Anomaly</span>
+                    <span className="rounded-full bg-purple-100 px-1.5 py-0.5 text-[0.625rem] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">ML Anomaly</span>
                   )}
                   {getStaleProgressFlag(s) && (
-                    <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-600 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300">
+                    <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[0.625rem] font-bold text-amber-600 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300">
                       <span>⚠</span><span>Data Update Notice</span>
                     </span>
                   )}
-                  <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${
+                  <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[0.625rem] font-bold ${
                     dataConfidence === "High" ? "border-green-200 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-950 dark:text-green-300"
                     : dataConfidence === "Medium" ? "border-yellow-200 bg-yellow-50 text-yellow-700 dark:border-yellow-800 dark:bg-yellow-950 dark:text-yellow-300"
                     : "border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300"
@@ -668,7 +669,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                   <div className="rounded-xl border border-gray-200 bg-gray-50 p-5 dark:border-gray-700 dark:bg-[#111827]">
                     <div className="flex items-start justify-between gap-4">
                       <div>
-                        <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Risk Score</p>
+                        <p className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">Risk Score</p>
                         <div className="flex items-baseline gap-2 mt-1">
                           <span className="font-mono text-4xl font-bold text-gray-900 dark:text-white">{s.risk_score}</span>
                           <span className="font-mono text-lg text-gray-400">/ 100</span>
@@ -680,8 +681,8 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                             : s.risk_level === "Low" ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
                             : "bg-gray-100 text-gray-600 dark:bg-gray-700"
                           }`}>{s.risk_level} Risk</span>
-                          <span className="text-[11px] text-gray-500">{indicatorCount} indicator{indicatorCount !== 1 ? "s" : ""} triggered</span>
-                          {s.ml_anomaly && <span className="text-[11px] font-semibold text-purple-600 dark:text-purple-400">· ML Outlier</span>}
+                          <span className="text-[0.6875rem] text-gray-500">{indicatorCount} indicator{indicatorCount !== 1 ? "s" : ""} triggered</span>
+                          {s.ml_anomaly && <span className="text-[0.6875rem] font-semibold text-purple-600 dark:text-purple-400">· ML Outlier</span>}
                         </div>
                       </div>
                     </div>
@@ -692,7 +693,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                           s.risk_score >= 60 ? "bg-red-500" : s.risk_score >= 30 ? "bg-amber-500" : s.risk_score > 0 ? "bg-blue-500" : "bg-gray-300"
                         }`} style={{ width: `${Math.max(2, s.risk_score)}%` }} />
                       </div>
-                      <div className="flex justify-between mt-1 text-[9px] text-gray-400">
+                      <div className="flex justify-between mt-1 text-[0.5625rem] text-gray-400">
                         <span>0</span><span>25</span><span>50</span><span>75</span><span>100</span>
                       </div>
                     </div>
@@ -720,7 +721,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                       }
                     </p>
                     {dataConfidence === "Low" && (expenditure === 0 && completion === 0 && sanctioned > 0) && (
-                      <p className="mt-1.5 text-[10px] text-gray-500 dark:text-gray-400 italic">This indicator does not confirm project delay or irregularity — it reflects potential data freshness gaps.</p>
+                      <p className="mt-1.5 text-[0.625rem] text-gray-500 dark:text-gray-400 italic">This indicator does not confirm project delay or irregularity — it reflects potential data freshness gaps.</p>
                     )}
                   </div>
 
@@ -729,19 +730,19 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                     <h4 className="mb-3 text-xs font-bold uppercase tracking-wider text-gray-400">Financial Overview</h4>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                       <div>
-                        <p className="text-[10px] font-bold uppercase text-gray-400">Sanctioned</p>
+                        <p className="text-[0.625rem] font-bold uppercase text-gray-400">Sanctioned</p>
                         <p className="font-mono text-sm font-bold text-blue-700 dark:text-blue-400">{formatMoney(sanctioned)}</p>
                       </div>
                       <div>
-                        <p className="text-[10px] font-bold uppercase text-gray-400">Expenditure</p>
+                        <p className="text-[0.625rem] font-bold uppercase text-gray-400">Expenditure</p>
                         <p className="font-mono text-sm font-bold">{formatMoney(expenditure)}</p>
                       </div>
                       <div>
-                        <p className="text-[10px] font-bold uppercase text-gray-400">Progress</p>
+                        <p className="text-[0.625rem] font-bold uppercase text-gray-400">Progress</p>
                         <p className="font-mono text-sm font-bold">{completion}%</p>
                       </div>
                       <div>
-                        <p className="text-[10px] font-bold uppercase text-gray-400">Utilization</p>
+                        <p className="text-[0.625rem] font-bold uppercase text-gray-400">Utilization</p>
                         <p className="font-mono text-sm font-bold">{utilization.toFixed(1)}%</p>
                       </div>
                     </div>
@@ -782,7 +783,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                                 <td className="py-2 font-semibold text-gray-700 dark:text-gray-300">{sig.signal}</td>
                                 <td className="py-2 text-right font-mono font-bold text-gray-900 dark:text-white">{sig.value}</td>
                                 <td className="py-2 text-right">
-                                  <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                                  <span className={`inline-block rounded px-1.5 py-0.5 text-[0.625rem] font-bold ${
                                     sig.impact === "HIGH" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
                                     : sig.impact === "MEDIUM" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
                                     : sig.impact === "LOW" ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
@@ -810,10 +811,10 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                           return (
                             <div key={i} className="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-[#1f2937]">
                               <div className="flex items-center gap-2 mb-1.5">
-                                <span className={`rounded border px-1.5 py-0.5 text-[9px] font-bold ${severityColor(sev)}`}>{sev}</span>
+                                <span className={`rounded border px-1.5 py-0.5 text-[0.5625rem] font-bold ${severityColor(sev)}`}>{sev}</span>
                                 <span className="text-xs font-bold text-gray-800 dark:text-gray-200">{reason}</span>
                               </div>
-                              <p className="text-[11px] text-gray-600 dark:text-gray-400 leading-relaxed pl-1">
+                              <p className="text-[0.6875rem] text-gray-600 dark:text-gray-400 leading-relaxed pl-1">
                                 {reasonExplanation(reason)}
                               </p>
                             </div>
@@ -830,12 +831,12 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                       <p className="text-xs text-amber-800 dark:text-amber-200">
                         Reported progress or expenditure may not reflect the latest project status. A risk score indicates an anomaly based on available data and does not by itself confirm project delay or irregularity.
                       </p>
-                      <div className="mt-2 grid grid-cols-3 gap-2 text-[10px]">
+                      <div className="mt-2 grid grid-cols-3 gap-2 text-[0.625rem]">
                         <div><span className="font-bold text-amber-600 dark:text-amber-400">Sanctioned:</span> {formatMoney(sanctioned)}</div>
                         <div><span className="font-bold text-amber-600 dark:text-amber-400">Recorded Expenditure:</span> ₹0</div>
                         <div><span className="font-bold text-amber-600 dark:text-amber-400">Recorded Progress:</span> 0%</div>
                       </div>
-                      <p className="mt-2 text-[10px] italic text-amber-600/70 dark:text-amber-400/70">This indicator does not confirm project delay or irregularity.</p>
+                      <p className="mt-2 text-[0.625rem] italic text-amber-600/70 dark:text-amber-400/70">This indicator does not confirm project delay or irregularity.</p>
                     </div>
                   )}
 
@@ -905,7 +906,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                     a.click()
                     URL.revokeObjectURL(url)
                   }}
-                  className="rounded-lg border border-gray-300 px-3 py-2 text-[11px] font-bold text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700">
+                  className="rounded-lg border border-gray-300 px-3 py-2 text-[0.6875rem] font-bold text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700">
                   📄 Generate Audit Summary
                 </button>
                 <button

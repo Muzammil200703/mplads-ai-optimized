@@ -1,5 +1,6 @@
 import os
 import time
+import threading
 from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
 
@@ -13,8 +14,20 @@ import csv
 
 from database import engine, Base, SessionLocal
 import models
+import audit_intel
 from schemas import ProjectCreate
 from ml.predictor import predict_risk
+from pydantic import BaseModel, Field
+from sync import (
+    sync_from_csv_upload,
+    sync_from_github,
+    sync_from_source,
+    get_data_freshness,
+    get_sync_history,
+    get_available_providers,
+    invalidate_freshness_cache,
+)
+from fastapi import UploadFile, File, Form
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -240,6 +253,12 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+# ═══════════════ AUTHENTICATION & INVESTIGATOR WORKSPACE ═══════════════
+# Mounted after get_db is defined so its dependencies can reuse it.
+from workspace import router as workspace_router  # noqa: E402
+app.include_router(workspace_router)
 
 
 # Sortable columns map (avoids SQL injection)
@@ -774,8 +793,92 @@ def get_project(
             "data_quality_flag": stale_check["flag"],
             "data_quality_reason": stale_check["reason"],
         },
-        "risk": risk_info
+        "risk": risk_info,
+        # Audit intelligence summary (same single-source functions used by the
+        # Audit Priority list and the audit case, so the UI never recomputes it)
+        "audit_intelligence": _audit_intelligence_summary(project, risk_info),
     }
+
+
+def _audit_intelligence_summary(project, risk_info: Dict[str, Any]) -> Dict[str, Any]:
+    """Lightweight, consistent audit summary attached to the project detail."""
+    try:
+        risk_level = risk_info.get("risk_level")
+        risk_score = risk_info.get("risk_score") or 0
+        reasons = risk_info.get("reasons")
+        if isinstance(reasons, str):
+            reasons = [r.strip() for r in reasons.split(",") if r.strip()]
+        reasons = reasons or []
+        stale = _check_stale_progress(project)
+        checklist = audit_intel.build_checklist(project, reasons, stale["flag"])
+        return {
+            "priority": audit_intel.priority_breakdown(
+                project, risk_score, risk_level=risk_level
+            ),
+            "financial_exposure": audit_intel.financial_exposure(project),
+            "evidence_gap": audit_intel.evidence_gap_summary(project),
+            "recommended_actions": audit_intel.recommended_actions(checklist),
+            "data_quality": {
+                "flag": stale["flag"],
+                "reason": stale["reason"],
+            },
+            "review_level": audit_intel.review_level(
+                project,
+                int(risk_score or 0),
+                bool((project.sanctioned_amount or 0) > 0 and (project.expenditure or 0) > (project.sanctioned_amount or 0)),
+            ),
+        }
+    except Exception as exc:  # never break the detail endpoint
+        return {"error": f"Audit summary unavailable: {exc}"}
+
+
+@app.get("/projects/{project_id}/timeline", tags=["Projects"])
+def get_project_timeline_endpoint(
+    project_id: int = Path(..., description="The ID of the project"),
+):
+    """
+    Project lifecycle timeline + delay intelligence.
+
+    Events are built by conservatively matching work-level datasets
+    (recommended_works, expenditures, completed_works) to the project using
+    exact normalized (description, constituency, state) keys. Only events
+    supported by actual recorded data are returned — missing lifecycle
+    stages are omitted, never estimated.
+    """
+    from timeline import get_project_timeline
+
+    payload = get_project_timeline(project_id)
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project with ID {project_id} not found"
+        )
+    return payload
+
+
+@app.get("/projects/{project_id}/expenditure-activity", tags=["Projects"])
+def get_project_expenditure_activity_endpoint(
+    project_id: int = Path(..., description="The ID of the project"),
+    db: Session = Depends(get_db),
+):
+    """
+    Financial activity history + activity-gap intelligence for one project.
+
+    Records are matched using the same conservative matching as the timeline
+    (exact normalized description + constituency + state, MP-verified).
+    Gap thresholds: >=90 days long_gap, >=180 extended_gap (returned in the
+    response `thresholds` block). All dates come from recorded expenditure
+    data only.
+    """
+    from activity import get_expenditure_activity
+
+    project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project with ID {project_id} not found"
+        )
+    return get_expenditure_activity(project)
 
 
 # =========================================================
@@ -1793,7 +1896,13 @@ def audit_priority_summary(
     fy: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
-    """Return aggregate counts for audit priority KPI cards."""
+    """
+    Aggregate counts for the Audit Priority KPI cards.
+
+    Includes the composite audit-priority tier distribution computed with the
+    same SQL expression used for the priority list, plus the sanctioned value
+    of the flagged projects (funds under review).
+    """
     base = db.query(models.RiskScore).join(
         models.Project, models.RiskScore.project_id == models.Project.id
     ).filter(models.RiskScore.risk_score > 0)
@@ -1806,12 +1915,44 @@ def audit_priority_summary(
     critical = base.filter(models.RiskScore.risk_score >= 80).count()
     ml_count = base.filter(models.RiskScore.ml_anomaly == True).count()
 
+    # Tier distribution + exposure (single SQL pass over the composite score)
+    rank_expr = audit_intel.audit_priority_rank_sql()
+    tier_query = (
+        base.with_entities(
+            rank_expr.label("tier_rank"),
+            func.count(models.Project.id).label("n"),
+            func.coalesce(func.sum(models.Project.sanctioned_amount), 0.0).label("exposure"),
+        )
+        .group_by(rank_expr)
+        .all()
+    )
+    tiers = {code: {"count": 0, "sanctioned_under_review": 0.0} for code in ("P1", "P2", "P3", "P4")}
+    total_exposure = 0.0
+    rank_to_code = {1: "P1", 2: "P2", 3: "P3", 4: "P4"}
+    for row in tier_query:
+        code = rank_to_code.get(int(row.tier_rank or 4), "P4")
+        tiers[code] = {
+            "count": int(row.n or 0),
+            "sanctioned_under_review": round(float(row.exposure or 0), 2),
+        }
+        total_exposure += float(row.exposure or 0)
+
     return {
         "total_flagged": total,
         "high_risk": high,
         "medium_risk": medium,
         "critical": critical,
         "ml_anomalies": ml_count,
+        # Tier view of the same flagged set (composite audit priority score)
+        "tiers": tiers,
+        "tier_counts": {code: tiers[code]["count"] for code in tiers},
+        "total_sanctioned_under_review": round(total_exposure, 2),
+        "tier_labels": {code: meta["tier_label"] for code, meta in audit_intel.TIER_META.items()},
+        "score_formula": "risk(0-55) + exposure(0-20) + mismatch(0-15) + evidence_gap(0-10)",
+        "priority_note": (
+            "Tier = composite audit priority score, with a floor applied from the stored risk level "
+            "(High → at least P2, Medium → at least P3)."
+        ),
     }
 
 
@@ -1823,14 +1964,23 @@ def audit_priority(
     constituency: Optional[str] = None,
     fy: Optional[str] = Query(None, description="Filter by financial year"),
     risk_level: Optional[str] = None,
+    tier: Optional[str] = Query(None, description="Audit priority tier: P1 | P2 | P3 | P4"),
     q: Optional[str] = None,
     sort_by: Optional[str] = Query(None),
     sort_dir: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
-    """Return the highest-priority projects for audit, ranked by risk score."""
+    """
+    Highest-priority projects for audit, ranked by the composite audit-priority
+    score (risk + financial exposure + financial/physical mismatch + evidence gap).
+
+    Each row carries the score breakdown, the P1–P4 tier, financial exposure and
+    the generated recommended action so the UI never recomputes them.
+    """
+    score_expr = audit_intel.audit_priority_score_sql().label("audit_score")
+    rank_expr = audit_intel.audit_priority_rank_sql().label("audit_rank")
     query = (
-        db.query(models.RiskScore, models.Project)
+        db.query(models.RiskScore, models.Project, score_expr, rank_expr)
         .join(models.Project, models.RiskScore.project_id == models.Project.id)
         .filter(models.RiskScore.risk_score > 0)
     )
@@ -1842,6 +1992,11 @@ def audit_priority(
         query = query.filter(models.Project.fy == fy)
     if risk_level:
         query = query.filter(models.RiskScore.risk_level.ilike(risk_level))
+    if tier:
+        tier_ranks = {"P1": 1, "P2": 2, "P3": 3, "P4": 4}
+        t = tier.strip().upper()
+        if t in tier_ranks:
+            query = query.filter(rank_expr == tier_ranks[t])
     if q:
         q_clean = q.strip()
         try:
@@ -1859,6 +2014,8 @@ def audit_priority(
         sort_col = sort_by.strip().lower()
         sort_asc = sort_dir and sort_dir.strip().lower() == "asc"
         priority_sort_map = {
+            "audit_priority": rank_expr,
+            "audit_score": score_expr,
             "risk_score": models.RiskScore.risk_score,
             "sanctioned_amount": models.Project.sanctioned_amount,
             "expenditure": models.Project.expenditure,
@@ -1878,7 +2035,7 @@ def audit_priority(
     rows = query.offset(skip).limit(limit).all()
 
     priority_list = []
-    for rank, (risk, proj) in enumerate(rows, start=skip + 1):
+    for rank, (risk, proj, audit_score, audit_rank) in enumerate(rows, start=skip + 1):
         reasons = [r.strip() for r in (risk.reasons or "").split(",") if r.strip()]
         # Determine primary anomaly type
         primary = "Unknown"
@@ -1901,6 +2058,15 @@ def audit_priority(
             elif "ml" in r_lower:
                 primary = "ML Statistical Outlier"
 
+        # Audit-intelligence fields (computed from the same values shown above)
+        stale = _check_stale_progress(proj)
+        breakdown = audit_intel.priority_breakdown(
+            proj, risk.risk_score, float(audit_score or 0), risk_level=risk.risk_level
+        )
+        exposure = audit_intel.financial_exposure(proj)
+        checklist = audit_intel.build_checklist(proj, reasons, stale["flag"])
+        evidence_gap = audit_intel.evidence_gap_summary(proj)
+
         priority_list.append({
             "priority_rank": rank,
             "project_id": proj.id,
@@ -1908,6 +2074,8 @@ def audit_priority(
             "state": proj.state,
             "district": proj.district,
             "constituency": proj.constituency,
+            "project_type": proj.project_type,
+            "fy": proj.fy,
             "sanctioned_amount": proj.sanctioned_amount or 0.0,
             "expenditure": proj.expenditure or 0.0,
             "completion_percentage": proj.completion_percentage or 0.0,
@@ -1916,7 +2084,15 @@ def audit_priority(
             "risk_level": risk.risk_level,
             "ml_anomaly": risk.ml_anomaly,
             "primary_anomaly": primary,
-            "reasons": reasons
+            "reasons": reasons,
+            # ── Audit intelligence additions (all derived from the values above) ──
+            **breakdown,
+            "financial_exposure": exposure,
+            "evidence_gap": evidence_gap,
+            "recommended_actions": audit_intel.recommended_actions(checklist, limit=3),
+            "recommended_action": audit_intel.recommended_actions(checklist, limit=1)[0],
+            "data_quality_flag": stale["flag"],
+            "data_quality_reason": stale["reason"],
         })
 
     return {
@@ -1925,6 +2101,289 @@ def audit_priority(
         "limit": limit,
         "priorities": priority_list
     }
+
+
+# =========================================================
+# AUDIT INTELLIGENCE & INVESTIGATION WORKSPACE
+# =========================================================
+# Evidence-gap detection, anomaly dimension explorer, peer benchmarking,
+# deterministic what-if simulation, audit case + escalation draft, and the
+# persisted investigation workspace. All values come from the actual project
+# record and the existing risk/anomaly results — nothing is invented.
+
+
+class SimulateRequest(BaseModel):
+    sanctioned_amount: Optional[float] = Field(None, ge=0, le=1e15)
+    expenditure: Optional[float] = Field(None, ge=0, le=1e15)
+    completion_percentage: Optional[float] = Field(None, ge=0, le=100)
+
+
+class InvestigationUpdateRequest(BaseModel):
+    status: Optional[str] = None
+    note: Optional[str] = Field(None, max_length=4000)
+
+
+class EvidenceItemUpdateRequest(BaseModel):
+    status: str
+
+
+# =========================================================
+# DETERMINISTIC-RESPONSE CACHE
+# The audit-intel endpoints below are pure functions of the static
+# project record and risk_scores table. Caching them removes repeated
+# computation on drawer re-opens. The cache is cleared whenever the
+# dataset changes (sync/upload) so results can never go stale.
+# =========================================================
+_intel_cache: Dict[str, Any] = {}
+_intel_cache_lock = threading.Lock()
+_INTEL_CACHE_MAX = 4096
+
+
+def _intel_cache_get(key: str):
+    with _intel_cache_lock:
+        return _intel_cache.get(key)
+
+
+def _intel_cache_set(key: str, value: Any):
+    with _intel_cache_lock:
+        if len(_intel_cache) >= _INTEL_CACHE_MAX:
+            # Simple bounded-growth guard: drop the oldest half.
+            for k in list(_intel_cache.keys())[: _INTEL_CACHE_MAX // 2]:
+                _intel_cache.pop(k, None)
+        _intel_cache[key] = value
+
+
+def clear_intel_cache():
+    with _intel_cache_lock:
+        _intel_cache.clear()
+
+
+def _project_or_404(db: Session, project_id: int):
+    project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project with ID {project_id} not found",
+        )
+    return project
+
+
+@app.get("/ai/evidence-gaps/{project_id}", tags=["AI Operations"])
+def get_evidence_gaps(
+    project_id: int = Path(..., description="Project ID"),
+    db: Session = Depends(get_db),
+):
+    """
+    "What evidence is missing?" — evidence availability, data confidence and
+    explicit assessment limitations, built from the actual dataset fields and
+    the conservatively matched work-level records.
+    """
+    project = _project_or_404(db, project_id)
+    cached = _intel_cache_get(f"eg_{project_id}")
+    if cached is not None:
+        return cached
+    result = audit_intel.evidence_gaps(project)
+    _intel_cache_set(f"eg_{project_id}", result)
+    return result
+
+
+@app.get("/ai/anomaly-explorer/{project_id}", tags=["AI Operations"])
+def get_anomaly_explorer(
+    project_id: int = Path(..., description="Project ID"),
+    db: Session = Depends(get_db),
+):
+    """
+    Anomaly dimensions (financial, progress, administrative, peer deviation,
+    data completeness) with observed values, why each matters and what should
+    be verified. Separate from the raw "why this record was flagged" list.
+    """
+    project = _project_or_404(db, project_id)
+    cached = _intel_cache_get(f"axp_{project_id}")
+    if cached is not None:
+        return cached
+    result = audit_intel.anomaly_explorer(project, db)
+    _intel_cache_set(f"axp_{project_id}", result)
+    return result
+
+
+@app.get("/projects/{project_id}/peer-benchmark", tags=["Projects"])
+def get_peer_benchmark(
+    project_id: int = Path(..., description="Project ID"),
+    scope: str = Query("state", description="constituency | state | national"),
+    project_type: Optional[str] = Query(None, description="Category to compare against, or 'all'"),
+    band: str = Query("default", description="narrow | default | all"),
+    status_filter: Optional[str] = Query(None, alias="status"),
+    db: Session = Depends(get_db),
+):
+    """
+    Compare this project with comparable projects using SQL aggregation.
+
+    Aggregates are computed over the whole peer group; the median is computed
+    over a documented bounded sample. Comparisons are statistical and are not
+    a finding of wrongdoing.
+    """
+    project = _project_or_404(db, project_id)
+
+    scope_norm = (scope or "state").strip().lower()
+    if scope_norm not in ("constituency", "state", "national"):
+        raise HTTPException(status_code=400, detail="scope must be one of: constituency, state, national")
+    band_norm = (band or "default").strip().lower()
+    if band_norm not in ("narrow", "default", "all"):
+        raise HTTPException(status_code=400, detail="band must be one of: narrow, default, all")
+    if project_type and len(project_type) > 120:
+        raise HTTPException(status_code=400, detail="project_type is too long")
+    if status_filter and len(status_filter) > 60:
+        raise HTTPException(status_code=400, detail="status is too long")
+
+    return audit_intel.peer_benchmark(
+        project, db,
+        scope=scope_norm,
+        project_type=project_type,
+        band=band_norm,
+        status_filter=status_filter,
+    )
+
+
+@app.post("/ai/simulate/{project_id}", tags=["AI Operations"])
+def post_risk_simulation(
+    project_id: int = Path(..., description="Project ID"),
+    payload: SimulateRequest = None,
+    db: Session = Depends(get_db),
+):
+    """
+    "What would change the risk?" — a simulation only.
+
+    Hypothetical values are pushed through the same deterministic rule engine
+    (and the same loaded anomaly model) that produced the stored score. Nothing
+    is written to the database and the response is labelled as a simulation.
+    """
+    project = _project_or_404(db, project_id)
+    payload = payload or SimulateRequest()
+    if (payload.sanctioned_amount is None and payload.expenditure is None
+            and payload.completion_percentage is None):
+        raise HTTPException(status_code=400, detail="Provide at least one value to simulate")
+    return audit_intel.simulate(
+        project,
+        sanctioned_amount=payload.sanctioned_amount,
+        expenditure=payload.expenditure,
+        completion_percentage=payload.completion_percentage,
+    )
+
+
+@app.get("/ai/audit-case/{project_id}", tags=["AI Operations"])
+def get_audit_case(
+    project_id: int = Path(..., description="Project ID"),
+    db: Session = Depends(get_db),
+):
+    """
+    Structured audit case assembled from the actual project values, risk/anomaly
+    results, peer comparison, evidence gaps and the audit priority tier — plus a
+    review-ready escalation DRAFT that is explicitly not submitted anywhere.
+    """
+    project = _project_or_404(db, project_id)
+    investigation = None
+    try:
+        investigation = audit_intel.get_investigation(db, project)
+    except Exception:
+        investigation = None
+    # Only the project-derived portion is cached; the investigation snapshot
+    # (mutable workflow state) is fetched fresh every time.
+    cached = _intel_cache_get(f"case_{project_id}")
+    base = cached
+    if base is None:
+        base = audit_intel.build_audit_case(project, db, investigation=None)
+        _intel_cache_set(f"case_{project_id}", base)
+    if investigation is not None:
+        try:
+            base = dict(base)
+            base["investigation"] = investigation.get("investigation")
+        except Exception:
+            pass
+    return base
+
+
+@app.get("/investigations/active", tags=["Investigations"])
+def list_active_investigations(
+    limit: int = Query(200, ge=1, le=1000),
+    db: Session = Depends(get_db),
+):
+    """List audit investigations in progress (workflow state only)."""
+    return audit_intel.active_investigations(db, limit=limit)
+
+
+@app.get("/investigations/{project_id}", tags=["Investigations"])
+def get_project_investigation(
+    project_id: int = Path(..., description="Project ID"),
+    db: Session = Depends(get_db),
+):
+    """Return the investigation workspace for a project, or a null investigation."""
+    project = _project_or_404(db, project_id)
+    payload = audit_intel.get_investigation(db, project)
+    if payload is None:
+        return {
+            "project_id": project_id,
+            "investigation": None,
+            "items": [],
+            "total_items": 0,
+            "resolved_items": 0,
+            "pending_items": 0,
+            "discrepancies": 0,
+            "progress_pct": 0.0,
+            "status_options": list(audit_intel.INVESTIGATION_STATUSES),
+            "item_status_options": list(audit_intel.EVIDENCE_STATUSES),
+            "workflow": list(audit_intel.INVESTIGATION_STATUSES),
+            "note": "No investigation has been started for this project.",
+        }
+    return payload
+
+
+@app.post("/investigations/{project_id}/start", tags=["Investigations"])
+def start_project_investigation(
+    project_id: int = Path(..., description="Project ID"),
+    db: Session = Depends(get_db),
+):
+    """
+    Start (or reopen) the audit investigation workspace for a project.
+
+    The checklist is generated from the anomalies actually detected in this
+    project's data. Items are recommended verification actions, not allegations.
+    """
+    project = _project_or_404(db, project_id)
+    return audit_intel.start_investigation(db, project)
+
+
+@app.patch("/investigations/{project_id}", tags=["Investigations"])
+def patch_project_investigation(
+    project_id: int = Path(..., description="Project ID"),
+    payload: InvestigationUpdateRequest = None,
+    db: Session = Depends(get_db),
+):
+    """Update investigation workflow status and/or note."""
+    project = _project_or_404(db, project_id)
+    payload = payload or InvestigationUpdateRequest()
+    try:
+        return audit_intel.update_investigation(db, project, payload.status, payload.note)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.patch("/investigations/{project_id}/items/{item_key}", tags=["Investigations"])
+def patch_investigation_item(
+    project_id: int = Path(..., description="Project ID"),
+    item_key: str = Path(..., description="Checklist item key"),
+    payload: EvidenceItemUpdateRequest = None,
+    db: Session = Depends(get_db),
+):
+    """Mark one checklist item Pending / Verified / Discrepancy Found / Not Applicable."""
+    project = _project_or_404(db, project_id)
+    if payload is None or not payload.status:
+        raise HTTPException(status_code=400, detail="status is required")
+    if len(item_key) > 80:
+        raise HTTPException(status_code=400, detail="item_key is too long")
+    try:
+        return audit_intel.update_evidence_item(db, project, item_key, payload.status)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 # =========================================================
@@ -3233,3 +3692,134 @@ def get_benchmarking(
 
     set_cached(cache_key, result)
     return result
+
+
+# =========================================================
+# DATA SYNC / FRESHNESS ENDPOINTS
+# =========================================================
+
+
+@app.get("/api/data/freshness")
+def data_freshness():
+    """
+    Get data freshness status.
+    Returns sync status, last sync time, and project count.
+    """
+    return get_data_freshness()
+
+
+@app.get("/api/data/sync/history")
+def data_sync_history(limit: int = Query(10, ge=1, le=50)):
+    """
+    Get recent sync history.
+    """
+    return get_sync_history(limit=limit)
+
+
+@app.get("/api/data/providers")
+def list_data_providers():
+    """
+    List all available data providers and their capabilities.
+    Useful for understanding what sources can supply data.
+    """
+    return get_available_providers()
+
+
+@app.post("/api/data/sync")
+def trigger_sync(source: str = Query("github", description="Data source provider name")):
+    """
+    Trigger a data synchronization from any registered provider.
+
+    Available providers:
+    - 'github': Vonter/india-mplads-works GitHub dataset (recommended works)
+    - 'csv_upload': CSV file upload (use /api/data/upload instead)
+
+    New providers can be added by implementing the DataProvider
+    interface in providers/ and registering it.
+    """
+    try:
+        result = sync_from_source(source)
+    except KeyError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown sync source: {source}. {str(e)}"
+        )
+    # Dataset changed — all derived intel caches are now stale.
+    clear_intel_cache()
+    return result
+
+
+@app.post("/api/data/upload")
+def upload_csv(
+    file: UploadFile = File(...),
+    delimiter: str = Form(","),
+):
+    """
+    Upload a CSV file to update project data.
+    Expected columns (flexible mapping):
+    - id, project_name, state, district, constituency
+    - project_type, sanctioned_amount, expenditure
+    - completion_percentage, status, fy
+    """
+    if not file.filename.endswith((".csv", ".tsv", ".txt")):
+        raise HTTPException(
+            status_code=400,
+            detail="File must be a CSV, TSV, or TXT file"
+        )
+    if delimiter == "auto":
+        content = file.file.read(4096)
+        file.file.seek(0)
+        try:
+            sniffed = csv.Sniffer().sniff(content.decode("utf-8", errors="replace"))
+            delimiter = sniffed.delimiter
+        except csv.Error:
+            delimiter = ","
+    try:
+        csv_content = file.file.read().decode("utf-8", errors="replace")
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to read file: {str(e)}"
+        )
+    result = sync_from_csv_upload(
+        csv_content=csv_content,
+        filename=file.filename,
+        delimiter=delimiter,
+    )
+    # Dataset changed — all derived intel caches are now stale.
+    clear_intel_cache()
+    return result
+
+
+@app.get("/api/data/stats")
+def data_stats():
+    """
+    Get dataset statistics.
+    """
+    db = SessionLocal()
+    try:
+        total_projects = db.query(func.count(models.Project.id)).scalar() or 0
+        total_states = db.query(
+            func.count(distinct(models.Project.state))
+        ).scalar() or 0
+        total_constituencies = db.query(
+            func.count(distinct(models.Project.constituency))
+        ).scalar() or 0
+        total_mps = db.query(func.count(models.MPSummary.id)).scalar() or 0
+        total_risk_scores = db.query(func.count(models.RiskScore.id)).scalar() or 0
+        fy_rows = db.query(
+            models.Project.fy, func.count(models.Project.id)
+        ).filter(
+            models.Project.fy.isnot(None), models.Project.fy != ""
+        ).group_by(models.Project.fy).all()
+        fy_breakdown = {r[0]: r[1] for r in fy_rows if r[0]}
+        return {
+            "total_projects": total_projects,
+            "total_states": total_states,
+            "total_constituencies": total_constituencies,
+            "total_mps": total_mps,
+            "total_risk_scores": total_risk_scores,
+            "fy_breakdown": fy_breakdown,
+        }
+    finally:
+        db.close()

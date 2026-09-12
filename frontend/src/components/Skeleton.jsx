@@ -19,7 +19,7 @@ function CardSkeleton() {
 /** Page-level skeleton with header + cards grid */
 export function PageSkeleton({ cards = 4, columns = 4 }) {
   return (
-    <div className="min-h-screen p-4 sm:p-6">
+    <div className="min-h-full p-4 sm:p-6">
       <Bar className="mb-2 h-7 w-48" />
       <Bar className="mb-6 h-4 w-96 max-w-full" />
       <div className="grid grid-cols-1 gap-4 sm:gap-5" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
