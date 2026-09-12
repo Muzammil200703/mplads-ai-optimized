@@ -66,3 +66,9 @@ INFO:     127.0.0.1:64254 - "GET /ai/narrative-insights HTTP/1.1" 200 OK
 INFO:     127.0.0.1:64253 - "GET /dashboard/states HTTP/1.1" 200 OK
 INFO:     127.0.0.1:64253 - "OPTIONS /search/projects?q=103&skip=0&limit=20 HTTP/1.1" 200 OK
 INFO:     127.0.0.1:64253 - "GET /search/projects?q=103&skip=0&limit=20 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64253 - "OPTIONS /projects/103 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64253 - "GET /projects/103 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64253 - "OPTIONS /search/projects?q=10466&skip=0&limit=20 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64253 - "GET /search/projects?q=10466&skip=0&limit=20 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64253 - "OPTIONS /projects/10466 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64253 - "GET /projects/10466 HTTP/1.1" 200 OK
