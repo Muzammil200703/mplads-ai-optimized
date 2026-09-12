@@ -1,6 +1,9 @@
 const API_URL = import.meta.env.VITE_API_URL !== undefined 
   ? import.meta.env.VITE_API_URL 
-  : (import.meta.env.PROD ? "" : "https://mplads-ai-optimized.onrender.com")
+  // Local development uses the same port as start_backend.bat/start_app.py.
+  // Keeping this aligned prevents auth calls such as /auth/signup from
+  // being sent to an unrelated/stale local service.
+  : (import.meta.env.PROD ? "https://mplads-ai-optimized.onrender.com" : "http://127.0.0.1:8000")
 
 // ═══════════════ AUTHENTICATION SESSION ═══════════════
 // Persistent JWT session in localStorage; attached to every request.

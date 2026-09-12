@@ -1,6 +1,6 @@
 import json, urllib.request, urllib.error
 
-BASE = "http://127.0.0.1:8001"
+BASE = "http://127.0.0.1:8000"
 
 def call(path, payload=None, method=None, token=None):
     data = json.dumps(payload).encode() if payload is not None else None
