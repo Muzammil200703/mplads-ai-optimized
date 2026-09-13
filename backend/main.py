@@ -108,6 +108,17 @@ def _check_stale_progress(project):
 # In-memory cache for heavy aggregations
 _cache: Dict[str, Any] = {}
 _cache_ttl: Dict[str, float] = {}
+# Vendor intelligence is derived from a single O(N) pass plus a per-work-key
+# project match. The match cache is keyed on the normalized work triple and is
+# only meaningful for the current dataset, so data-sync code must clear it.
+_match_cache_lock = threading.Lock()
+_match_cache: Dict[tuple, list] = {}
+
+# Rebuild guards: a single lock ensures only one thread builds the payload at a
+# time, and the in-progress flags make concurrent requests reuse the build
+# instead of each spawning their own multi-minute computation.
+_vendor_build_lock = threading.Lock()
+_vendor_build_in_progress = False
 
 def get_cached(key: str, ttl_seconds: int = 300):
     if key in _cache and (time.time() - _cache_ttl.get(key, 0)) < ttl_seconds:
@@ -120,6 +131,8 @@ def set_cached(key: str, value: Any):
 
 def clear_cache(prefix: Optional[str] = None):
     global _cache, _cache_ttl
+    with _match_cache_lock:
+        _match_cache.clear()
     if prefix:
         keys_to_del = [k for k in _cache if k.startswith(prefix)]
         for k in keys_to_del:
@@ -220,10 +233,33 @@ async def lifespan(app: FastAPI):
                 "total_states": int(stats.total_states or 0),
                 "recommended_works": int(stats.recommended_works or 0),
             })
+            # Vendor directory is expensive to derive from the work-level
+            # tables, so warm its compact summary once at startup. Subsequent
+            # filter/sort/page requests only slice the in-memory result.
+            # Vendor intelligence is built lazily on first visit so startup
+            # remains fast with large work-level source tables.
         finally:
             db.close()
     except Exception:
         pass  # Warm-cache is best-effort
+
+    # Warm the vendor-intelligence payload on a background thread so the
+    # first page visit never waits for the multi-second O(N) build. The full
+    # variant also populates the summary cache, so profiles open instantly
+    # too. The single-flight lock inside the payload builder makes this safe,
+    # and clear_cache() on data sync invalidates it like every other cache.
+    def _warm_vendor_intelligence():
+        warm_db = SessionLocal()
+        try:
+            started = time.time()
+            _vendor_intelligence_payload(warm_db, include_projects=True)
+            print(f"[startup] vendor intelligence warmed in {time.time() - started:.1f}s", flush=True)
+        except Exception as exc:
+            print(f"[startup] vendor intelligence warm-up failed: {exc}", flush=True)
+        finally:
+            warm_db.close()
+
+    threading.Thread(target=_warm_vendor_intelligence, name="vendor-intel-warmup", daemon=True).start()
 
     yield
 
@@ -832,6 +868,34 @@ def _audit_intelligence_summary(project, risk_info: Dict[str, Any]) -> Dict[str,
         return {"error": f"Audit summary unavailable: {exc}"}
 
 
+@app.get("/projects/{project_id}/geolocation", tags=["Projects"])
+def get_project_geolocation_endpoint(
+    project_id: int = Path(..., description="The ID of the project"),
+):
+    """
+    Satellite Location Intelligence (BETA).
+
+    Resolves an ESTIMATED location for one project from its existing location
+    fields (work description, district, constituency, state) using the
+    OpenStreetMap Nominatim geocoding service. Returns an honest confidence
+    level. Never fabricates coordinates: when the location cannot be reliably
+    resolved, `match` is null and the UI shows the fallback instead of a pin.
+
+    Results are cached in the geocode_cache table by query, so repeat views
+    and page loads never re-call the external service.
+    """
+    from geospatial import get_project_geolocation
+
+    db = SessionLocal()
+    try:
+        project = db.query(models.Project).filter(models.Project.id == project_id).first()
+        if not project:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Project with ID {project_id} not found")
+        return get_project_geolocation(project)
+    finally:
+        db.close()
+
+
 @app.get("/projects/{project_id}/timeline", tags=["Projects"])
 def get_project_timeline_endpoint(
     project_id: int = Path(..., description="The ID of the project"),
@@ -1305,6 +1369,423 @@ def get_expenditures(
     return query.offset(skip).limit(limit).all()
 
 
+# ═══════════════ VENDOR INTELLIGENCE ═══════════════════════════
+# This view is deliberately derived only from the existing expenditure and
+# project tables.  Vendor names are normalized conservatively (case, spaces,
+# and punctuation only); project linkage uses a cautious location-scoped
+# fallback for minor work-description wording differences.
+def _vendor_key(value) -> str:
+    import re
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+
+def _project_work_similarity(left, right) -> float:
+    """Score two work descriptions without allowing cross-location matches."""
+    from difflib import SequenceMatcher
+
+    left_key = _vendor_key(left)
+    right_key = _vendor_key(right)
+    if not left_key or not right_key:
+        return 0.0
+    left_tokens = set(left_key.split())
+    right_tokens = set(right_key.split())
+    overlap = len(left_tokens & right_tokens) / max(1, min(len(left_tokens), len(right_tokens)))
+    sequence = SequenceMatcher(None, left_key, right_key).ratio()
+    return max(sequence, (overlap * 0.65) + (sequence * 0.35))
+
+
+def _match_project_work(description, constituency, state, project_by_key, project_by_location, project_token_index, matcher_cache=None):
+    """Resolve a work description to one unambiguous project in its location.
+
+    Semantically identical to scoring every candidate with
+    _project_work_similarity, but exact fast paths keep large locations
+    tractable:
+      - SequenceMatcher caches its lookup table for seq2, so one matcher per
+        project (reusing the table) with set_seq1 per query returns the same
+        ratio() as constructing a fresh matcher for every pair.
+      - real_quick_ratio()/quick_ratio() are documented upper bounds on
+        ratio(), so candidates whose best possible score falls below the
+        acceptance threshold - or below best - 0.08 once the best is known
+        (the margin rule) - can be skipped without changing any outcome.
+    """
+    from difflib import SequenceMatcher
+
+    key = (_vendor_key(description), _vendor_key(constituency), _vendor_key(state))
+    exact = project_by_key.get(key, [])
+    if exact:
+        return exact
+    if not key[0] or not key[1] or not key[2]:
+        return []
+    location_key = (key[1], key[2])
+    candidate_ids = set()
+    for token in set(key[0].split()):
+        candidate_ids.update(project_token_index.get((location_key, token), set()))
+    candidates = [project for project in project_by_location.get(location_key, []) if project["id"] in candidate_ids]
+    if not candidates:
+        return []
+
+    left_key = key[0]
+    left_tokens = set(left_key.split())
+    threshold = 0.82
+
+    def matcher_for(project):
+        entry = matcher_cache.get(project["id"]) if matcher_cache is not None else None
+        if entry is None:
+            entry = SequenceMatcher(None, "", _vendor_key(project["project_name"]))
+            if matcher_cache is not None:
+                matcher_cache[project["id"]] = entry
+        entry.set_seq1(left_key)
+        return entry
+
+    # Pass 1: cheap upper bounds. score = max(ratio, overlap*0.65 + ratio*0.35),
+    # so the best attainable score uses quick_ratio as the ratio bound.
+    live = []
+    for project in candidates:
+        matcher = matcher_for(project)
+        right_tokens = set(_vendor_key(project["project_name"]).split())
+        overlap = len(left_tokens & right_tokens) / max(1, min(len(left_tokens), len(right_tokens)))
+        ub_ratio = matcher.real_quick_ratio()
+        if ub_ratio < threshold and (overlap * 0.65 + ub_ratio * 0.35) < threshold:
+            continue
+        quick = matcher.quick_ratio()
+        ub = max(quick, overlap * 0.65 + quick * 0.35)
+        live.append((ub, overlap, project))
+    if not live:
+        return []
+
+    # Pass 2: score candidates in descending upper-bound order, stopping as
+    # soon as no remaining candidate can beat the current best or fall within
+    # its 0.08 margin — the exact accept/reject decision of scoring every
+    # candidate, without the cost.
+    live.sort(key=lambda item: item[0], reverse=True)
+    best_score = None
+    best_project = None
+    second_score = 0.0
+    scored_count = 0
+    for ub, overlap, project in live:
+        # Nothing further can become an accepted best once the upper bounds
+        # drop below the threshold, and the margin scan below cannot flip a
+        # threshold-based rejection, so stop without scoring them.
+        if best_score is None and ub < threshold:
+            break
+        if best_score is not None and best_score >= threshold and ub < best_score - 0.08:
+            break
+        ratio = matcher_for(project).ratio()
+        score = max(ratio, overlap * 0.65 + ratio * 0.35)
+        scored_count += 1
+        if best_score is None or score > best_score:
+            if best_score is not None:
+                second_score = best_score
+            best_score = score
+            best_project = project
+        elif score > second_score:
+            second_score = score
+    if best_score is not None and best_score >= threshold and (scored_count == 1 or best_score - second_score >= 0.08):
+        return [best_project]
+    return []
+
+
+def _vendor_type(name: str):
+    import re
+    raw = str(name or "").strip()
+    lower = raw.lower()
+    if not raw:
+        return "Unknown", "low"
+    if re.search(r"\b(panchayat|municipal|municipality|nagarpalika|local body|gram sabha)\b", lower):
+        return "Panchayat/Local Body", "medium"
+    if re.search(r"\b(government|govt|department|ministry|pwd|rural development|zila parishad)\b", lower):
+        return "Government Department", "medium"
+    if re.search(r"\b(mr|mrs|ms|shri|smt|dr)\.?\s+", lower) and not re.search(r"\b(ltd|llp|pvt|company|enterprises?)\b", lower):
+        return "Individual", "low"
+    if re.search(r"\b(contractor|supplier|vendor|works|construction|infrastructure|traders?|agency)\b", lower):
+        return "Supplier/Contractor", "medium"
+    if re.search(r"\b(ltd|limited|llp|pvt|private|company|industries|enterprise|enterprises|corp|corporation)\b", lower):
+        return "Company/Business", "medium"
+    return "Other/Unknown", "low"
+
+
+def _vendor_intelligence_payload(db: Session, include_projects: bool = False):
+    cache_key = "vendor_intelligence_full_v3" if include_projects else "vendor_intelligence_summary_v3"
+    # Long TTL: the payload is a pure function of the static dataset and is
+    # explicitly invalidated by clear_cache() on every data sync/upload.
+    cached = get_cached(cache_key, 3600)
+    if cached is not None:
+        return cached
+
+    full_cached = get_cached("vendor_intelligence_full_v3", 3600)
+    if full_cached is not None and not include_projects:
+        summary = dict(full_cached)
+        summary["vendors"] = [
+            {key: value for key, value in vendor.items() if key != "projects"}
+            for vendor in full_cached["vendors"]
+        ]
+        set_cached("vendor_intelligence_summary_v3", summary)
+        return summary
+
+    # Single-flight guard: only one rebuild at a time. Concurrent requests
+    # wait and then read the freshly cached payload instead of each spawning
+    # their own multi-minute computation.
+    global _vendor_build_in_progress
+    with _vendor_build_lock:
+        cached = get_cached(cache_key, 3600)
+        if cached is not None:
+            return cached
+        _vendor_build_in_progress = True
+        try:
+            return _build_vendor_intelligence_payload(db, include_projects)
+        finally:
+            _vendor_build_in_progress = False
+
+
+def _build_vendor_intelligence_payload(db: Session, include_projects: bool = False):
+    project_columns = (
+        models.Project.id, models.Project.project_name, models.Project.state,
+        models.Project.district, models.Project.constituency, models.Project.project_type,
+        models.Project.sanctioned_amount, models.Project.expenditure,
+        models.Project.completion_percentage, models.Project.status,
+    )
+    projects = [dict(zip(("id", "project_name", "state", "district", "constituency", "project_type", "sanctioned_amount", "expenditure", "completion_percentage", "status"), row)) for row in db.query(*project_columns).all()]
+    # Exact index only: (work_description, constituency, state) -> projects.
+    # Expenditure work descriptions are generic category templates, so fuzzy
+    # matching them onto specific project names produced guessed links and is
+    # no longer attempted: no link is preferable to a guessed link.
+    project_by_key = {}
+    for project in projects:
+        key = (_vendor_key(project["project_name"]), _vendor_key(project["constituency"]), _vendor_key(project["state"]))
+        project_by_key.setdefault(key, []).append(project)
+
+    risks = {
+        project_id: {
+            "score": int(score or 0),
+            "level": str(level or "Low").title(),
+        }
+        for project_id, score, level in db.query(models.RiskScore.project_id, models.RiskScore.risk_score, models.RiskScore.risk_level).all()
+    }
+    vendors = {}
+    linked_records = 0
+    linked_expenditure = 0.0
+    for row in db.query(
+        models.Expenditure.vendor,
+        models.Expenditure.expenditure_amount,
+        models.Expenditure.state,
+        models.Expenditure.work_description,
+        models.Expenditure.constituency,
+    ).all():
+        raw_name = str(row.vendor or "").strip()
+        if not raw_name:
+            continue
+        key = _vendor_key(raw_name)
+        if not key:
+            continue
+        linked_records += 1
+        amount = float(row.expenditure_amount or 0)
+        linked_expenditure += amount
+        bucket = vendors.setdefault(key, {
+            "vendor_name": raw_name,
+            "raw_names": set(),
+            "type": _vendor_type(raw_name)[0],
+            "type_confidence": _vendor_type(raw_name)[1],
+            "engagements": {},
+            "matched_project_ids": set(),
+            "projects": {} if include_projects else None,
+            "transactions": 0,
+            "total_expenditure": 0.0,
+            "states": set(),
+            "constituencies": set(),
+            "risk_scores": [],
+            "risk_counts": {"High": 0, "Medium": 0, "Low": 0},
+            "progress_counts": {"zero": 0, "low": 0, "completed": 0, "mismatch": 0},
+        })
+        bucket["raw_names"].add(raw_name)
+        bucket["transactions"] += 1
+        bucket["total_expenditure"] += amount
+        if row.state:
+            bucket["states"].add(str(row.state).strip())
+        if row.constituency:
+            bucket["constituencies"].add(str(row.constituency).strip())
+        # The expenditures table has no project_id column; within this dataset
+        # the canonical per-record project identifier is the work key
+        # (work_description, constituency, state) — the same identity
+        # timeline.py uses. project_count is therefore the number of DISTINCT
+        # work keys in the vendor's records (multiple transactions on one
+        # work count once), exactly as required: projects derived from the
+        # expenditure records themselves. A transaction with a blank key
+        # contributes to totals but cannot fabricate a project.
+        work_key = (_vendor_key(row.work_description), _vendor_key(row.constituency), _vendor_key(row.state))
+        if not work_key[0] or not work_key[1] or not work_key[2]:
+            continue
+        info = bucket["engagements"].setdefault(work_key, {
+            "work_description": str(row.work_description or "").strip(),
+            "constituency": str(row.constituency or "").strip(),
+            "state": str(row.state or "").strip(),
+            "amount": 0.0,
+            "transactions": 0,
+            "project_ids": [],
+        })
+        info["amount"] += amount
+        info["transactions"] += 1
+        if not info["project_ids"]:
+            # Attach real Project rows (and their risk context) only on the
+            # first transaction of this work key for this vendor, so each
+            # linked project is counted once per vendor.
+            for project in project_by_key.get(work_key, []):
+                project_id = project["id"]
+                if project_id in bucket["matched_project_ids"]:
+                    continue
+                bucket["matched_project_ids"].add(project_id)
+                info["project_ids"].append(project_id)
+                if include_projects:
+                    bucket["projects"][project_id] = project
+                project_risk = risks.get(project_id, {"score": 0, "level": "Low"})
+                level = project_risk["level"] if project_risk["level"] in ("High", "Medium", "Low") else "Low"
+                bucket["risk_counts"][level] += 1
+                bucket["risk_scores"].append(project_risk["score"])
+                completion = float(project["completion_percentage"] or 0)
+                expenditure = float(project["expenditure"] or 0)
+                sanctioned = float(project["sanctioned_amount"] or 0)
+                if completion <= 0:
+                    bucket["progress_counts"]["zero"] += 1
+                elif completion < 50:
+                    bucket["progress_counts"]["low"] += 1
+                elif completion >= 100:
+                    bucket["progress_counts"]["completed"] += 1
+                if sanctioned > 0 and expenditure > sanctioned or (expenditure > 0 and completion <= 0):
+                    bucket["progress_counts"]["mismatch"] += 1
+
+    total = linked_expenditure or 0.0
+    rows = []
+    for bucket in vendors.values():
+        project_rows = list(bucket["projects"].values()) if include_projects else []
+        scores = bucket["risk_scores"]
+        high = bucket["risk_counts"]["High"]        # project_count: distinct work engagements in the vendor's expenditure
+        # records. Each transaction adds at most one engagement, so
+        # project_count <= transaction_count always holds, and any vendor with
+        # a keyed record has project_count >= 1. Linked real projects (exact
+        # work-key matches) are reported separately as linked_project_count:
+        # projects table rows duplicating the same work/location identity must
+        # not inflate the count beyond the vendor's own records.
+        engagement_count = len(bucket["engagements"])
+        linked_project_count = len(bucket["matched_project_ids"])
+        row = {
+            "normalized_name": _vendor_key(bucket["vendor_name"]),
+            "vendor_name": bucket["vendor_name"],
+            "raw_names": sorted(bucket["raw_names"]),
+            "type": bucket["type"],
+            "type_confidence": bucket["type_confidence"],
+            "project_count": engagement_count,
+            "engagement_count": engagement_count,
+            "linked_project_count": linked_project_count,
+            "transaction_count": bucket["transactions"],
+            "total_expenditure": round(bucket["total_expenditure"], 2),
+            "states": sorted(bucket["states"]),
+            "constituencies": sorted(bucket["constituencies"]),
+            "high_risk_projects": high,
+            "risk_counts": bucket["risk_counts"],
+            "average_risk": round(sum(scores) / len(scores), 1) if scores else 0,
+            "highest_risk": max(scores) if scores else 0,
+            "progress_counts": bucket["progress_counts"],
+        }
+        if include_projects:
+            row["projects"] = [{
+                "id": p["id"], "project_name": p["project_name"], "state": p["state"],
+                "district": p["district"], "constituency": p["constituency"],
+                "project_type": p["project_type"], "sanctioned_amount": p["sanctioned_amount"] or 0,
+                "expenditure": p["expenditure"] or 0, "completion_percentage": p["completion_percentage"] or 0,
+                "status": p["status"], "risk": risks.get(p["id"], {"score": 0, "level": "Low"}),
+            } for p in project_rows]
+            row["engagements"] = [
+                {
+                    "work_description": e["work_description"],
+                    "constituency": e["constituency"],
+                    "state": e["state"],
+                    "transaction_count": e["transactions"],
+                    "total_amount": round(e["amount"], 2),
+                    "project_ids": e["project_ids"],
+                }
+                for e in bucket["engagements"].values()
+            ]
+        rows.append(row)
+    rows.sort(key=lambda item: item["total_expenditure"], reverse=True)
+    for index, row in enumerate(rows):
+        row["expenditure_share"] = round((row["total_expenditure"] / total * 100) if total else 0, 2)
+        row["concentration_rank"] = index + 1
+
+    top5_share = round(sum(item["expenditure_share"] for item in rows[:5]), 2)
+    top10_share = round(sum(item["expenditure_share"] for item in rows[:10]), 2)
+    full_payload = {
+        "data_source": "Current MPLADS expenditure dataset",
+        "generated_from": ["projects", "expenditures", "risk_scores"],
+        "normalization": "Vendor names use basic case, space, and punctuation normalization only; raw names are retained.",
+        "project_count_method": (
+            "The expenditures dataset has no project_id column. project_count "
+            "is the number of distinct work engagements in the vendor's own "
+            "expenditure records (work_description + constituency + state); "
+            "multiple transactions on one work count as one project, so "
+            "project_count <= transaction_count always holds. Real project "
+            "rows matching the exact work key are attached separately as "
+            "linked_project_count. No project links are guessed."
+        ),
+        "stats": {
+            "unique_vendors": len(rows),
+            "vendor_linked_records": linked_records,
+            "total_vendor_expenditure": round(total, 2),
+            "multi_project_vendors": sum(1 for item in rows if item["project_count"] > 1),
+            "vendors_with_high_risk_projects": sum(1 for item in rows if item["high_risk_projects"] > 0),
+            "unusual_concentration": bool(rows and (rows[0]["expenditure_share"] >= 25 or top5_share >= 60)),
+            "top5_share": top5_share,
+            "top10_share": top10_share,
+        },
+        "vendors": rows,
+    }
+    if include_projects:
+        set_cached("vendor_intelligence_full_v3", full_payload)
+    summary = dict(full_payload)
+    summary["vendors"] = [
+        {key: value for key, value in vendor.items() if key != "projects"}
+        for vendor in rows
+    ]
+    set_cached("vendor_intelligence_summary_v3", summary)
+    return full_payload if include_projects else summary
+
+
+@app.get("/vendor-intelligence", tags=["Vendor Intelligence"])
+def get_vendor_intelligence(
+    q: Optional[str] = Query(None, description="Search vendor name or state"),
+    vendor_type: Optional[str] = Query(None, description="Vendor classification"),
+    sort_by: str = Query("total_expenditure"),
+    sort_dir: str = Query("desc"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(250, ge=1, le=1000),
+    db: Session = Depends(get_db),
+):
+    payload = _vendor_intelligence_payload(db)
+    vendors = list(payload["vendors"])
+    needle = (q or "").strip().lower()
+    if needle:
+        vendors = [vendor for vendor in vendors if needle in vendor["vendor_name"].lower() or any(needle in state.lower() for state in vendor["states"])]
+    if vendor_type:
+        vendors = [vendor for vendor in vendors if vendor["type"] == vendor_type]
+    allowed_sort = {"vendor_name", "type", "project_count", "transaction_count", "total_expenditure", "high_risk_projects", "average_risk", "expenditure_share"}
+    sort_field = sort_by if sort_by in allowed_sort else "total_expenditure"
+    reverse = str(sort_dir).lower() != "asc"
+    vendors.sort(key=lambda vendor: vendor.get(sort_field) or ("" if sort_field in ("vendor_name", "type") else 0), reverse=reverse)
+    result = dict(payload)
+    result["total_vendors"] = len(vendors)
+    result["skip"] = skip
+    result["limit"] = limit
+    result["vendors"] = vendors[skip:skip + limit]
+    return result
+
+
+@app.get("/vendor-intelligence/{vendor_key}", tags=["Vendor Intelligence"])
+def get_vendor_profile(vendor_key: str, db: Session = Depends(get_db)):
+    payload = _vendor_intelligence_payload(db, include_projects=True)
+    for vendor in payload["vendors"]:
+        if vendor.get("normalized_name") == _vendor_key(vendor_key):
+            return vendor
+    raise HTTPException(status_code=404, detail="Vendor not found in the current MPLADS dataset")
+
+
 @app.get("/completed-works", tags=["MP Operations"])
 def get_completed_works(
     state: Optional[str] = None,
@@ -1397,8 +1878,16 @@ def detect_anomalies(
 
 
         anomalies_list = []
+        # Expenditure activity span (first/latest recorded expenditure dates)
+        # — derived from the same conservative matching as the timeline, so it
+        # adds one dict lookup per row, no extra queries.
+        from activity import get_expenditure_span
         for risk, proj in rows:
             reasons = [r.strip() for r in (risk.reasons or "").split(",") if r.strip()]
+            try:
+                span = get_expenditure_span(proj) or {}
+            except Exception:
+                span = {}
             anomalies_list.append({
                 "project_id": proj.id,
                 "project_name": proj.project_name,
@@ -1414,7 +1903,12 @@ def detect_anomalies(
                 "risk_level": risk.risk_level,
                 "ml_anomaly": risk.ml_anomaly,
                 "ml_score": risk.ml_score,
-                "reasons": reasons
+                "reasons": reasons,
+                "expenditure_first_date": span.get("first_expenditure_date"),
+                "expenditure_latest_date": span.get("latest_expenditure_date"),
+                "activity_days": span.get("activity_days"),
+                "delay_indicator": span.get("delay_indicator"),
+                "delay_severity": span.get("delay_severity"),
             })
 
         total_checked = db.query(func.count(models.Project.id)).scalar() or 0
@@ -1443,11 +1937,16 @@ def detect_anomalies(
     projects = candidate_query.offset(skip).limit(limit).all()
 
     anomalies = []
+    from activity import get_expenditure_span
     for proj in projects:
         risk_info = predict_risk(proj)
         if risk_info["is_anomaly"]:
             if risk_level and risk_info["risk_level"].lower() != risk_level.lower():
                 continue
+            try:
+                span = get_expenditure_span(proj) or {}
+            except Exception:
+                span = {}
             anomalies.append({
                 "project_id": proj.id,
                 "project_name": proj.project_name,
@@ -1463,7 +1962,12 @@ def detect_anomalies(
                 "risk_level": risk_info["risk_level"],
                 "ml_anomaly": risk_info["ml_anomaly"],
                 "ml_score": risk_info["ml_score"],
-                "reasons": risk_info["reasons"]
+                "reasons": risk_info["reasons"],
+                "expenditure_first_date": span.get("first_expenditure_date"),
+                "expenditure_latest_date": span.get("latest_expenditure_date"),
+                "activity_days": span.get("activity_days"),
+                "delay_indicator": span.get("delay_indicator"),
+                "delay_severity": span.get("delay_severity"),
             })
 
     total_checked = db.query(func.count(models.Project.id)).scalar() or 0
@@ -2156,6 +2660,13 @@ def _intel_cache_set(key: str, value: Any):
 def clear_intel_cache():
     with _intel_cache_lock:
         _intel_cache.clear()
+    # The vendor-intelligence caches are keyed on the dataset contents and
+    # now carry long TTLs, so dataset changes (CSV upload / sync) must drop
+    # them as well. clear_cache() is invoked by the other data-mutation
+    # endpoints and also clears the vendor match cache.
+    clear_cache("vendor_intelligence")
+    with _match_cache_lock:
+        _match_cache.clear()
 
 
 def _project_or_404(db: Session, project_id: int):

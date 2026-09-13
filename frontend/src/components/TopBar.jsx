@@ -163,6 +163,7 @@ function TopBar({
     "Audit Priority",
     "State Intelligence",
     "Reports",
+    "Vendor Intelligence",
   ]
 
   return (

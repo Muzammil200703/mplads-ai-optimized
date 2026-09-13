@@ -32,7 +32,7 @@ function IconFor({ icon }) {
   return icon
 }
 
-function NavRow({ icon, label, href, active, onNavigate, collapsed }) {
+function NavRow({ icon, label, href, active, onNavigate, collapsed, badge }) {
   return (
     <button
       key={label}
@@ -56,11 +56,19 @@ function NavRow({ icon, label, href, active, onNavigate, collapsed }) {
       </span>
       <span
         className={`
-          min-w-0 whitespace-nowrap text-sm font-medium transition-all duration-300
+          flex min-w-0 items-center text-sm font-medium transition-all duration-300
           ${collapsed ? "w-0 overflow-hidden opacity-0" : "w-auto opacity-100"}
         `}
       >
-        {label}
+        <span className="min-w-0 truncate">{label}</span>
+        {badge && (
+          <span
+            title="Beta feature"
+            className="ml-1.5 flex-none rounded-full border border-amber-200 bg-amber-100 px-[5px] py-px text-[9px] font-bold leading-none tracking-wide text-amber-800 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-300"
+          >
+            {badge}
+          </span>
+        )}
       </span>
     </button>
   )
@@ -97,6 +105,7 @@ function Sidebar({
     { name: "State Intelligence", href: "State Intelligence", icon: "map-pin" },
     { name: "Audit Priority", href: "Audit Priority", icon: "🎯" },
     { name: "Compare Projects", href: "Compare Projects", icon: "⚖" },
+    { name: "Vendor Intelligence", href: "Vendor Intelligence", icon: "briefcase", badge: "BETA" },
   ]
   const bottomNav = [
     { label: "Settings", href: "Settings", icon: "⚙" },
@@ -128,7 +137,7 @@ function Sidebar({
           </div>
           <nav className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-2">
             <div className="flex flex-col gap-1">
-              {mainNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} collapsed={collapsed} />)}
+              {mainNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} badge={item.badge} collapsed={collapsed} />)}
             {workspaceNav.length > 0 && (
               <>
                 <SectionHeading label="Workspace" collapsed={collapsed} />
@@ -156,7 +165,7 @@ function Sidebar({
       </div>
       <nav className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-2">
         <div className="flex flex-col gap-1">
-          {mainNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} collapsed={collapsed} />)}
+          {mainNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} badge={item.badge} collapsed={collapsed} />)}
           {workspaceNav.length > 0 && (
             <>
               <SectionHeading label="Workspace" collapsed={collapsed} />

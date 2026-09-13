@@ -280,6 +280,13 @@ export async function getProjectDetail(projectId) {
     request(`/projects/${projectId}`))
 }
 
+export async function getProjectGeolocation(projectId) {
+  // Resolved on demand only (never at page load). Backend persists results in
+  // geocode_cache; this short in-memory cache de-dupes quick re-opens.
+  return cachedGet(`geo_${projectId}`, 600000, () =>
+    request(`/projects/${projectId}/geolocation`))
+}
+
 export async function getAnomalies(params = {}) {
   return cachedGet(`data_anom_${buildQuery(params)}`, 30000, () =>
     request(`/anomalies${buildQuery(params)}`))
@@ -316,6 +323,16 @@ export async function getRecommendedWorks(params = {}) {
 
 export async function getExpenditures(params = {}) {
   return request(`/expenditures${buildQuery(params)}`)
+}
+
+export async function getVendorIntelligence(params = {}) {
+  const query = buildQuery(params)
+  return cachedGet(`vendor_intelligence_${query}`, 300000, () => request(`/vendor-intelligence${query}`))
+}
+
+export async function getVendorProfile(vendorKey) {
+  return cachedGet(`vendor_profile_${vendorKey}`, 300000, () =>
+    request(`/vendor-intelligence/${encodeURIComponent(vendorKey)}`))
 }
 
 export async function getCompletedWorks(params = {}) {

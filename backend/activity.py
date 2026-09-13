@@ -131,6 +131,64 @@ def _classify_gap(days: int) -> str:
     return "normal"
 
 
+def get_expenditure_span(project) -> Optional[dict]:
+    """
+    Compact expenditure-activity span for list views (Risk Center).
+
+    Returns the first/latest recorded expenditure dates, the day count between
+    them, and a conservative delay indicator derived ONLY from the combination
+    of activity duration and reported physical completion. This is recorded
+    financial activity duration — NOT an official start date or contractual
+    delay (no such dates exist in the source data).
+
+    Returns None when the project has no matched expenditure records with
+    valid dates.
+    """
+    _build_index()
+
+    key = (_norm(project.project_name), _norm(project.constituency), _norm(project.state))
+    sanctioned_mp = _rec_mp_index.get(key)
+
+    rows = _exp_index.get(key, [])
+    if sanctioned_mp:
+        rows = [r for r in rows if r["mp"] == sanctioned_mp]
+
+    if not rows:
+        return None
+
+    dates = sorted(r["date"] for r in rows)
+    first_date, latest_date = dates[0], dates[-1]
+    span_days = _days_between(first_date, latest_date)
+    if span_days is None or span_days < 0:
+        return None
+
+    completion = float(project.completion_percentage or 0)
+    completed = str(project.status or "").lower() == "completed"
+
+    # Indicator bands (documented, conservative):
+    #   A long recorded-activity window combined with very low reported
+    #   physical completion is an observation worth review — never a claim.
+    if span_days >= 365 and completion < 10:
+        indicator, severity = "Severe Execution Concern", "high"
+    elif span_days >= 180 and completion < 25:
+        indicator, severity = "Potential Delay", "medium"
+    elif span_days >= 180:
+        indicator, severity = "Extended Activity", "low"
+    else:
+        indicator, severity = None, None
+
+    return {
+        "first_expenditure_date": first_date,
+        "latest_expenditure_date": latest_date,
+        "activity_days": span_days,
+        "transaction_count": len(rows),
+        "completion_percentage": completion,
+        "delay_indicator": indicator,
+        "delay_severity": severity,
+        "match_confidence": "mp_verified" if sanctioned_mp else "key_exact",
+    }
+
+
 def get_expenditure_activity(project) -> dict:
     """
     Build the full expenditure-activity payload for one project (model instance).

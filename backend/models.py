@@ -280,6 +280,25 @@ class AuditEvidenceCheck(Base):
     )
 
 
+class GeocodeCache(Base):
+    """
+    Persistent cache of geocoder responses for Satellite Location Intelligence.
+
+    Keyed by the normalized geocoding query (not project id) so different
+    projects sharing a place string reuse one outbound call. Payload is the
+    full scoring result JSON. Successful resolves are cached indefinitely;
+    failures are never cached, so a later retry can succeed.
+    """
+
+    __tablename__ = "geocode_cache"
+
+    id = Column(Integer, primary_key=True, index=True)
+    query_hash = Column(String, index=True, unique=True)
+    query = Column(String)
+    payload = Column(Text)       # JSON scoring result
+    created_at = Column(String)
+
+
 class SyncMetadata(Base):
     __tablename__ = "sync_metadata"
 

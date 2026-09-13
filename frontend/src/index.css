@@ -90,6 +90,24 @@ table td:first-child, table td:nth-child(2) {
   white-space: normal;
 }
 
+/* Keep the large vendor table's layout work isolated from the rest of the
+   page so scrolling does not repeatedly reflow the analytics panels. */
+.vendor-table-wrap {
+  contain: layout paint;
+  contain-intrinsic-size: 760px 520px;
+}
+
+.vendor-page table td:first-child span {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+.vendor-page table td:nth-child(6),
+.vendor-page table td:nth-child(7) {
+  white-space: normal;
+  max-width: none;
+}
+
 /* Ensure modals don't overflow on small screens */
 @media (max-width: 639px) {
   .max-h-\[85vh\] {

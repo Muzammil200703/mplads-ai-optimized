@@ -26,6 +26,116 @@ const StateIntelligence = lazy(() => import("./pages/StateIntelligence"))
 const AuditPriority = lazy(() => import("./pages/AuditPriority"))
 const CompareProjects = lazy(() => import("./pages/CompareProjects"))
 const FAQ = lazy(() => import("./pages/FAQ"))
+const VendorIntelligence = lazy(() => import("./pages/VendorIntelligence"))
+
+/* ── Global scroll manager ─────────────────────────────────────────────
+   The app shell (AppShell) has exactly one page-level scroll container:
+   <main>. html/body never scroll, so the browser's default scroll-chaining
+   targets the document and dies — which felt like "the wheel stops working"
+   when the cursor happened to be over the fixed header or sidebar.
+
+   This manager restores normal browser feel globally, without changing any
+   visuals or behavior:
+   • Wheel/trackpad over any chrome (header, sidebar, non-scrollable page
+     regions) scrolls <main> — the same one predictable vertical context.
+   • PageUp/PageDown/Home/End/Space scroll <main> (keyboard used to target
+     the locked document scroller and do nothing).
+   • While any overlay (drawer/modal) is open, wheel/keys are inert so the
+     locked background stays put; the overlay's own panel keeps its native
+     scrolling. Closing the overlay instantly restores wheel/keys to <main>.
+   • Stray-lock guard: if a component ever leaves body overflow locked
+     ("hidden") with no overlay open, unlock it — scroll lock state must
+     never stick after a modal unmounts. */
+function ScrollManager() {
+  useEffect(() => {
+    const mainScroller = () => document.querySelector("main")
+    // Overlay detection: every real overlay in this app (project drawer,
+    // modals, vendor profile, mobile backdrop) is a position:fixed DIV.
+    // All app chrome is a fixed HEADER (top bar) or ASIDE (sidebars) —
+    // excluded by tag. A translated-off-screen drawer fails the viewport-
+    // intersection test, so a closed mobile sidebar never reads as an overlay.
+    const overlayOpen = () => {
+      return Array.from(document.querySelectorAll("div.fixed")).some((el) => {
+        const cs = getComputedStyle(el)
+        if (cs.display === "none" || cs.visibility === "hidden" || Number(cs.opacity) === 0) return false
+        const r = el.getBoundingClientRect()
+        if (r.width === 0 || r.height === 0) return false
+        const vw = window.innerWidth, vh = window.innerHeight
+        const intersects = r.left < vw * 0.9 && r.right > vw * 0.1 && r.top < vh * 0.9 && r.bottom > vh * 0.1
+        return intersects
+      })
+    }
+
+    const KEY_SCROLL_KEYS = new Set(["PageUp", "PageDown", "Home", "End", " "])
+    const onKey = (e) => {
+      if (e.ctrlKey || e.altKey || e.metaKey) return
+      const t = e.target
+      if (t instanceof HTMLElement && t.matches("input, textarea, select")) return
+      if (!KEY_SCROLL_KEYS.has(e.key)) return
+      if (overlayOpen()) return
+      const el = mainScroller()
+      if (!el) return
+      const page = el.clientHeight * 0.9
+      let next = null
+      if (e.key === "PageDown" || e.key === " ") next = el.scrollTop + page
+      else if (e.key === "PageUp") next = el.scrollTop - page
+      else if (e.key === "Home") next = 0
+      else if (e.key === "End") next = el.scrollHeight
+      if (next === null) return
+      e.preventDefault()
+      el.scrollTo({ top: Math.max(0, Math.min(el.scrollHeight - el.clientHeight, next)), behavior: "auto" })
+    }
+
+    const onWheel = (e) => {
+      // Never hijack native scrolling inside an existing scrollable region
+      // (main, overlay panels, tables, dropdowns): the browser handles it.
+      let node = e.target instanceof Element ? e.target : null
+      while (node && node !== document.body) {
+        if (node instanceof HTMLElement) {
+          const cs = getComputedStyle(node)
+          const canScrollY = /(auto|scroll|overlay)/.test(cs.overflowY)
+          if (canScrollY && node.scrollHeight > node.clientHeight + 1) return
+        }
+        node = node.parentElement
+      }
+      // Cursor over chrome / inert page surface → scroll the main region.
+      if (overlayOpen()) return // background stays locked while an overlay is up
+      const el = mainScroller()
+      if (!el) return
+      el.scrollTop += e.deltaY
+    }
+
+    document.addEventListener("wheel", onWheel, { passive: true })
+    document.addEventListener("keydown", onKey)
+    if (typeof window !== "undefined") window.__scrollManagerActive = true // dev fingerprint
+
+    // Stray-lock guard: body must never stay overflow:hidden with no overlay
+    let unlockTimer = null
+    const watchdog = () => {
+      if (overlayOpen()) return
+      if (document.body.style.overflow === "hidden") {
+        clearTimeout(unlockTimer)
+        unlockTimer = setTimeout(() => {
+          if (!overlayOpen() && document.body.style.overflow === "hidden") {
+            document.body.style.overflow = ""
+            console.warn("[ScrollManager] released stray body scroll lock")
+          }
+        }, 80)
+      }
+    }
+    const mo = new MutationObserver(watchdog)
+    mo.observe(document.body, { attributes: true, attributeFilter: ["style"], subtree: false })
+
+    return () => {
+      document.removeEventListener("wheel", onWheel)
+      document.removeEventListener("keydown", onKey)
+      mo.disconnect()
+      clearTimeout(unlockTimer)
+    }
+  }, [])
+
+  return null
+}
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(() =>
@@ -43,6 +153,7 @@ function useIsMobile() {
 
 function AppShell() {
   const { user, loading: authLoading } = useAuth()
+  ScrollManager()
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [darkMode, setDarkMode] = useState(false)
   const [currentPage, setCurrentPage] = useState(
@@ -146,6 +257,7 @@ function AppShell() {
       { key: "Audit Priority", el: <AuditPriority fy={selectedFY} /> },
       { key: "Compare Projects", el: <CompareProjects fy={selectedFY} /> },
       { key: "FAQ", el: <FAQ /> },
+      { key: "Vendor Intelligence", el: <VendorIntelligence onOpenProject={openProjectFromWorkspace} /> },
       { key: "Settings", el: <SettingsPage darkMode={darkMode} onThemeToggle={() => setDarkMode((previous) => !previous)} /> },
       { key: "Saved Projects", el: <SavedProjectsPage onOpenProject={openProjectFromWorkspace} /> },
       { key: "My Investigations", el: <MyInvestigationsPage onOpenProject={openProjectFromWorkspace} /> },
