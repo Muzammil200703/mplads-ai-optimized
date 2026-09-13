@@ -2,6 +2,54 @@ import { useEffect, useState, useCallback, memo } from "react"
 import { getAnomalies, getAnomaliesSummary, getStates, getConstituencies, getProjectDetail, getAnomalyAnalytics, getRiskExplanation } from "../services/api"
 import { TableRowsSkeleton, CardsSkeleton, MobileCardsSkeleton } from "../components/Skeletons"
 import { formatMoney, formatNumber } from "../utils/format"
+import SatelliteLocationPanel, { SatelliteEvidenceChip } from "../components/SatelliteLocation"
+
+/* ──────────── Expenditure-span display helpers (recorded activity only —
+   NOT official start/delay dates; see tooltip below) ──────────── */
+const DELAY_TOOLTIP =
+  "Estimated from the first and latest recorded expenditure dates. This represents recorded financial activity duration, not an official contractual delay."
+
+function formatDate(iso) {
+  if (!iso) return "—"
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
+}
+
+function formatActivityDays(days) {
+  if (days === null || days === undefined) return null
+  if (days >= 365) {
+    const yrs = (days / 365).toFixed(1).replace(/\.0$/, "")
+    return `~${yrs} yr${yrs === "1" ? "" : "s"}`
+  }
+  if (days >= 60) {
+    const mo = Math.round(days / 30.44)
+    return `~${mo} mo`
+  }
+  return `~${days} days`
+}
+
+const DELAY_BADGE_STYLES = {
+  high: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
+  medium: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+  low: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
+}
+
+/* Satellite-evidence eligibility (client-side pre-filter — the geolocation
+   endpoint itself re-validates location resolvability on demand).
+   Criteria: high risk, low/zero physical progress, significant spend, and a
+   spatially observable project type (purchases are not observable). */
+const SATELLITE_MIN_EXPENDITURE = 1000000 // ₹10 lakh recorded spend
+const NON_OBSERVABLE_TYPES = /(vehicle|equipment|furniture|medical|ambulance|hearse|computer|laptop|printer|projector|smart board|sound|musical|gym|tanker|purchase|supply of)/i
+function satelliteEligible(a) {
+  return (
+    a.risk_level === "High" &&
+    Number(a.completion_percentage || 0) < 10 &&
+    Number(a.expenditure || 0) >= SATELLITE_MIN_EXPENDITURE &&
+    !NON_OBSERVABLE_TYPES.test(`${a.project_type || ""} ${a.project_name || ""}`)
+  )
+}
+
 
 /* ──────────── Donut Chart (pure CSS) ──────────── */
 const DonutChart = memo(function DonutChart({ high, medium, low, none }) {
@@ -480,11 +528,12 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
             <>
               {/* DESKTOP TABLE */}
               <div className="hidden lg:block overflow-x-auto">
-                <table className="w-full min-w-[900px]">
+                <table className="w-full min-w-[1020px]">
                   <thead>
                     <tr className="border-b-2 border-gray-200 bg-gray-50 text-left text-[0.625rem] font-bold uppercase tracking-widest text-gray-500 dark:border-gray-700 dark:bg-[#172033] dark:text-gray-400">
                       <th className="px-4 py-3">Project</th>
                       <th className="px-4 py-3">State / Constituency</th>
+                      <th className="px-4 py-3" title={DELAY_TOOLTIP}>Delayed By ⓘ</th>
                       <th className="px-4 py-3 text-right">Sanctioned</th>
                       <th className="px-4 py-3 text-right">Expenditure</th>
                       <th className="px-4 py-3 text-center">Progress</th>
@@ -502,6 +551,18 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                           <p className="max-w-[250px] truncate text-sm font-semibold text-gray-900 dark:text-white" title={a.project_name}>{a.project_name || "Unnamed"}</p>
                           <p className="text-[0.6875rem] text-gray-400">{a.project_type || "General"}</p>
                         </td>
+                        <td className="px-4 py-2.5 text-xs whitespace-nowrap">
+                          {a.activity_days !== null && a.activity_days !== undefined ? (
+                            <div title={DELAY_TOOLTIP}>
+                              <span className="font-mono text-xs font-semibold text-gray-800 dark:text-gray-200">~{a.activity_days.toLocaleString("en-IN")} days</span>
+                              {a.delay_indicator && (
+                                <span className={`mt-0.5 block w-fit rounded-full px-1.5 py-px text-[0.5625rem] font-bold ${DELAY_BADGE_STYLES[a.delay_severity] || DELAY_BADGE_STYLES.low}`}>{a.delay_indicator}</span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-gray-300 dark:text-gray-600">—</span>
+                          )}
+                        </td>
                         <td className="px-4 py-2.5 text-xs">
                           <p className="font-semibold">{a.state || "N/A"}</p>
                           <p className="text-gray-500">{a.constituency || "N/A"}</p>
@@ -514,6 +575,9 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                             <span className={`rounded-full px-2 py-0.5 text-[0.625rem] font-bold ${a.risk_level === "High" ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300" : a.risk_level === "Medium" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300" : a.risk_level === "Low" ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300"}`}>{a.risk_level}</span>
                             {getStaleProgressFlag(a) && (
                               <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-1 py-0.5 text-[0.5625rem] font-bold text-amber-600 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300" title="Data Update Notice: Reported progress or expenditure may not reflect the latest project status. A risk score indicates an anomaly based on available data and does not by itself confirm project delay or irregularity.">⚠</span>
+                            )}
+                            {satelliteEligible(a) && (
+                              <SatelliteEvidenceChip onClick={() => handleOpenDetail(a)} />
                             )}
                           </div>
                         </td>
@@ -539,6 +603,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                             <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-1 py-0.5 text-[0.5625rem] font-bold text-amber-600 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300" title="Data Update Notice: Reported progress or expenditure may not reflect the latest project status.">⚠</span>
                           )}
                           {a.ml_anomaly && <span className="rounded-full bg-purple-100 px-1.5 py-0.5 text-[0.625rem] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">ML</span>}
+                          {satelliteEligible(a) && <SatelliteEvidenceChip onClick={() => handleOpenDetail(a)} />}
                         </div>
                         <p className="mt-1 truncate font-semibold text-sm text-gray-900 dark:text-white" title={a.project_name}>{a.project_name || "Unnamed"}</p>
                         <p className="text-[0.6875rem] text-gray-500">{a.state || "N/A"}{a.constituency ? `, ${a.constituency}` : ""}</p>
@@ -551,6 +616,12 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                       <div className="flex justify-between"><span className="text-gray-500">Sanctioned</span><span className="font-mono font-semibold">{formatMoney(a.sanctioned_amount)}</span></div>
                       <div className="flex justify-between"><span className="text-gray-500">Spent</span><span className="font-mono font-semibold">{formatMoney(a.expenditure)}</span></div>
                       <div className="flex justify-between"><span className="text-gray-500">Progress</span><span className="font-mono font-semibold">{a.completion_percentage}%</span></div>
+                    </div>
+                    <div className="mt-1.5 flex items-center gap-2 text-[0.6875rem] text-gray-500 dark:text-gray-400">
+                      <span title={DELAY_TOOLTIP}>Delayed By: <span className="font-mono font-semibold text-gray-700 dark:text-gray-300">{a.activity_days !== null && a.activity_days !== undefined ? `~${a.activity_days.toLocaleString("en-IN")} days` : "—"}</span> ⓘ</span>
+                      {a.delay_indicator && (
+                        <span className={`rounded-full px-1.5 py-px text-[0.5625rem] font-bold ${DELAY_BADGE_STYLES[a.delay_severity] || DELAY_BADGE_STYLES.low}`}>{a.delay_indicator}</span>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -665,6 +736,8 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                 </div>
               ) : (
                 <>
+                  {/* ── SATELLITE LOCATION INTELLIGENCE — BETA ── */}
+                  <SatelliteLocationPanel project={{ id: s.project_id }} />
                   {/* ── RISK SCORE GAUGE ── */}
                   <div className="rounded-xl border border-gray-200 bg-gray-50 p-5 dark:border-gray-700 dark:bg-[#111827]">
                     <div className="flex items-start justify-between gap-4">
@@ -763,6 +836,37 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                       </div>
                     )}
                   </div>
+
+                  {/* ── RECORDED EXPENDITURE ACTIVITY (delay estimate) ── */}
+                  {s.activity_days !== null && s.activity_days !== undefined && (
+                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#111827]">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-gray-400" title={DELAY_TOOLTIP}>Recorded Expenditure Activity ⓘ</h4>
+                        {s.delay_indicator && (
+                          <span className={`rounded-full px-2 py-0.5 text-[0.625rem] font-bold ${DELAY_BADGE_STYLES[s.delay_severity] || DELAY_BADGE_STYLES.low}`} title={DELAY_TOOLTIP}>{s.delay_indicator}</span>
+                        )}
+                      </div>
+                      <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-4">
+                        <div>
+                          <p className="text-[0.625rem] font-bold uppercase text-gray-400">Delayed By ⓘ</p>
+                          <p className="font-mono text-sm font-bold text-gray-900 dark:text-white" title={DELAY_TOOLTIP}>~{s.activity_days.toLocaleString("en-IN")} days</p>
+                        </div>
+                        <div>
+                          <p className="text-[0.625rem] font-bold uppercase text-gray-400">First Recorded Expenditure</p>
+                          <p className="font-mono text-sm font-bold">{formatDate(s.expenditure_first_date)}</p>
+                        </div>
+                        <div>
+                          <p className="text-[0.625rem] font-bold uppercase text-gray-400">Latest Recorded Expenditure</p>
+                          <p className="font-mono text-sm font-bold">{formatDate(s.expenditure_latest_date)}</p>
+                        </div>
+                        <div>
+                          <p className="text-[0.625rem] font-bold uppercase text-gray-400">Physical Completion</p>
+                          <p className="font-mono text-sm font-bold">{completion}%</p>
+                        </div>
+                      </div>
+                      <p className="mt-3 text-[0.625rem] italic text-gray-500 dark:text-gray-400">{DELAY_TOOLTIP}</p>
+                    </div>
+                  )}
 
                   {/* ── RISK DETECTION BREAKDOWN ── */}
                   {riskSignals.length > 0 && (

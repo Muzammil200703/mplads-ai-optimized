@@ -1,0 +1,295 @@
+INFO:     Started server process [12880]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+[startup] vendor intelligence warmed in 20.9s
+INFO:     127.0.0.1:64973 - "OPTIONS /filters/fys HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64973 - "GET /filters/fys HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64973 - "GET /filters/fys HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64973 - "OPTIONS /dashboard/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64973 - "GET /dashboard/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64973 - "OPTIONS /ai/narrative-insights HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64973 - "GET /ai/narrative-insights HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64973 - "OPTIONS /dashboard/states HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64973 - "GET /dashboard/states HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64973 - "OPTIONS /dashboard/anomalies-summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64973 - "GET /dashboard/anomalies-summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64973 - "GET /dashboard/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64973 - "GET /ai/narrative-insights HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64973 - "GET /dashboard/states HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64973 - "GET /dashboard/anomalies-summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64979 - "GET /projects/5/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64986 - "OPTIONS /vendor-intelligence?skip=0&limit=15&sort_by=total_expenditure&sort_dir=desc HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64986 - "GET /dashboard/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64987 - "GET /ai/narrative-insights HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64988 - "GET /vendor-intelligence?skip=0&limit=15&sort_by=total_expenditure&sort_dir=desc HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64988 - "OPTIONS /filters/states HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64987 - "OPTIONS /anomalies/analytics HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64987 - "OPTIONS /anomalies?skip=0&limit=20&sort_by=risk_score&sort_dir=desc HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64987 - "GET /filters/states HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64992 - "GET /dashboard/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64993 - "GET /ai/narrative-insights HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64987 - "GET /filters/states HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64988 - "GET /anomalies/analytics HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64988 - "GET /anomalies/analytics HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64986 - "GET /anomalies?skip=0&limit=20&sort_by=risk_score&sort_dir=desc HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65005 - "GET /projects/5/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65006 - "GET /projects/5/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65007 - "GET /projects/80649/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65016 - "OPTIONS /anomalies?skip=0&limit=20&q=5&sort_by=risk_score&sort_dir=desc HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65016 - "GET /anomalies?skip=0&limit=20&q=5&sort_by=risk_score&sort_dir=desc HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65021 - "OPTIONS /projects/83488 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65020 - "OPTIONS /ai/risk-explanation/83488 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65020 - "GET /projects/83488 HTTP/1.1" 200 OK
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+INFO:     127.0.0.1:65021 - "GET /ai/risk-explanation/83488 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65021 - "OPTIONS /projects/83488/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65021 - "GET /projects/83488/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65025 - "OPTIONS /projects/81747 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65026 - "OPTIONS /ai/risk-explanation/81747 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65026 - "GET /projects/81747 HTTP/1.1" 200 OK
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+INFO:     127.0.0.1:65025 - "GET /ai/risk-explanation/81747 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65025 - "OPTIONS /projects/81747/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65025 - "GET /projects/81747/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65030 - "OPTIONS /projects/83540 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65031 - "OPTIONS /ai/risk-explanation/83540 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65031 - "GET /projects/83540 HTTP/1.1" 200 OK
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+INFO:     127.0.0.1:65030 - "GET /ai/risk-explanation/83540 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65030 - "OPTIONS /projects/83540/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65030 - "GET /projects/83540/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65041 - "OPTIONS /projects?skip=0&limit=15 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65042 - "OPTIONS /search/projects?limit=1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65042 - "GET /projects?skip=0&limit=15 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65043 - "GET /dashboard/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65041 - "GET /search/projects?limit=1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65046 - "GET /dashboard/anomalies-summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65042 - "GET /anomalies/analytics HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65046 - "GET /dashboard/anomalies-summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65044 - "GET /ai/narrative-insights HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65045 - "GET /dashboard/states HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65043 - "GET /anomalies?skip=0&limit=20&q=5&sort_by=risk_score&sort_dir=desc HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65052 - "OPTIONS /search/projects?q=5&skip=0&limit=15 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65052 - "GET /search/projects?q=5&skip=0&limit=15 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65071 - "GET /search/projects?q=5&skip=0&limit=15 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65074 - "GET /projects/83540 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65085 - "OPTIONS /search/projects?q=Garacharma&skip=0&limit=15 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65085 - "GET /search/projects?q=Garacharma&skip=0&limit=15 HTTP/1.1" 200 OK
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+INFO:     127.0.0.1:65090 - "GET /projects/83540 HTTP/1.1" 200 OK
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+INFO:     127.0.0.1:65091 - "GET /ai/risk-explanation/83540 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65127 - "OPTIONS /filters/fys HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65127 - "GET /filters/fys HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65127 - "GET /filters/fys HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65127 - "OPTIONS /dashboard/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65128 - "OPTIONS /ai/narrative-insights HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65129 - "OPTIONS /dashboard/states HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65127 - "OPTIONS /dashboard/anomalies-summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65130 - "OPTIONS /ai/narrative-insights HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65128 - "GET /dashboard/anomalies-summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65128 - "GET /dashboard/anomalies-summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65127 - "GET /ai/narrative-insights HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65127 - "GET /ai/narrative-insights HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65129 - "GET /dashboard/states HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65129 - "GET /dashboard/states HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65130 - "GET /dashboard/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65130 - "GET /dashboard/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65130 - "OPTIONS /filters/states HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65129 - "OPTIONS /projects?skip=0&limit=15 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65127 - "OPTIONS /search/projects?limit=1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65130 - "GET /search/projects?limit=1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65129 - "GET /projects?skip=0&limit=15 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65127 - "GET /filters/states HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65128 - "GET /dashboard/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65131 - "GET /ai/narrative-insights HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65127 - "GET /filters/states HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65127 - "OPTIONS /projects/4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65131 - "OPTIONS /projects/4/similar?limit=5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65128 - "OPTIONS /investigations/4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65127 - "OPTIONS /investigations/4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65131 - "GET /investigations/4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65127 - "GET /projects/4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65128 - "GET /projects/4/similar?limit=5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65131 - "GET /investigations/4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65131 - "OPTIONS /projects/4/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65131 - "GET /projects/4/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65162 - "OPTIONS /projects/5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65163 - "OPTIONS /projects/5/similar?limit=5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65164 - "OPTIONS /investigations/5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65162 - "GET /projects/5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65164 - "GET /investigations/5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65163 - "GET /projects/5/similar?limit=5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65164 - "GET /investigations/5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65164 - "OPTIONS /ai/risk-explanation/5 HTTP/1.1" 200 OK
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+INFO:     127.0.0.1:65163 - "OPTIONS /ai/anomaly-explanation/5 HTTP/1.1" 200 OK
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+INFO:     127.0.0.1:65162 - "OPTIONS /projects/5/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65164 - "GET /ai/risk-explanation/5 HTTP/1.1" 200 OK
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+INFO:     127.0.0.1:65162 - "GET /projects/5/geolocation HTTP/1.1" 200 OK
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+INFO:     127.0.0.1:65165 - "GET /ai/anomaly-explanation/5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65166 - "GET /projects/4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65167 - "GET /investigations/4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65167 - "GET /investigations/4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65178 - "OPTIONS /filters/constituencies?state=Telangana HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65179 - "OPTIONS /projects?state=Telangana&skip=0&limit=15 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65180 - "OPTIONS /search/projects?state=Telangana&limit=1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65180 - "GET /filters/constituencies?state=Telangana HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65178 - "GET /search/projects?state=Telangana&limit=1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65179 - "GET /projects?state=Telangana&skip=0&limit=15 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65181 - "OPTIONS /filters/constituencies?state=Karnataka HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65182 - "OPTIONS /projects?state=Karnataka&skip=0&limit=15 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65183 - "OPTIONS /search/projects?state=Karnataka&limit=1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65183 - "GET /filters/constituencies?state=Karnataka HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65182 - "GET /projects?state=Karnataka&skip=0&limit=15 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65181 - "GET /search/projects?state=Karnataka&limit=1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65181 - "OPTIONS /projects/21855 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65182 - "OPTIONS /projects/21855/similar?limit=5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65183 - "OPTIONS /investigations/21855 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65184 - "OPTIONS /investigations/21855 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65184 - "GET /projects/21855/similar?limit=5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65182 - "GET /investigations/21855 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65183 - "GET /projects/21855 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65183 - "OPTIONS /ai/risk-explanation/21855 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65184 - "OPTIONS /ai/anomaly-explanation/21855 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65182 - "GET /investigations/21855 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65182 - "OPTIONS /projects/21855/geolocation HTTP/1.1" 200 OK
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+INFO:     127.0.0.1:65184 - "GET /ai/anomaly-explanation/21855 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65183 - "GET /ai/risk-explanation/21855 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65182 - "GET /projects/21855/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65190 - "OPTIONS /projects/21860 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65191 - "OPTIONS /projects/21860/similar?limit=5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65192 - "OPTIONS /investigations/21860 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65193 - "OPTIONS /investigations/21860 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65193 - "GET /projects/21860 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65191 - "GET /investigations/21860 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65192 - "GET /projects/21860/similar?limit=5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65192 - "GET /investigations/21860 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65192 - "OPTIONS /projects/21860/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65192 - "GET /projects/21860/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65201 - "GET /projects/5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65202 - "GET /investigations/5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65202 - "GET /investigations/5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65222 - "GET /projects/5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65224 - "GET /investigations/5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65223 - "GET /projects/5/similar?limit=5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65222 - "GET /investigations/5 HTTP/1.1" 200 OK
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+INFO:     127.0.0.1:65222 - "GET /ai/risk-explanation/5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65223 - "GET /ai/anomaly-explanation/5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65241 - "OPTIONS /filters/fys HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65242 - "OPTIONS /filters/fys HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65242 - "GET /filters/fys HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65242 - "GET /filters/fys HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65242 - "OPTIONS /dashboard/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65241 - "OPTIONS /ai/narrative-insights HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65242 - "OPTIONS /dashboard/states HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65241 - "OPTIONS /dashboard/anomalies-summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65244 - "GET /dashboard/anomalies-summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65244 - "GET /dashboard/anomalies-summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65242 - "GET /ai/narrative-insights HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65242 - "GET /ai/narrative-insights HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65241 - "GET /dashboard/states HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65242 - "GET /dashboard/states HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65243 - "GET /dashboard/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65243 - "GET /dashboard/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65243 - "OPTIONS /filters/states HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65242 - "OPTIONS /anomalies/analytics HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65241 - "OPTIONS /anomalies?skip=0&limit=20&sort_by=risk_score&sort_dir=desc HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65244 - "OPTIONS /filters/states HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65246 - "OPTIONS /anomalies/analytics HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65243 - "GET /dashboard/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65242 - "GET /ai/narrative-insights HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65241 - "GET /filters/states HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65241 - "GET /filters/states HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65246 - "GET /anomalies?skip=0&limit=20&sort_by=risk_score&sort_dir=desc HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65244 - "GET /anomalies/analytics HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65244 - "GET /anomalies/analytics HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65244 - "OPTIONS /projects/80649 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65246 - "OPTIONS /ai/risk-explanation/80649 HTTP/1.1" 200 OK
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+INFO:     127.0.0.1:65244 - "GET /projects/80649 HTTP/1.1" 200 OK
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+INFO:     127.0.0.1:65246 - "GET /ai/risk-explanation/80649 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65246 - "OPTIONS /projects/80649/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65246 - "GET /projects/80649/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65249 - "OPTIONS /projects/77184 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65250 - "OPTIONS /ai/risk-explanation/77184 HTTP/1.1" 200 OK
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+INFO:     127.0.0.1:65249 - "GET /projects/77184 HTTP/1.1" 200 OK
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+INFO:     127.0.0.1:65250 - "GET /ai/risk-explanation/77184 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65250 - "OPTIONS /projects/77184/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65250 - "GET /projects/77184/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65255 - "OPTIONS /projects/76350 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65256 - "OPTIONS /ai/risk-explanation/76350 HTTP/1.1" 200 OK
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+INFO:     127.0.0.1:65255 - "GET /projects/76350 HTTP/1.1" 200 OK
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+INFO:     127.0.0.1:65256 - "GET /ai/risk-explanation/76350 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65256 - "OPTIONS /projects/76350/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65256 - "GET /projects/76350/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65261 - "OPTIONS /projects/80534 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65262 - "OPTIONS /ai/risk-explanation/80534 HTTP/1.1" 200 OK
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+INFO:     127.0.0.1:65262 - "GET /projects/80534 HTTP/1.1" 200 OK
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+INFO:     127.0.0.1:65261 - "GET /ai/risk-explanation/80534 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65261 - "OPTIONS /projects/80534/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65261 - "GET /projects/80534/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65275 - "OPTIONS /anomalies?skip=0&limit=20&q=80649&sort_by=risk_score&sort_dir=desc HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65275 - "GET /anomalies?skip=0&limit=20&q=80649&sort_by=risk_score&sort_dir=desc HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65277 - "OPTIONS /search/projects?q=Garacharma&skip=0&limit=15 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65277 - "GET /search/projects?q=Garacharma&skip=0&limit=15 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65279 - "OPTIONS /projects/80649 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65280 - "OPTIONS /ai/risk-explanation/80649 HTTP/1.1" 200 OK
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+INFO:     127.0.0.1:65280 - "GET /projects/80649 HTTP/1.1" 200 OK
+C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn\utils\validation.py:2742: UserWarning: X has feature names, but IsolationForest was fitted without feature names
+  warnings.warn(
+INFO:     127.0.0.1:65279 - "GET /ai/risk-explanation/80649 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65279 - "OPTIONS /projects/80649/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65279 - "GET /projects/80649/geolocation HTTP/1.1" 200 OK
