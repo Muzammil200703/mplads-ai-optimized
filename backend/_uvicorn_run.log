@@ -293,3 +293,4 @@ C:\Users\Admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\sklearn
 INFO:     127.0.0.1:65279 - "GET /ai/risk-explanation/80649 HTTP/1.1" 200 OK
 INFO:     127.0.0.1:65279 - "OPTIONS /projects/80649/geolocation HTTP/1.1" 200 OK
 INFO:     127.0.0.1:65279 - "GET /projects/80649/geolocation HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53452 - "GET /health HTTP/1.1" 200 OK

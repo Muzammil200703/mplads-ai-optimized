@@ -49,7 +49,9 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
 
         if (ovRes.status === "rejected" && statesRes.status === "rejected") {
           setBackendConnected(false)
-          setError("Unable to connect to the backend server. Please check that the backend is running and accessible.")
+          setError(
+            "Backend is unreachable right now. On the free hosting tier the server sleeps when idle and takes about a minute to wake — please retry in a moment. If this keeps happening, the backend URL may be down or misconfigured."
+          )
         }
       } catch (err) {
         console.error("Overview error:", err)

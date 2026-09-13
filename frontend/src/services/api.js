@@ -37,20 +37,53 @@ function cacheInvalidate(prefix) {
   }
 }
 
-async function request(endpoint, options = {}) {
+// ═══════════════ REQUEST TRANSPORT ═══════════════
+// Render's free tier can 503/429 briefly while the instance wakes up or when
+// a cold-start burst hits the platform edge. Transient failures are retried
+// with a short backoff so a waking backend is treated as "starting", never as
+// a permanent configuration error.
+const TRANSIENT_STATUS = new Set([429, 502, 503, 504])
+const TRANSIENT_RETRIES = 2
+const TRANSIENT_BASE_DELAY_MS = 800
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function request(endpoint, options = {}, _attempt = 0) {
   const url = `${API_URL}${endpoint}`
   const token = getToken()
-  const response = await fetch(url, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(options.headers || {}),
-    },
-    ...options,
-  })
 
-  if (!response.status) {
-    // network-level failure
+  // Only attach Content-Type when a body is actually sent. A bodyless GET
+  // with "Content-Type: application/json" is NOT CORS-safelisted, so it
+  // forces a preflight OPTIONS before every request — wasteful round-trips
+  // that Render's free tier can throttle (429) during cold-start bursts,
+  // which then blocks the real request in the browser.
+  const headers = {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(options.headers || {}),
+  }
+  if (
+    options.body !== undefined &&
+    options.body !== null &&
+    !(options.body instanceof FormData) &&
+    !headers["Content-Type"]
+  ) {
+    headers["Content-Type"] = "application/json"
+  }
+
+  let response
+  try {
+    response = await fetch(url, { ...options, headers })
+  } catch (networkError) {
+    // fetch() rejects on network failures (offline, DNS, aborted connection).
+    // AbortError must always propagate so callers can cancel live search.
+    if (networkError && networkError.name === "AbortError") throw networkError
+    if (_attempt < TRANSIENT_RETRIES) {
+      await delay(TRANSIENT_BASE_DELAY_MS * (_attempt + 1))
+      return request(endpoint, options, _attempt + 1)
+    }
+    throw networkError
   }
 
   if (response.status === 401 && getToken()) {
@@ -59,13 +92,20 @@ async function request(endpoint, options = {}) {
     window.dispatchEvent(new CustomEvent("auth-expired"))
   }
 
+  // Retry transient platform failures (Render cold start 503, edge 429
+  // throttle, gateway 502/504) before surfacing an error to the UI.
+  if (TRANSIENT_STATUS.has(response.status) && _attempt < TRANSIENT_RETRIES) {
+    await delay(TRANSIENT_BASE_DELAY_MS * (_attempt + 1))
+    return request(endpoint, options, _attempt + 1)
+  }
+
   if (!response.ok) {
     let errorDetail = `API request failed: ${response.status}`
     try {
       const errJson = await response.json()
       if (errJson && errJson.detail) {
-        errorDetail = typeof errJson.detail === "string" 
-          ? errJson.detail 
+        errorDetail = typeof errJson.detail === "string"
+          ? errJson.detail
           : JSON.stringify(errJson.detail)
       }
     } catch { /* ignore JSON parse errors */ }
@@ -278,13 +318,6 @@ export async function getProjectActivity(projectId) {
 export async function getProjectDetail(projectId) {
   return cachedGet(`data_detail_${projectId}`, 60000, () =>
     request(`/projects/${projectId}`))
-}
-
-export async function getProjectGeolocation(projectId) {
-  // Resolved on demand only (never at page load). Backend persists results in
-  // geocode_cache; this short in-memory cache de-dupes quick re-opens.
-  return cachedGet(`geo_${projectId}`, 600000, () =>
-    request(`/projects/${projectId}/geolocation`))
 }
 
 export async function getAnomalies(params = {}) {

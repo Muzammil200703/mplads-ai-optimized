@@ -272,14 +272,44 @@ app = FastAPI(
 )
 
 # =========================================================
-# CORS CONFIGURATION
+# CORS CONFIGURATION (production-safe)
 # =========================================================
+# A failed CORS preflight (OPTIONS) makes the browser block the actual
+# request, so this configuration must answer preflights cheaply and
+# reliably:
+#   - Explicit localhost origins for development, the exact production
+#     frontend origin(s) via the CORS_ORIGINS env var (comma-separated,
+#     e.g. "https://mplads-ai.vercel.app"), plus any *.vercel.app
+#     deployment (covers Vercel production and preview domains).
+#   - allow_credentials is False: the frontend authenticates with a Bearer
+#     token in the Authorization header, never cookies. Wildcard origins
+#     combined with credentials=True is an invalid CORS combination and
+#     must not be restored.
+#   - max_age lets browsers cache preflight responses, cutting OPTIONS
+#     round-trips dramatically (important on Render's free tier, where
+#     cold-start request bursts are throttled by the platform edge).
+#
+# MIDDLEWARE ORDERING NOTE: Starlette runs middleware outermost-last, so
+# CORS must remain the LAST middleware added here. If a rate limiter is
+# ever introduced (slowapi / custom middleware), register it BEFORE this
+# block so CORSMiddleware answers OPTIONS preflights before the limiter
+# can convert them into 429 responses.
+_CORS_ORIGINS_ENV = os.environ.get("CORS_ORIGINS", "")
+_CORS_EXTRA_ORIGINS = [o.strip() for o in _CORS_ORIGINS_ENV.split(",") if o.strip()]
+_CORS_DEFAULT_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_CORS_DEFAULT_ORIGINS + _CORS_EXTRA_ORIGINS,
+    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_credentials=False,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
+    max_age=3600,
 )
 
 
@@ -866,34 +896,6 @@ def _audit_intelligence_summary(project, risk_info: Dict[str, Any]) -> Dict[str,
         }
     except Exception as exc:  # never break the detail endpoint
         return {"error": f"Audit summary unavailable: {exc}"}
-
-
-@app.get("/projects/{project_id}/geolocation", tags=["Projects"])
-def get_project_geolocation_endpoint(
-    project_id: int = Path(..., description="The ID of the project"),
-):
-    """
-    Satellite Location Intelligence (BETA).
-
-    Resolves an ESTIMATED location for one project from its existing location
-    fields (work description, district, constituency, state) using the
-    OpenStreetMap Nominatim geocoding service. Returns an honest confidence
-    level. Never fabricates coordinates: when the location cannot be reliably
-    resolved, `match` is null and the UI shows the fallback instead of a pin.
-
-    Results are cached in the geocode_cache table by query, so repeat views
-    and page loads never re-call the external service.
-    """
-    from geospatial import get_project_geolocation
-
-    db = SessionLocal()
-    try:
-        project = db.query(models.Project).filter(models.Project.id == project_id).first()
-        if not project:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Project with ID {project_id} not found")
-        return get_project_geolocation(project)
-    finally:
-        db.close()
 
 
 @app.get("/projects/{project_id}/timeline", tags=["Projects"])

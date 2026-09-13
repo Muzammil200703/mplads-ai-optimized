@@ -11,7 +11,6 @@ import {
   AuditCasePanel,
 } from "./AuditIntelligence"
 import { parseReasons } from "../utils/reasons"
-import SatelliteLocationPanel from "./SatelliteLocation"
 
 // ── Timeline helpers ─────────────────────────────────────────
 
@@ -448,8 +447,6 @@ function ProjectDetail({ projectId, onClose }) {
                 { label: "Status", value: proj.status || "Not available" },
               ]} />
               <ProgressCard completion={completion} />
-              {/* Satellite Location Intelligence — BETA (on-demand geolocation) */}
-              <SatelliteLocationPanel project={{ id: proj.id }} />
             </>
           )}
 

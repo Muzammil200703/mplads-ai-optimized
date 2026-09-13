@@ -2,7 +2,6 @@ import { useEffect, useState, useCallback, memo } from "react"
 import { getAnomalies, getAnomaliesSummary, getStates, getConstituencies, getProjectDetail, getAnomalyAnalytics, getRiskExplanation } from "../services/api"
 import { TableRowsSkeleton, CardsSkeleton, MobileCardsSkeleton } from "../components/Skeletons"
 import { formatMoney, formatNumber } from "../utils/format"
-import SatelliteLocationPanel, { SatelliteEvidenceChip } from "../components/SatelliteLocation"
 
 /* ──────────── Expenditure-span display helpers (recorded activity only —
    NOT official start/delay dates; see tooltip below) ──────────── */
@@ -34,22 +33,6 @@ const DELAY_BADGE_STYLES = {
   medium: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
   low: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
 }
-
-/* Satellite-evidence eligibility (client-side pre-filter — the geolocation
-   endpoint itself re-validates location resolvability on demand).
-   Criteria: high risk, low/zero physical progress, significant spend, and a
-   spatially observable project type (purchases are not observable). */
-const SATELLITE_MIN_EXPENDITURE = 1000000 // ₹10 lakh recorded spend
-const NON_OBSERVABLE_TYPES = /(vehicle|equipment|furniture|medical|ambulance|hearse|computer|laptop|printer|projector|smart board|sound|musical|gym|tanker|purchase|supply of)/i
-function satelliteEligible(a) {
-  return (
-    a.risk_level === "High" &&
-    Number(a.completion_percentage || 0) < 10 &&
-    Number(a.expenditure || 0) >= SATELLITE_MIN_EXPENDITURE &&
-    !NON_OBSERVABLE_TYPES.test(`${a.project_type || ""} ${a.project_name || ""}`)
-  )
-}
-
 
 /* ──────────── Donut Chart (pure CSS) ──────────── */
 const DonutChart = memo(function DonutChart({ high, medium, low, none }) {
@@ -576,9 +559,6 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                             {getStaleProgressFlag(a) && (
                               <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-1 py-0.5 text-[0.5625rem] font-bold text-amber-600 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300" title="Data Update Notice: Reported progress or expenditure may not reflect the latest project status. A risk score indicates an anomaly based on available data and does not by itself confirm project delay or irregularity.">⚠</span>
                             )}
-                            {satelliteEligible(a) && (
-                              <SatelliteEvidenceChip onClick={() => handleOpenDetail(a)} />
-                            )}
                           </div>
                         </td>
                         <td className="px-4 py-2.5 text-center font-mono text-sm font-bold">{a.risk_score}</td>
@@ -603,7 +583,6 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                             <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-1 py-0.5 text-[0.5625rem] font-bold text-amber-600 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300" title="Data Update Notice: Reported progress or expenditure may not reflect the latest project status.">⚠</span>
                           )}
                           {a.ml_anomaly && <span className="rounded-full bg-purple-100 px-1.5 py-0.5 text-[0.625rem] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">ML</span>}
-                          {satelliteEligible(a) && <SatelliteEvidenceChip onClick={() => handleOpenDetail(a)} />}
                         </div>
                         <p className="mt-1 truncate font-semibold text-sm text-gray-900 dark:text-white" title={a.project_name}>{a.project_name || "Unnamed"}</p>
                         <p className="text-[0.6875rem] text-gray-500">{a.state || "N/A"}{a.constituency ? `, ${a.constituency}` : ""}</p>
@@ -736,8 +715,6 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                 </div>
               ) : (
                 <>
-                  {/* ── SATELLITE LOCATION INTELLIGENCE — BETA ── */}
-                  <SatelliteLocationPanel project={{ id: s.project_id }} />
                   {/* ── RISK SCORE GAUGE ── */}
                   <div className="rounded-xl border border-gray-200 bg-gray-50 p-5 dark:border-gray-700 dark:bg-[#111827]">
                     <div className="flex items-start justify-between gap-4">
