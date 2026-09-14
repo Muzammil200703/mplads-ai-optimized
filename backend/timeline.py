@@ -1,43 +1,5 @@
-"""
-Project Timeline & Delay Intelligence
-=====================================
-
-Builds a normalized project-lifecycle event list by conservatively matching
-the existing work-level datasets to the `projects` table.
-
-MATCHING LOGIC (documented, conservative — no fuzzy guessing):
-  1. projects -> recommended_works
-     Key: exact normalized (work_description, constituency, state).
-     Basis: verified during implementation — 4,996/5,000 sampled projects match
-     exactly, and sanctioned_amount == recommended_amount on 4,974/4,996 of
-     those, confirming both tables come from the same source pipeline.
-     Confidence: "exact".
-
-  2. projects -> expenditures
-     Key: exact normalized (work_description, constituency, state) AND the
-     expenditure row's normalized MP name must equal the matched work's MP
-     name (expenditure descriptions are frequently generic, so the MP check
-     prevents attaching another work's payments).
-     Confidence: "mp_verified".
-
-  3. projects -> completed_works
-     Key: exact normalized (work_description, constituency, state).
-     Confidence: "exact".
-
-  The legacy MP-level CSVs (2009-14, 2014-19 GOI release data, 2014-19 MP
-  account summaries) contain NO work-level identifiers and are deliberately
-  NOT merged — see backend/data/legacy/README.md.
-
-DELAY CALCULATION:
-  No source dataset contains a sanction date, work-start date, or expected
-  completion date. Therefore formal delay_days CANNOT be calculated and is
-  never invented. Only OBSERVED indicators (computed from actual dates and
-  values) are reported. No recorded delay-reason field exists at project
-  level, so "possible_factors" is null rather than fabricated.
-"""
-
-import re
 import logging
+import re
 import threading
 from datetime import date, datetime
 from typing import Dict, List, Optional, Set
@@ -51,12 +13,11 @@ logger = logging.getLogger("mplads.timeline")
 MAX_EXPENDITURE_EVENTS = 10   # show at most the 10 most recent payment dates
 CACHE_MAX = 5000              # in-process result cache bound
 
-# ── In-process caches (built once per process) ──────────────────
-_lock = threading.Lock()
-_indexes_ready = False
-_rec_index: Dict[tuple, dict] = {}
-_comp_index: Dict[tuple, dict] = {}
-_exp_index: Dict[tuple, list] = {}
+# ── Result cache ────────────────────────────────────────────────
+# The work-level datasets themselves are NOT loaded here anymore. They live
+# once, in compact form, in activity.py's shared index (see activity.py's
+# memory notes). timeline.py delegates to it — keeping a second dict-heavy
+# copy of the same 106k rows here doubled peak memory for no benefit.
 _result_cache: Dict[int, Optional[dict]] = {}
 _persist_checked: Set[int] = set()
 
@@ -95,113 +56,56 @@ def _days_between(d1: str, d2: str) -> Optional[int]:
         return None
 
 
-def _build_indexes():
-    """Load the three work-level datasets into memory keyed by exact match key."""
-    global _indexes_ready, _rec_index, _comp_index, _exp_index
-    with _lock:
-        if _indexes_ready:
-            return
-        db = SessionLocal()
-        try:
-            rec_index: Dict[tuple, dict] = {}
-            for rid, desc, con, st, mp, amt, dt in db.query(
-                models.RecommendedWork.id,
-                models.RecommendedWork.work_description,
-                models.RecommendedWork.constituency,
-                models.RecommendedWork.state,
-                models.RecommendedWork.mp_name,
-                models.RecommendedWork.recommended_amount,
-                models.RecommendedWork.recommendation_date,
-            ).all():
-                key = (_norm(desc), _norm(con), _norm(st))
-                if key not in rec_index:
-                    rec_index[key] = {
-                        "id": rid,
-                        "mp": _norm(mp),
-                        "amount": amt,
-                        "date": _iso_date(dt),
-                    }
-
-            comp_index: Dict[tuple, dict] = {}
-            for cid, desc, con, st, amt, dt in db.query(
-                models.CompletedWork.id,
-                models.CompletedWork.work_description,
-                models.CompletedWork.constituency,
-                models.CompletedWork.state,
-                models.CompletedWork.final_amount,
-                models.CompletedWork.completed_date,
-            ).all():
-                key = (_norm(desc), _norm(con), _norm(st))
-                if key not in comp_index:
-                    comp_index[key] = {"id": cid, "amount": amt, "date": _iso_date(dt)}
-
-            exp_index: Dict[tuple, list] = {}
-            for eid, desc, con, st, mp, amt, dt, status in db.query(
-                models.Expenditure.id,
-                models.Expenditure.work_description,
-                models.Expenditure.constituency,
-                models.Expenditure.state,
-                models.Expenditure.mp_name,
-                models.Expenditure.expenditure_amount,
-                models.Expenditure.expenditure_date,
-                models.Expenditure.payment_status,
-            ).all():
-                key = (_norm(desc), _norm(con), _norm(st))
-                d = _iso_date(dt)
-                if d:
-                    exp_index.setdefault(key, []).append(
-                        {"id": eid, "mp": _norm(mp), "amount": amt, "date": d, "status": status}
-                    )
-
-            _rec_index, _comp_index, _exp_index = rec_index, comp_index, exp_index
-            _indexes_ready = True
-            logger.info(
-                "Timeline indexes built: %d recommended, %d completed, %d expenditure keys",
-                len(rec_index), len(comp_index), len(exp_index),
-            )
-        finally:
-            db.close()
-
-
 # ── Event construction ──────────────────────────────────────────
 
 def _build_events(project) -> List[dict]:
-    """Build the ordered lifecycle event list for one project from matched data."""
-    _build_indexes()
-    key = (_norm(project.project_name), _norm(project.constituency), _norm(project.state))
+    """Build the ordered lifecycle event list for one project from matched data.
+
+    Uses the shared compact index from activity.py (built once per process,
+    streamed from SQL). Expenditure rows are tuples:
+        (mp, amount, date, status, id)
+    Recommended/completed records come back as:
+        rec  = (mp, amount, date, id)
+        comp = (date, amount, id)
+    """
+    import activity  # local import avoids any module-load ordering concerns
+
+    rec_first, comp_by_key, exp_rows = activity.shared_indexes()
+
+    key = activity._project_key(project)
     events: List[dict] = []
 
-    rec = _rec_index.get(key)
-    comp = _comp_index.get(key)
+    rec = rec_first.get(key)
+    comp = comp_by_key.get(key)
 
     # 1. Recommendation (only when a real date exists — never invented)
-    if rec and rec.get("date"):
+    if rec and rec[2]:
         events.append({
             "event_type": "recommendation",
-            "date": rec["date"],
+            "date": rec[2],
             "title": "Recommended by MP",
-            "description": f"Work recommended with estimated cost of ₹{int(rec['amount'] or 0):,}."
-            if rec.get("amount") else "Work recommended under MPLADS.",
-            "amount": rec.get("amount"),
+            "description": f"Work recommended with estimated cost of ₹{int(rec[1] or 0):,}."
+            if rec[1] else "Work recommended under MPLADS.",
+            "amount": rec[1],
             "progress_percentage": None,
             "source_dataset": "recommended_works",
-            "source_record_id": str(rec["id"]),
+            "source_record_id": str(rec[3]) if rec[3] is not None else None,
             "match_confidence": "exact",
         })
 
     # 2. Expenditure payments — MP-verified only, aggregated per date
-    exp_rows = _exp_index.get(key)
-    if rec and exp_rows:
-        verified = [e for e in exp_rows if e.get("mp") == rec.get("mp")]
+    exp = exp_rows.get(key)
+    if rec and exp:
+        verified = [e for e in exp if e[0] == rec[0]]
         if verified:
             by_date: Dict[str, dict] = {}
             for e in verified:
-                slot = by_date.setdefault(e["date"], {"amount": 0.0, "count": 0, "statuses": set(), "ids": []})
-                slot["amount"] += (e.get("amount") or 0.0)
+                slot = by_date.setdefault(e[2], {"amount": 0.0, "count": 0, "statuses": set(), "ids": []})
+                slot["amount"] += (e[1] or 0.0)
                 slot["count"] += 1
-                if e.get("status"):
-                    slot["statuses"].add(str(e["status"]))
-                slot["ids"].append(str(e["id"]))
+                if e[3]:
+                    slot["statuses"].add(str(e[3]))
+                slot["ids"].append(str(e[4]))
 
             dates_sorted = sorted(by_date.keys())
             shown = dates_sorted[-MAX_EXPENDITURE_EVENTS:] if len(dates_sorted) > MAX_EXPENDITURE_EVENTS else dates_sorted
@@ -240,19 +144,19 @@ def _build_events(project) -> List[dict]:
                 })
 
     # 3. Completion (only when a real date exists)
-    if comp and comp.get("date"):
+    if comp and comp[0]:
         desc = "Work recorded as completed."
-        if comp.get("amount"):
-            desc += f" Final recorded amount: ₹{int(comp['amount']):,}."
+        if comp[1]:
+            desc += f" Final recorded amount: ₹{int(comp[1]):,}."
         events.append({
             "event_type": "completion",
-            "date": comp["date"],
+            "date": comp[0],
             "title": "Completed",
             "description": desc,
-            "amount": comp.get("amount"),
+            "amount": comp[1],
             "progress_percentage": 100.0,
             "source_dataset": "completed_works",
-            "source_record_id": str(comp["id"]),
+            "source_record_id": str(comp[2]) if comp[2] is not None else None,
             "match_confidence": "exact",
         })
 

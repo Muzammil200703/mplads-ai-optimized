@@ -11,9 +11,8 @@ add explanations and contributing factors.
 """
 
 import os
-import numpy as np
+import threading
 import joblib
-import shap as _shap
 
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "anomaly_model.pkl")
 
@@ -23,17 +22,57 @@ peer_stats = None
 model_version = "1.0"
 _shap_explainer = None
 
-try:
-    if os.path.exists(MODEL_PATH):
-        model_data = joblib.load(MODEL_PATH)
-        model = model_data.get("model")
-        features = model_data.get("features", [])
-        peer_stats = model_data.get("peer_stats")
-        model_version = model_data.get("version", "1.0")
-        if model is not None:
-            _shap_explainer = _shap.TreeExplainer(model)
-except Exception as e:
-    print(f"Warning: Could not load anomaly ML model: {e}")
+# numpy/shap/pandas are imported LAZILY on first ML use. Eagerly importing
+# shap at module load cost ~70MB RSS and numpy another ~20MB before the app
+# served a single request — significant on 512MB containers. They are pure
+# in-process imports, so deferring them changes nothing functionally.
+np = None
+_shap = None
+
+
+def _ensure_ml_libs():
+    """Import numpy/shap on first use; safe to call repeatedly."""
+    global np, _shap
+    if np is None:
+        import numpy as _np
+        np = _np
+    if _shap is None:
+        import shap as _shap_mod
+        _shap = _shap_mod
+
+
+_model_lock = threading.Lock()
+_model_data_cache = None
+
+
+def _ensure_model():
+    """Load the joblib model bundle on first use (not at import).
+
+    Import-time loading pinned the sklearn model in RSS before the app served
+    a single request. Lazy loading is behaviorally identical: model/features/
+    peer_stats keep their module-level names, populated on first predict.
+    """
+    global model, features, peer_stats, model_version, _model_data_cache
+    if _model_data_cache is not None:
+        return
+    with _model_lock:
+        if _model_data_cache is not None:
+            return
+        try:
+            if os.path.exists(MODEL_PATH):
+                model_data = joblib.load(MODEL_PATH)
+                model = model_data.get("model")
+                features = model_data.get("features", [])
+                peer_stats = model_data.get("peer_stats")
+                model_version = model_data.get("version", "1.0")
+                _model_data_cache = True
+                # NOTE: the SHAP TreeExplainer is created lazily in
+                # _compute_feature_contributions() (first explanation request),
+                # not at import time — building it eagerly pinned shap+numpy in
+                # memory for every request even when ML explanations were never used.
+        except Exception as e:
+            print(f"Warning: Could not load anomaly ML model: {e}")
+            _model_data_cache = True  # don't retry a permanently-broken load every request
 
 
 # ============================================================
@@ -206,8 +245,16 @@ def _compute_feature_contributions(project):
     state = getattr(project, "state", "")
     project_type = getattr(project, "project_type", "")
 
-    if not peer_stats or not _shap_explainer or not features:
+    if not peer_stats or not features:
         return []
+
+    _ensure_ml_libs()
+    global _shap_explainer
+    if _shap_explainer is None:
+        try:
+            _shap_explainer = _shap.TreeExplainer(model)
+        except Exception:
+            return []
 
     # Compute features
     from ml.train_anomaly_model import create_peer_relative_features
@@ -363,6 +410,7 @@ def predict_risk(project, batch_mode=False):
     ml_anomaly = False
     anomaly_score = 0.0
 
+    _ensure_model()  # lazy-load the joblib bundle on first prediction
     if model is not None and features:
         try:
             X = create_project_features(project)

@@ -1276,6 +1276,7 @@ def _rule_key(reason: str) -> str:
 def _model_available() -> bool:
     try:
         from ml import predictor
+        predictor._ensure_model()  # model is lazy-loaded; trigger the load
         return getattr(predictor, "model", None) is not None
     except Exception:
         return False

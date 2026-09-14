@@ -105,7 +105,13 @@ def _check_stale_progress(project):
         "completion": completion,
     }
 
-# In-memory cache for heavy aggregations
+# In-memory cache for heavy aggregations. Bounded: parameterized cache keys
+# (per-FY, per-state, search combos) would otherwise accumulate forever on a
+# long-lived free-tier process and slowly leak past the 512MB limit. Oldest
+# entries are evicted beyond _CACHE_MAX_ENTRIES; the big vendor payloads are
+# exempt (they're invalidated wholesale by clear_cache() on data sync).
+_CACHE_MAX_ENTRIES = 80
+_VENDORED_CACHE_KEYS = {"vendor_intelligence_summary_v3", "vendor_intelligence_full_v3"}
 _cache: Dict[str, Any] = {}
 _cache_ttl: Dict[str, float] = {}
 # Vendor intelligence is derived from a single O(N) pass plus a per-work-key
@@ -126,6 +132,10 @@ def get_cached(key: str, ttl_seconds: int = 300):
     return None
 
 def set_cached(key: str, value: Any):
+    if key not in _cache and len(_cache) >= _CACHE_MAX_ENTRIES and key not in _VENDORED_CACHE_KEYS:
+        oldest = next(iter(_cache))  # dict preserves insertion order
+        _cache.pop(oldest, None)
+        _cache_ttl.pop(oldest, None)
     _cache[key] = value
     _cache_ttl[key] = time.time()
 
@@ -243,24 +253,13 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass  # Warm-cache is best-effort
 
-    # Warm the vendor-intelligence payload on a background thread so the
-    # first page visit never waits for the multi-second O(N) build. The full
-    # variant also populates the summary cache, so profiles open instantly
-    # too. The single-flight lock inside the payload builder makes this safe,
-    # and clear_cache() on data sync invalidates it like every other cache.
-    def _warm_vendor_intelligence():
-        warm_db = SessionLocal()
-        try:
-            started = time.time()
-            _vendor_intelligence_payload(warm_db, include_projects=True)
-            print(f"[startup] vendor intelligence warmed in {time.time() - started:.1f}s", flush=True)
-        except Exception as exc:
-            print(f"[startup] vendor intelligence warm-up failed: {exc}", flush=True)
-        finally:
-            warm_db.close()
-
-    threading.Thread(target=_warm_vendor_intelligence, name="vendor-intel-warmup", daemon=True).start()
-
+    # NOTE: the previous version pre-built the FULL vendor-intelligence
+    # payload on a background thread at startup. That build loads tens of
+    # thousands of rows into Python objects and permanently caches them —
+    # it alone pushed the process past Render's 512MB limit before the
+    # first request, causing "Ran out of memory" instance failures. The
+    # payload is now built on first request (streamed, compact, bounded)
+    # inside _vendor_intelligence_payload(), so startup stays flat.
     yield
 
 
@@ -1540,48 +1539,39 @@ def _vendor_intelligence_payload(db: Session, include_projects: bool = False):
 
 
 def _build_vendor_intelligence_payload(db: Session, include_projects: bool = False):
-    project_columns = (
-        models.Project.id, models.Project.project_name, models.Project.state,
-        models.Project.district, models.Project.constituency, models.Project.project_type,
-        models.Project.sanctioned_amount, models.Project.expenditure,
-        models.Project.completion_percentage, models.Project.status,
-    )
-    projects = [dict(zip(("id", "project_name", "state", "district", "constituency", "project_type", "sanctioned_amount", "expenditure", "completion_percentage", "status"), row)) for row in db.query(*project_columns).all()]
-    # Exact index only: (work_description, constituency, state) -> projects.
-    # Expenditure work descriptions are generic category templates, so fuzzy
-    # matching them onto specific project names produced guessed links and is
-    # no longer attempted: no link is preferable to a guessed link.
-    project_by_key = {}
-    for project in projects:
-        key = (_vendor_key(project["project_name"]), _vendor_key(project["constituency"]), _vendor_key(project["state"]))
-        project_by_key.setdefault(key, []).append(project)
+    """Stream-aggregate vendor intelligence — no full-table Python loads.
 
-    risks = {
-        project_id: {
-            "score": int(score or 0),
-            "level": str(level or "Low").title(),
-        }
-        for project_id, score, level in db.query(models.RiskScore.project_id, models.RiskScore.risk_score, models.RiskScore.risk_level).all()
-    }
-    vendors = {}
+    Memory architecture (512MB Render instance): the previous version loaded
+    every project (83,625), every risk score and every expenditure row
+    (106,263) into Python objects and cached the payload forever — roughly
+    200MB of permanent heap that OOM'd the instance during startup. Every
+    table read here is streamed (yield_per) and folded into compact
+    per-vendor dicts; only projects whose exact work key
+    (work_description, constituency, state — the same conservative identity
+    timeline.py uses) matches a vendor engagement are ever materialized.
+    """
+    vendors: Dict[str, dict] = {}
+    work_keys: set = set()
     linked_records = 0
     linked_expenditure = 0.0
-    for row in db.query(
+
+    # ── 1. Stream every expenditure row once, folding into per-vendor buckets.
+    for vendor, amount, state, work_description, constituency in db.query(
         models.Expenditure.vendor,
         models.Expenditure.expenditure_amount,
         models.Expenditure.state,
         models.Expenditure.work_description,
         models.Expenditure.constituency,
-    ).all():
-        raw_name = str(row.vendor or "").strip()
+    ).yield_per(200):
+        raw_name = str(vendor or "").strip()
         if not raw_name:
             continue
         key = _vendor_key(raw_name)
         if not key:
             continue
         linked_records += 1
-        amount = float(row.expenditure_amount or 0)
-        linked_expenditure += amount
+        amt = float(amount or 0)
+        linked_expenditure += amt
         bucket = vendors.setdefault(key, {
             "vendor_name": raw_name,
             "raw_names": set(),
@@ -1600,11 +1590,11 @@ def _build_vendor_intelligence_payload(db: Session, include_projects: bool = Fal
         })
         bucket["raw_names"].add(raw_name)
         bucket["transactions"] += 1
-        bucket["total_expenditure"] += amount
-        if row.state:
-            bucket["states"].add(str(row.state).strip())
-        if row.constituency:
-            bucket["constituencies"].add(str(row.constituency).strip())
+        bucket["total_expenditure"] += amt
+        if state:
+            bucket["states"].add(str(state).strip())
+        if constituency:
+            bucket["constituencies"].add(str(constituency).strip())
         # The expenditures table has no project_id column; within this dataset
         # the canonical per-record project identifier is the work key
         # (work_description, constituency, state) — the same identity
@@ -1613,23 +1603,56 @@ def _build_vendor_intelligence_payload(db: Session, include_projects: bool = Fal
         # work count once), exactly as required: projects derived from the
         # expenditure records themselves. A transaction with a blank key
         # contributes to totals but cannot fabricate a project.
-        work_key = (_vendor_key(row.work_description), _vendor_key(row.constituency), _vendor_key(row.state))
+        work_key = (_vendor_key(work_description), _vendor_key(constituency), _vendor_key(state))
         if not work_key[0] or not work_key[1] or not work_key[2]:
             continue
+        work_keys.add(work_key)
         info = bucket["engagements"].setdefault(work_key, {
-            "work_description": str(row.work_description or "").strip(),
-            "constituency": str(row.constituency or "").strip(),
-            "state": str(row.state or "").strip(),
+            "work_description": str(work_description or "").strip(),
+            "constituency": str(constituency or "").strip(),
+            "state": str(state or "").strip(),
             "amount": 0.0,
             "transactions": 0,
             "project_ids": [],
         })
-        info["amount"] += amount
+        info["amount"] += amt
         info["transactions"] += 1
-        if not info["project_ids"]:
-            # Attach real Project rows (and their risk context) only on the
-            # first transaction of this work key for this vendor, so each
-            # linked project is counted once per vendor.
+
+    # ── 2. Stream projects, materializing ONLY rows whose exact work key was
+    # seen in a vendor's expenditures (a small linked subset — never all
+    # 83,625 projects). Expenditure work descriptions are generic category
+    # templates, so no fuzzy matching is attempted: no link is preferable to
+    # a guessed link.
+    project_columns = (
+        models.Project.id, models.Project.project_name, models.Project.state,
+        models.Project.district, models.Project.constituency, models.Project.project_type,
+        models.Project.sanctioned_amount, models.Project.expenditure,
+        models.Project.completion_percentage, models.Project.status,
+    )
+    project_by_key: Dict[tuple, list] = {}
+    for row in db.query(*project_columns).yield_per(200):
+        project = dict(zip(("id", "project_name", "state", "district", "constituency", "project_type", "sanctioned_amount", "expenditure", "completion_percentage", "status"), row))
+        key = (_vendor_key(project["project_name"]), _vendor_key(project["constituency"]), _vendor_key(project["state"]))
+        if key in work_keys:
+            project_by_key.setdefault(key, []).append(project)
+
+    # ── 3. Risk scores only for the linked candidate projects.
+    linked_ids = [p["id"] for plist in project_by_key.values() for p in plist]
+    risks: Dict[int, dict] = {}
+    if linked_ids:
+        for project_id, score, level in db.query(
+            models.RiskScore.project_id, models.RiskScore.risk_score, models.RiskScore.risk_level
+        ).filter(models.RiskScore.project_id.in_(linked_ids)).all():
+            risks[project_id] = {
+                "score": int(score or 0),
+                "level": str(level or "Low").title(),
+            }
+
+    # ── 4. Attach linked projects + risk context once per vendor engagement.
+    for bucket in vendors.values():
+        for work_key, info in bucket["engagements"].items():
+            if info["project_ids"]:
+                continue
             for project in project_by_key.get(work_key, []):
                 project_id = project["id"]
                 if project_id in bucket["matched_project_ids"]:
@@ -1764,7 +1787,18 @@ def get_vendor_intelligence(
     vendors = list(payload["vendors"])
     needle = (q or "").strip().lower()
     if needle:
-        vendors = [vendor for vendor in vendors if needle in vendor["vendor_name"].lower() or any(needle in state.lower() for state in vendor["states"])]
+        # Search is restricted to exactly three fields: vendor name,
+        # constituencies, and states. Case-insensitive partial matching;
+        # multi-word queries (e.g. "darsh uttar pradesh") must match ALL
+        # words somewhere in those fields. Work descriptions, MP names,
+        # amounts, dates, and every other column are deliberately excluded.
+        def _vendor_matches(vendor):
+            haystacks = [vendor["vendor_name"], *vendor.get("states", []), *vendor.get("constituencies", [])]
+            return all(
+                any(word in h.lower() for h in haystacks)
+                for word in needle.split()
+            )
+        vendors = [vendor for vendor in vendors if _vendor_matches(vendor)]
     if vendor_type:
         vendors = [vendor for vendor in vendors if vendor["type"] == vendor_type]
     allowed_sort = {"vendor_name", "type", "project_count", "transaction_count", "total_expenditure", "high_risk_projects", "average_risk", "expenditure_share"}
@@ -3876,7 +3910,9 @@ def get_anomaly_explanation(
     risk_factors = explanation.get("risk_factors", [])
 
     # Compute expected reference values from peer stats
-    from ml.predictor import peer_stats as _peer_stats
+    import ml.predictor as _predictor_mod
+    _predictor_mod._ensure_model()  # make sure the lazy bundle is loaded
+    _peer_stats = _predictor_mod.peer_stats
     if _peer_stats and project.state:
         state_stats = _peer_stats.get("states", {}).get(project.state, {})
         if state_stats:
