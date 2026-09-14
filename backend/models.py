@@ -294,4 +294,73 @@ class SyncMetadata(Base):
     source_updated_at = Column(String)  # When the source data was last updated (if known)
     synced_at = Column(String, nullable=False)  # When this sync was performed
     error_message = Column(Text)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# AI Audit & Verification (SIH 26102) — new tables only, existing data
+# is never touched. Created via Base.metadata.create_all at startup.
+# ──────────────────────────────────────────────────────────────────────
+
+
+class PhotoHash(Base):
+    """Perceptual (dHash) fingerprint of an uploaded progress/field photo.
+
+    Used to detect duplicate photo submission across projects — the "photo
+    fraud" signal. A 64-bit dHash is stored as a 16-char hex string.
+    """
+    __tablename__ = "photo_hashes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, index=True, nullable=False)
+    dhash = Column(String(16), index=True, nullable=False)
+    source = Column(String, default="upload")  # upload | field_verify
+    created_at = Column(String, nullable=False)
+
+    __table_args__ = (
+        Index("idx_photo_hash", "dhash"),
+        Index("idx_photo_project", "project_id"),
+    )
+
+
+class VerificationReport(Base):
+    """A citizen/ground-inspector field verification submission (/verify).
+
+    Stores the live geolocation captured at submit time (browser GPS API),
+    the submitted status, an optional note, and the distance in metres from
+    the project's recorded site coordinate (if that coordinate exists).
+    """
+    __tablename__ = "verification_reports"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, index=True, nullable=False)
+    reporter_name = Column(String)
+    status = Column(String, nullable=False)  # Functional | Non-Functional | Work Not Started
+    lat = Column(Float)
+    lon = Column(Float)
+    distance_m = Column(Float)  # distance from recorded site coords, if known
+    gps_source = Column(String, default="browser")  # browser | exif
+    photo_hash_id = Column(Integer, index=True)  # optional link to stored photo
+    note = Column(Text)
+    created_at = Column(String, nullable=False)
+
+    __table_args__ = (
+        Index("idx_verification_project", "project_id"),
+        Index("idx_verification_status", "status"),
+    )
+
+
+class AuditAction(Base):
+    """An auditor's disposition recorded from the inspection modal."""
+    __tablename__ = "audit_actions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, index=True, nullable=False)
+    action = Column(String, nullable=False)  # approve | inquiry | escalate
+    note = Column(Text)
+    actor = Column(String)  # current user email/name if available
+    created_at = Column(String, nullable=False)
+
+    __table_args__ = (
+        Index("idx_audit_action_project", "project_id"),
+    )
     details = Column(Text)  # JSON string with additional sync details

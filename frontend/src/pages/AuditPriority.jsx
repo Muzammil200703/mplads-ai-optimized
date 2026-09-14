@@ -167,9 +167,9 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
           <div>
             <h2 className="text-2xl font-bold text-[#031632] dark:text-white">Audit Priority</h2>
             <p className="mt-1 text-sm text-gray-500 dark:text-gray-400 max-w-3xl">
-              Audit priority queue for MPLADS works. Each work is ranked by a composite priority score built from the
-              risk score, financial exposure, the financial/physical progress mismatch and the evidence gap — with a
-              floor applied from the stored risk classification.
+              Rank flagged projects by audit urgency, financial exposure, and risk — P1–P4 priority tiers built from the
+              composite priority score (risk score, financial exposure, the financial/physical progress mismatch and the
+              evidence gap — with a floor applied from the stored risk classification) so auditors know what to review first.
             </p>
           </div>
           <div className="rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-right shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">

@@ -14,6 +14,10 @@ import csv
 
 from database import engine, Base, SessionLocal
 import models
+
+# SIH 26102 — AI Audit & Verification endpoints (new capability; mounts
+# alongside existing routes, modifies nothing)
+from ai_audit_api import router as ai_audit_router
 import audit_intel
 from schemas import ProjectCreate
 from ml.predictor import predict_risk
@@ -143,6 +147,12 @@ def clear_cache(prefix: Optional[str] = None):
     global _cache, _cache_ttl
     with _match_cache_lock:
         _match_cache.clear()
+    # SIH 26102: drop the AI-audit category benchmark index too (dataset changed)
+    try:
+        import ai_audit_api
+        ai_audit_api.invalidate_benchmark_index()
+    except Exception:
+        pass
     if prefix:
         keys_to_del = [k for k in _cache if k.startswith(prefix)]
         for k in keys_to_del:
@@ -269,6 +279,10 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan
 )
+
+# SIH 26102 — AI Audit & Verification router (audit queue, image forensics,
+# cost anomaly, vendor network, /verify portal, audit actions)
+app.include_router(ai_audit_router)
 
 # =========================================================
 # CORS CONFIGURATION (production-safe)

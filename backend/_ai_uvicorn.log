@@ -1,0 +1,2 @@
+INFO:     127.0.0.1:52383 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52389 - "GET /ai/vendor-network?limit=10 HTTP/1.1" 500 Internal Server Error

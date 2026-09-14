@@ -101,13 +101,24 @@ function Sidebar({
     { name: "Overview", href: "Overview", icon: "▦" },
     { name: "Projects", href: "Projects", icon: "▤" },
     { name: "Risk Center", href: "Risk Center", icon: "⚠" },
-    { name: "Reports", href: "Reports", icon: "▣" },
     { name: "State Intelligence", href: "State Intelligence", icon: "map-pin" },
-    { name: "Audit Priority", href: "Audit Priority", icon: "🎯" },
+    { name: "Reports", href: "Reports", icon: "▣" },
     { name: "Compare Projects", href: "Compare Projects", icon: "⚖" },
+  ]
+  // Audit section — grouped separately below a divider (detection +
+  // prioritization), same NavRow grid as the main tabs.
+  const auditNav = [
+    { name: "AI Audit Center", href: "AI Audit Center", icon: "🛡️", badge: "NEW" },
+    { name: "Audit Priority", href: "Audit Priority", icon: "🎯" },
+  ]
+  // Vendor section — grouped separately below a divider (same NavRow grid,
+  // same icons/labels/badges; only the grouping differs).
+  const vendorNav = [
+    { name: "Vendor Network", href: "Vendor Network", icon: "🕸️", badge: "BETA" },
     { name: "Vendor Intelligence", href: "Vendor Intelligence", icon: "briefcase", badge: "BETA" },
   ]
   const bottomNav = [
+    { label: "Ground Verification", href: "Ground Truth Verification", icon: "✅" },
     { label: "Settings", href: "Settings", icon: "⚙" },
     { label: "Support", href: null, icon: "headphones" },
     { label: "FAQ", href: "FAQ", icon: "❓" },
@@ -138,6 +149,10 @@ function Sidebar({
           <nav className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-2">
             <div className="flex flex-col gap-1">
               {mainNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} badge={item.badge} collapsed={collapsed} />)}
+              <div className="my-2 border-t border-[#c5c6ce] dark:border-[#374151]" role="separator" aria-label="Audit section" />
+              {auditNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} badge={item.badge} collapsed={collapsed} />)}
+              <div className="my-2 border-t border-[#c5c6ce] dark:border-[#374151]" role="separator" aria-label="Vendor section" />
+              {vendorNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} badge={item.badge} collapsed={collapsed} />)}
             {workspaceNav.length > 0 && (
               <>
                 <SectionHeading label="Workspace" collapsed={collapsed} />
@@ -166,6 +181,10 @@ function Sidebar({
       <nav className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-2">
         <div className="flex flex-col gap-1">
           {mainNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} badge={item.badge} collapsed={collapsed} />)}
+          <div className="my-2 border-t border-[#c5c6ce] dark:border-[#374151]" role="separator" aria-label="Audit section" />
+          {auditNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} badge={item.badge} collapsed={collapsed} />)}
+          <div className="my-2 border-t border-[#c5c6ce] dark:border-[#374151]" role="separator" aria-label="Vendor section" />
+          {vendorNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} badge={item.badge} collapsed={collapsed} />)}
           {workspaceNav.length > 0 && (
             <>
               <SectionHeading label="Workspace" collapsed={collapsed} />

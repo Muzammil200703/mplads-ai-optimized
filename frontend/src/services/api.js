@@ -368,6 +368,53 @@ export async function getVendorProfile(vendorKey) {
     request(`/vendor-intelligence/${encodeURIComponent(vendorKey)}`))
 }
 
+// ═══════════════ AI AUDIT & VERIFICATION (SIH 26102) ═══════════════
+
+export async function getAuditQueue(params = {}) {
+  return request(`/ai/audit-queue${buildQuery(params)}`)
+}
+
+export async function getInspectionBundle(projectId) {
+  return request(`/ai/inspection/${projectId}`)
+}
+
+export async function detectCostAnomaly(params = {}) {
+  return request(`/ai/detect-cost-anomaly${buildQuery(params)}`)
+}
+
+export async function getVendorNetwork(params = {}) {
+  // 2-minute cache + in-flight dedupe so remounts don't refetch the full
+  // cluster aggregation (matches the vendor-intelligence caching pattern).
+  return cachedGet(`vendor_network_${buildQuery(params)}`, 120000, () => request(`/ai/vendor-network${buildQuery(params)}`))
+}
+
+export async function verifyProjectLookup(projectId) {
+  return request(`/ai/verify/project/${projectId}`)
+}
+
+export async function submitVerificationReport({ projectId, status, lat, lon, reporterName, note, file }) {
+  const form = new FormData()
+  if (file) form.append("file", file)
+  const qs = buildQuery({ project_id: projectId, status, lat, lon, reporter_name: reporterName, note })
+  return request(`/ai/verify/report${qs}`, { method: "POST", body: form })
+}
+
+export async function verifyImage({ file, projectId, store = true }) {
+  const form = new FormData()
+  form.append("file", file)
+  const qs = buildQuery({ project_id: projectId, store })
+  return request(`/ai/verify-image${qs}`, { method: "POST", body: form })
+}
+
+export async function recordAuditAction({ projectId, action, note }) {
+  const qs = buildQuery({ project_id: projectId, action, note })
+  return request(`/ai/audit-action${qs}`, { method: "POST" })
+}
+
+export async function getAuditActions(projectId) {
+  return request(`/ai/audit-actions/${projectId}`)
+}
+
 export async function getCompletedWorks(params = {}) {
   return request(`/completed-works${buildQuery(params)}`)
 }

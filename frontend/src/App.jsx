@@ -27,6 +27,9 @@ const AuditPriority = lazy(() => import("./pages/AuditPriority"))
 const CompareProjects = lazy(() => import("./pages/CompareProjects"))
 const FAQ = lazy(() => import("./pages/FAQ"))
 const VendorIntelligence = lazy(() => import("./pages/VendorIntelligence"))
+const AuditCenter = lazy(() => import("./pages/AuditCenter"))
+const VendorNetwork = lazy(() => import("./pages/VendorNetwork"))
+const VerifyPortal = lazy(() => import("./pages/VerifyPortal"))
 
 /* ── Global scroll manager ─────────────────────────────────────────────
    The app shell (AppShell) has exactly one page-level scroll container:
@@ -252,6 +255,9 @@ function AppShell() {
       { key: "Overview", el: <Overview darkMode={darkMode} onDrillDown={handleDrillDown} fy={selectedFY} /> },
       { key: "Projects", el: <Projects projectSearchQuery={projectSearchQuery} onClearProjectSearch={() => setProjectSearchQuery("")} drillDownParams={drillDownParams} onClearDrillDown={() => setDrillDownParams(null)} fy={selectedFY} /> },
       { key: "Risk Center", el: <RiskCenter drillDownParams={drillDownParams} onClearDrillDown={() => setDrillDownParams(null)} fy={selectedFY} /> },
+      { key: "AI Audit Center", el: <AuditCenter onOpenProject={openProjectFromWorkspace} fy={selectedFY} /> },
+      { key: "Vendor Network", el: <VendorNetwork /> },
+      { key: "Ground Truth Verification", el: <VerifyPortal /> },
       { key: "Reports", el: <Reports fy={selectedFY} /> },
       { key: "State Intelligence", el: <StateIntelligence onNavigateToProjects={(state) => handleDrillDown("Projects", { state })} fy={selectedFY} /> },
       { key: "Audit Priority", el: <AuditPriority fy={selectedFY} /> },

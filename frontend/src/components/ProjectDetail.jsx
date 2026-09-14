@@ -10,6 +10,7 @@ import {
   PeerBenchmarkPanel,
   AuditCasePanel,
 } from "./AuditIntelligence"
+import ForensicsPanel from "./ForensicsPanel"
 import { parseReasons } from "../utils/reasons"
 
 // ── Timeline helpers ─────────────────────────────────────────
@@ -425,6 +426,7 @@ function ProjectDetail({ projectId, onClose }) {
             { id: "overview", label: "Overview" },
             { id: "financial", label: "Financial" },
             { id: "risk", label: "Risk & Audit" },
+            { id: "forensics", label: "AI Forensics" },
             { id: "audit", label: "Investigate" },
             { id: "timeline", label: "Timeline" },
             ...(similar?.similar_projects?.length > 0 ? [{ id: "similar", label: "Similar" }] : []),
@@ -723,6 +725,10 @@ function ProjectDetail({ projectId, onClose }) {
               {auditSection === "simulate" && <WhatIfSimulator detail={detail} />}
               {auditSection === "case" && <AuditCasePanel projectId={projectId} />}
             </>
+          )}
+
+          {activeTab === "forensics" && (
+            <ForensicsPanel projectId={projectId} onOpenProject={(id) => { if (id !== projectId) window.dispatchEvent(new CustomEvent("open-project", { detail: { projectId: id } })) }} />
           )}
 
           {activeTab === "timeline" && (
