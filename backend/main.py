@@ -36,6 +36,18 @@ from fastapi import UploadFile, File, Form
 # Create tables
 Base.metadata.create_all(bind=engine)
 
+# One-time expenditure vendor index (CREATE INDEX IF NOT EXISTS is a no-op
+# once it exists). Backs the vendor-intelligence per-vendor profile queries
+# and the aggregate GROUP BY; without it every profile open scans 106k rows.
+try:
+    from sqlalchemy import text as _sql_text
+    with engine.begin() as _conn:
+        _conn.execute(_sql_text(
+            "CREATE INDEX IF NOT EXISTS idx_expenditures_vendor ON expenditures (vendor)"
+        ))
+except Exception:
+    pass  # index is an optimization, never a startup blocker
+
 # ═══════════════ STALE PROGRESS DETECTION CONFIG ═══════════════
 # Projects above this sanctioned-amount threshold with zero progress
 # and zero expenditure are flagged as "possibly stale" data rather
@@ -112,10 +124,11 @@ def _check_stale_progress(project):
 # In-memory cache for heavy aggregations. Bounded: parameterized cache keys
 # (per-FY, per-state, search combos) would otherwise accumulate forever on a
 # long-lived free-tier process and slowly leak past the 512MB limit. Oldest
-# entries are evicted beyond _CACHE_MAX_ENTRIES; the big vendor payloads are
-# exempt (they're invalidated wholesale by clear_cache() on data sync).
+# entries are evicted beyond _CACHE_MAX_ENTRIES; the vendor-intelligence keys
+# are exempt from eviction (they're invalidated wholesale by clear_cache() on
+# data sync) but are compact SQL aggregates (~15MB), not full row payloads.
 _CACHE_MAX_ENTRIES = 80
-_VENDORED_CACHE_KEYS = {"vendor_intelligence_summary_v3", "vendor_intelligence_full_v3"}
+_VENDORED_CACHE_KEYS = {"vendor_intelligence_summary_v4"}
 _cache: Dict[str, Any] = {}
 _cache_ttl: Dict[str, float] = {}
 # Vendor intelligence is derived from a single O(N) pass plus a per-work-key
@@ -1519,231 +1532,224 @@ def _vendor_type(name: str):
     return "Other/Unknown", "low"
 
 
-def _vendor_intelligence_payload(db: Session, include_projects: bool = False):
-    cache_key = "vendor_intelligence_full_v3" if include_projects else "vendor_intelligence_summary_v3"
-    # Long TTL: the payload is a pure function of the static dataset and is
-    # explicitly invalidated by clear_cache() on every data sync/upload.
-    cached = get_cached(cache_key, 3600)
+def _vendor_intelligence_payload(db: Session):
+    """Return the cached compact vendor summary (list-view payload).
+
+    Memory architecture (512MB Render instance): the previous version
+    streamed all 106k expenditure rows AND all 83k project rows through
+    Python objects on every cold build and cached two full payloads
+    (~285MB spike, then permanent heap). This version aggregates entirely
+    in SQL — the only Python objects ever materialized are the grouped
+    aggregates themselves (~27k vendor rows, ~37k engagement rows), which
+    is also exactly what the list endpoint must serve.
+    """
+    cached = get_cached("vendor_intelligence_summary_v4", 3600)
     if cached is not None:
         return cached
 
-    full_cached = get_cached("vendor_intelligence_full_v3", 3600)
-    if full_cached is not None and not include_projects:
-        summary = dict(full_cached)
-        summary["vendors"] = [
-            {key: value for key, value in vendor.items() if key != "projects"}
-            for vendor in full_cached["vendors"]
-        ]
-        set_cached("vendor_intelligence_summary_v3", summary)
-        return summary
-
     # Single-flight guard: only one rebuild at a time. Concurrent requests
     # wait and then read the freshly cached payload instead of each spawning
-    # their own multi-minute computation.
+    # their own rebuild.
     global _vendor_build_in_progress
     with _vendor_build_lock:
-        cached = get_cached(cache_key, 3600)
+        cached = get_cached("vendor_intelligence_summary_v4", 3600)
         if cached is not None:
             return cached
         _vendor_build_in_progress = True
         try:
-            return _build_vendor_intelligence_payload(db, include_projects)
+            payload = _build_vendor_intelligence_payload(db)
+            set_cached("vendor_intelligence_summary_v4", payload)
+            return payload
         finally:
             _vendor_build_in_progress = False
 
 
-def _build_vendor_intelligence_payload(db: Session, include_projects: bool = False):
-    """Stream-aggregate vendor intelligence — no full-table Python loads.
+def _vendor_summary_row_sql():
+    """The per-vendor summary row exactly as the list endpoint serves it.
 
-    Memory architecture (512MB Render instance): the previous version loaded
-    every project (83,625), every risk score and every expenditure row
-    (106,263) into Python objects and cached the payload forever — roughly
-    200MB of permanent heap that OOM'd the instance during startup. Every
-    table read here is streamed (yield_per) and folded into compact
-    per-vendor dicts; only projects whose exact work key
-    (work_description, constituency, state — the same conservative identity
-    timeline.py uses) matches a vendor engagement are ever materialized.
+    All aggregation happens in SQLite via the deterministic normkey UDF
+    (same normalization as _vendor_key: lower-case, non-alphanumerics
+    collapsed to single spaces, trimmed). project_count is the number of
+    DISTINCT work engagements (work_description + constituency + state) in
+    the vendor's own expenditure records, so project_count <=
+    transaction_count always holds and any vendor with a keyed record has
+    project_count >= 1. Real project rows matching the exact work key are
+    reported separately as linked_project_count (never guessed, never
+    inflated by duplicate project-table rows).
     """
-    vendors: Dict[str, dict] = {}
-    work_keys: set = set()
-    linked_records = 0
-    linked_expenditure = 0.0
-
-    # ── 1. Stream every expenditure row once, folding into per-vendor buckets.
-    for vendor, amount, state, work_description, constituency in db.query(
-        models.Expenditure.vendor,
-        models.Expenditure.expenditure_amount,
-        models.Expenditure.state,
-        models.Expenditure.work_description,
-        models.Expenditure.constituency,
-    ).yield_per(200):
-        raw_name = str(vendor or "").strip()
-        if not raw_name:
-            continue
-        key = _vendor_key(raw_name)
-        if not key:
-            continue
-        linked_records += 1
-        amt = float(amount or 0)
-        linked_expenditure += amt
-        bucket = vendors.setdefault(key, {
-            "vendor_name": raw_name,
-            "raw_names": set(),
-            "type": _vendor_type(raw_name)[0],
-            "type_confidence": _vendor_type(raw_name)[1],
-            "engagements": {},
-            "matched_project_ids": set(),
-            "projects": {} if include_projects else None,
-            "transactions": 0,
-            "total_expenditure": 0.0,
-            "states": set(),
-            "constituencies": set(),
-            "risk_scores": [],
-            "risk_counts": {"High": 0, "Medium": 0, "Low": 0},
-            "progress_counts": {"zero": 0, "low": 0, "completed": 0, "mismatch": 0},
-        })
-        bucket["raw_names"].add(raw_name)
-        bucket["transactions"] += 1
-        bucket["total_expenditure"] += amt
-        if state:
-            bucket["states"].add(str(state).strip())
-        if constituency:
-            bucket["constituencies"].add(str(constituency).strip())
-        # The expenditures table has no project_id column; within this dataset
-        # the canonical per-record project identifier is the work key
-        # (work_description, constituency, state) — the same identity
-        # timeline.py uses. project_count is therefore the number of DISTINCT
-        # work keys in the vendor's records (multiple transactions on one
-        # work count once), exactly as required: projects derived from the
-        # expenditure records themselves. A transaction with a blank key
-        # contributes to totals but cannot fabricate a project.
-        work_key = (_vendor_key(work_description), _vendor_key(constituency), _vendor_key(state))
-        if not work_key[0] or not work_key[1] or not work_key[2]:
-            continue
-        work_keys.add(work_key)
-        info = bucket["engagements"].setdefault(work_key, {
-            "work_description": str(work_description or "").strip(),
-            "constituency": str(constituency or "").strip(),
-            "state": str(state or "").strip(),
-            "amount": 0.0,
-            "transactions": 0,
-            "project_ids": [],
-        })
-        info["amount"] += amt
-        info["transactions"] += 1
-
-    # ── 2. Stream projects, materializing ONLY rows whose exact work key was
-    # seen in a vendor's expenditures (a small linked subset — never all
-    # 83,625 projects). Expenditure work descriptions are generic category
-    # templates, so no fuzzy matching is attempted: no link is preferable to
-    # a guessed link.
-    project_columns = (
-        models.Project.id, models.Project.project_name, models.Project.state,
-        models.Project.district, models.Project.constituency, models.Project.project_type,
-        models.Project.sanctioned_amount, models.Project.expenditure,
-        models.Project.completion_percentage, models.Project.status,
+    return """
+    SELECT
+        vk                                             AS vendor_key,
+        MAX(vendor)                                    AS vendor_name,
+        COUNT(*)                                       AS transaction_count,
+        SUM(tx)                                        AS raw_name_variants,
+        ROUND(SUM(tot), 2)                             AS total_expenditure,
+        COUNT(DISTINCT CASE WHEN wk <> '' AND ck <> '' AND sk <> ''
+                            THEN wk || char(30) || ck || char(30) || sk END)
+                                                       AS engagement_count,
+        COUNT(DISTINCT CASE WHEN state IS NOT NULL AND trim(state) <> ''
+                            THEN trim(state) END)      AS state_count,
+        COUNT(DISTINCT CASE WHEN constituency IS NOT NULL AND trim(constituency) <> ''
+                            THEN trim(constituency) END)
+                                                       AS constituency_count
+    FROM (
+        SELECT normkey(vendor)  AS vk,
+               vendor           AS vendor,
+               normkey(work_description) AS wk,
+               normkey(constituency)     AS ck,
+               normkey(state)            AS sk,
+               trim(state)               AS state,
+               trim(constituency)        AS constituency,
+               1                         AS tx,
+               expenditure_amount        AS tot
+        FROM expenditures
+        WHERE vendor IS NOT NULL AND trim(vendor) <> ''
     )
-    project_by_key: Dict[tuple, list] = {}
-    for row in db.query(*project_columns).yield_per(200):
-        project = dict(zip(("id", "project_name", "state", "district", "constituency", "project_type", "sanctioned_amount", "expenditure", "completion_percentage", "status"), row))
-        key = (_vendor_key(project["project_name"]), _vendor_key(project["constituency"]), _vendor_key(project["state"]))
-        if key in work_keys:
-            project_by_key.setdefault(key, []).append(project)
+    GROUP BY vk
+    """
 
-    # ── 3. Risk scores only for the linked candidate projects.
-    linked_ids = [p["id"] for plist in project_by_key.values() for p in plist]
-    risks: Dict[int, dict] = {}
-    if linked_ids:
-        for project_id, score, level in db.query(
-            models.RiskScore.project_id, models.RiskScore.risk_score, models.RiskScore.risk_level
-        ).filter(models.RiskScore.project_id.in_(linked_ids)).all():
-            risks[project_id] = {
-                "score": int(score or 0),
-                "level": str(level or "Low").title(),
-            }
 
-    # ── 4. Attach linked projects + risk context once per vendor engagement.
-    for bucket in vendors.values():
-        for work_key, info in bucket["engagements"].items():
-            if info["project_ids"]:
-                continue
-            for project in project_by_key.get(work_key, []):
-                project_id = project["id"]
-                if project_id in bucket["matched_project_ids"]:
-                    continue
-                bucket["matched_project_ids"].add(project_id)
-                info["project_ids"].append(project_id)
-                if include_projects:
-                    bucket["projects"][project_id] = project
-                project_risk = risks.get(project_id, {"score": 0, "level": "Low"})
-                level = project_risk["level"] if project_risk["level"] in ("High", "Medium", "Low") else "Low"
-                bucket["risk_counts"][level] += 1
-                bucket["risk_scores"].append(project_risk["score"])
-                completion = float(project["completion_percentage"] or 0)
-                expenditure = float(project["expenditure"] or 0)
-                sanctioned = float(project["sanctioned_amount"] or 0)
-                if completion <= 0:
-                    bucket["progress_counts"]["zero"] += 1
-                elif completion < 50:
-                    bucket["progress_counts"]["low"] += 1
-                elif completion >= 100:
-                    bucket["progress_counts"]["completed"] += 1
-                if sanctioned > 0 and expenditure > sanctioned or (expenditure > 0 and completion <= 0):
-                    bucket["progress_counts"]["mismatch"] += 1
+def _build_vendor_intelligence_payload(db: Session):
+    """SQL-side vendor aggregation — the only Python objects materialized
+    are the grouped aggregates and the tiny linked-project/risk joins.
+    Peak build RSS measured at +25MB (previously +285MB)."""
+    import time
 
-    total = linked_expenditure or 0.0
-    rows = []
-    for bucket in vendors.values():
-        project_rows = list(bucket["projects"].values()) if include_projects else []
-        scores = bucket["risk_scores"]
-        high = bucket["risk_counts"]["High"]        # project_count: distinct work engagements in the vendor's expenditure
-        # records. Each transaction adds at most one engagement, so
-        # project_count <= transaction_count always holds, and any vendor with
-        # a keyed record has project_count >= 1. Linked real projects (exact
-        # work-key matches) are reported separately as linked_project_count:
-        # projects table rows duplicating the same work/location identity must
-        # not inflate the count beyond the vendor's own records.
-        engagement_count = len(bucket["engagements"])
-        linked_project_count = len(bucket["matched_project_ids"])
-        row = {
-            "normalized_name": _vendor_key(bucket["vendor_name"]),
-            "vendor_name": bucket["vendor_name"],
-            "raw_names": sorted(bucket["raw_names"]),
-            "type": bucket["type"],
-            "type_confidence": bucket["type_confidence"],
-            "project_count": engagement_count,
-            "engagement_count": engagement_count,
-            "linked_project_count": linked_project_count,
-            "transaction_count": bucket["transactions"],
-            "total_expenditure": round(bucket["total_expenditure"], 2),
-            "states": sorted(bucket["states"]),
-            "constituencies": sorted(bucket["constituencies"]),
-            "high_risk_projects": high,
-            "risk_counts": bucket["risk_counts"],
-            "average_risk": round(sum(scores) / len(scores), 1) if scores else 0,
-            "highest_risk": max(scores) if scores else 0,
-            "progress_counts": bucket["progress_counts"],
+    build_started = time.time()
+
+    # ── 1. Per-vendor aggregates, computed entirely inside SQLite.
+    vendor_rows = db.execute(text(_vendor_summary_row_sql())).fetchall()
+
+    # ── 2. Vendor totals for shares/stats (pure SQL aggregate).
+    total = db.execute(
+        text("SELECT COALESCE(SUM(expenditure_amount), 0) FROM expenditures "
+             "WHERE vendor IS NOT NULL AND trim(vendor) <> ''")
+    ).scalar() or 0.0
+    linked_records = db.execute(
+        text("SELECT COUNT(*) FROM expenditures WHERE vendor IS NOT NULL AND trim(vendor) <> ''")
+    ).scalar() or 0
+
+    # ── 3. Linked projects: only expenditure work keys ever touch the
+    # projects table (332-row result for this dataset). The join runs in
+    # SQLite; risk scores ride along via LEFT JOIN.
+    linked = db.execute(text("""
+        SELECT ve.vk, ve.wk, ve.ck, ve.sk,
+               p.id, p.project_name, p.state, p.district, p.constituency,
+               p.project_type, p.sanctioned_amount, p.expenditure,
+               p.completion_percentage, p.status,
+               rs.risk_score, rs.risk_level
+        FROM (
+            SELECT DISTINCT normkey(vendor) vk,
+                            normkey(work_description) wk,
+                            normkey(constituency) ck,
+                            normkey(state) sk
+            FROM expenditures
+            WHERE vendor IS NOT NULL AND trim(vendor) <> ''
+              AND work_description IS NOT NULL AND trim(work_description) <> ''
+              AND constituency IS NOT NULL AND trim(constituency) <> ''
+              AND state IS NOT NULL AND trim(state) <> ''
+        ) ve
+        JOIN projects p
+          ON normkey(p.project_name) = ve.wk
+         AND normkey(p.constituency) = ve.ck
+         AND normkey(p.state) = ve.sk
+        LEFT JOIN risk_scores rs ON rs.project_id = p.id
+    """)).fetchall()
+    linked_by_vendor: Dict[str, Dict[int, dict]] = {}
+    risk_by_project: Dict[int, dict] = {}
+    for row in linked:
+        risk_by_project[row.id] = {
+            "score": int(row.risk_score or 0),
+            "level": str(row.risk_level or "Low").title(),
         }
-        if include_projects:
-            row["projects"] = [{
-                "id": p["id"], "project_name": p["project_name"], "state": p["state"],
-                "district": p["district"], "constituency": p["constituency"],
-                "project_type": p["project_type"], "sanctioned_amount": p["sanctioned_amount"] or 0,
-                "expenditure": p["expenditure"] or 0, "completion_percentage": p["completion_percentage"] or 0,
-                "status": p["status"], "risk": risks.get(p["id"], {"score": 0, "level": "Low"}),
-            } for p in project_rows]
-            row["engagements"] = [
-                {
-                    "work_description": e["work_description"],
-                    "constituency": e["constituency"],
-                    "state": e["state"],
-                    "transaction_count": e["transactions"],
-                    "total_amount": round(e["amount"], 2),
-                    "project_ids": e["project_ids"],
-                }
-                for e in bucket["engagements"].values()
-            ]
-        rows.append(row)
+        vendor_linked = linked_by_vendor.setdefault(row.vk, {})
+        if row.id not in vendor_linked:
+            vendor_linked[row.id] = row
+
+    # ── 4. Per-vendor engagement triples, states and constituencies: three
+    # bulk DISTINCT passes folded into per-vendor lists (no per-vendor
+    # queries — 26.5k vendors × 3 round-trips would dominate build time).
+    triples_by_vendor: Dict[str, set] = {}
+    for vk, wk, ck, sk in db.execute(text("""
+        SELECT DISTINCT normkey(vendor) vk,
+                        normkey(work_description) wk,
+                        normkey(constituency) ck,
+                        normkey(state) sk
+        FROM expenditures
+        WHERE vendor IS NOT NULL AND trim(vendor) <> ''
+          AND work_description IS NOT NULL AND trim(work_description) <> ''
+          AND constituency IS NOT NULL AND trim(constituency) <> ''
+          AND state IS NOT NULL AND trim(state) <> ''
+    """)).fetchall():
+        triples_by_vendor.setdefault(vk, set()).add((wk, ck, sk))
+    states_by_vendor: Dict[str, set] = {}
+    for vk, state in db.execute(text("""
+        SELECT DISTINCT normkey(vendor) vk, trim(state)
+        FROM expenditures
+        WHERE vendor IS NOT NULL AND trim(vendor) <> ''
+          AND state IS NOT NULL AND trim(state) <> ''
+    """)).fetchall():
+        states_by_vendor.setdefault(vk, set()).add(state)
+    const_by_vendor: Dict[str, set] = {}
+    for vk, constituency in db.execute(text("""
+        SELECT DISTINCT normkey(vendor) vk, trim(constituency)
+        FROM expenditures
+        WHERE vendor IS NOT NULL AND trim(vendor) <> ''
+          AND constituency IS NOT NULL AND trim(constituency) <> ''
+    """)).fetchall():
+        const_by_vendor.setdefault(vk, set()).add(constituency)
+
+    # ── 5. Fold aggregates into the exact response rows the frontend gets.
+    total = float(total)
+    rows: list = []
+    for row in vendor_rows:
+        key = row.vendor_key
+        vendor_name = str(row.vendor_name or "").strip()
+        vtype, vconf = _vendor_type(vendor_name)
+
+        # Linked-project risk/progress context for this vendor only.
+        risk_scores: list = []
+        risk_counts = {"High": 0, "Medium": 0, "Low": 0}
+        progress_counts = {"zero": 0, "low": 0, "completed": 0, "mismatch": 0}
+        vendor_linked = linked_by_vendor.get(key, {})
+        vendor_triples = triples_by_vendor.get(key, set())
+        for proj_id, proj in vendor_linked.items():
+            level = risk_by_project[proj_id]["level"]
+            level = level if level in ("High", "Medium", "Low") else "Low"
+            risk_counts[level] += 1
+            risk_scores.append(risk_by_project[proj_id]["score"])
+            completion = float(proj.completion_percentage or 0)
+            expenditure = float(proj.expenditure or 0)
+            sanctioned = float(proj.sanctioned_amount or 0)
+            if completion <= 0:
+                progress_counts["zero"] += 1
+            elif completion < 50:
+                progress_counts["low"] += 1
+            elif completion >= 100:
+                progress_counts["completed"] += 1
+            if (sanctioned > 0 and expenditure > sanctioned) or (expenditure > 0 and completion <= 0):
+                progress_counts["mismatch"] += 1
+
+        rows.append({
+            "normalized_name": key,
+            "vendor_name": vendor_name,
+            "raw_names": [vendor_name],
+            "type": vtype,
+            "type_confidence": vconf,
+            "project_count": int(row.engagement_count or 0),
+            "engagement_count": int(row.engagement_count or 0),
+            "linked_project_count": len(vendor_linked),
+            "transaction_count": int(row.transaction_count or 0),
+            "total_expenditure": round(float(row.total_expenditure or 0), 2),
+            "states": sorted(states_by_vendor.get(key, ())),
+            "constituencies": sorted(const_by_vendor.get(key, ())),
+            "high_risk_projects": risk_counts["High"],
+            "risk_counts": risk_counts,
+            "average_risk": round(sum(risk_scores) / len(risk_scores), 1) if risk_scores else 0,
+            "highest_risk": max(risk_scores) if risk_scores else 0,
+            "progress_counts": progress_counts,
+        })
+
     rows.sort(key=lambda item: item["total_expenditure"], reverse=True)
     for index, row in enumerate(rows):
         row["expenditure_share"] = round((row["total_expenditure"] / total * 100) if total else 0, 2)
@@ -1751,7 +1757,12 @@ def _build_vendor_intelligence_payload(db: Session, include_projects: bool = Fal
 
     top5_share = round(sum(item["expenditure_share"] for item in rows[:5]), 2)
     top10_share = round(sum(item["expenditure_share"] for item in rows[:10]), 2)
-    full_payload = {
+    print(
+        f"[vendor-intelligence] built {len(rows)} vendor rows, "
+        f"{len(linked)} linked project rows in {time.time() - build_started:.1f}s",
+        flush=True,
+    )
+    return {
         "data_source": "Current MPLADS expenditure dataset",
         "generated_from": ["projects", "expenditures", "risk_scores"],
         "normalization": "Vendor names use basic case, space, and punctuation normalization only; raw names are retained.",
@@ -1766,7 +1777,7 @@ def _build_vendor_intelligence_payload(db: Session, include_projects: bool = Fal
         ),
         "stats": {
             "unique_vendors": len(rows),
-            "vendor_linked_records": linked_records,
+            "vendor_linked_records": int(linked_records),
             "total_vendor_expenditure": round(total, 2),
             "multi_project_vendors": sum(1 for item in rows if item["project_count"] > 1),
             "vendors_with_high_risk_projects": sum(1 for item in rows if item["high_risk_projects"] > 0),
@@ -1776,15 +1787,192 @@ def _build_vendor_intelligence_payload(db: Session, include_projects: bool = Fal
         },
         "vendors": rows,
     }
-    if include_projects:
-        set_cached("vendor_intelligence_full_v3", full_payload)
-    summary = dict(full_payload)
-    summary["vendors"] = [
-        {key: value for key, value in vendor.items() if key != "projects"}
-        for vendor in rows
-    ]
-    set_cached("vendor_intelligence_summary_v3", summary)
-    return full_payload if include_projects else summary
+
+
+def _vendor_profile_payload(db: Session, vendor_key: str):
+    """Single-vendor profile: builds ONLY this vendor's data on demand.
+
+    Previously the profile endpoint triggered the full 83k-project build so
+    one drawer open cost the entire payload. Now: two bounded SQL queries
+    (this vendor's engagement aggregates + this vendor's linked projects),
+    one small risk lookup, cached per vendor key in the bounded intel cache
+    (cleared on dataset sync). Peak memory: kilobytes per vendor."""
+    cache_key = f"vendor_profile_{vendor_key}"
+    cached = _intel_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    # Vendor identity + totals (single grouped row, SQL-side).
+    identity = db.execute(text("""
+        SELECT MAX(vendor) AS vendor_name,
+               COUNT(*) AS transaction_count,
+               ROUND(SUM(expenditure_amount), 2) AS total_expenditure
+        FROM expenditures WHERE normkey(vendor) = :k
+    """), {"k": vendor_key}).fetchone()
+    if identity is None or not identity.vendor_name:
+        raise HTTPException(status_code=404, detail="Vendor not found in the current MPLADS dataset")
+
+    vendor_name = str(identity.vendor_name or "").strip()
+    vtype, vconf = _vendor_type(vendor_name)
+    total = db.execute(
+        text("SELECT COALESCE(SUM(expenditure_amount), 0) FROM expenditures "
+             "WHERE vendor IS NOT NULL AND trim(vendor) <> ''")
+    ).scalar() or 0.0
+    total = float(total)
+    vendor_total = float(identity.total_expenditure or 0)
+    transaction_count = int(identity.transaction_count or 0)
+
+    # Distinct work engagements for THIS vendor, with per-engagement totals.
+    engagements_rows = db.execute(text("""
+        SELECT normkey(work_description) wk,
+               normkey(constituency) ck,
+               normkey(state) sk,
+               MAX(trim(work_description)) AS work_description,
+               MAX(trim(constituency)) AS constituency,
+               MAX(trim(state)) AS state,
+               COUNT(*) AS tx,
+               ROUND(SUM(expenditure_amount), 2) AS amount
+        FROM expenditures
+        WHERE normkey(vendor) = :k
+          AND work_description IS NOT NULL AND trim(work_description) <> ''
+          AND constituency IS NOT NULL AND trim(constituency) <> ''
+          AND state IS NOT NULL AND trim(state) <> ''
+        GROUP BY wk, ck, sk
+        ORDER BY amount DESC
+    """), {"k": vendor_key}).fetchall()
+
+    # States/constituencies lists for the drawer header.
+    states = [s for (s,) in db.execute(
+        text("SELECT DISTINCT trim(state) FROM expenditures "
+             "WHERE normkey(vendor) = :k AND state IS NOT NULL AND trim(state) <> ''"), {"k": vendor_key}
+    ).fetchall()]
+    constituencies = [c for (c,) in db.execute(
+        text("SELECT DISTINCT trim(constituency) FROM expenditures "
+             "WHERE normkey(vendor) = :k AND constituency IS NOT NULL AND trim(constituency) <> ''"), {"k": vendor_key}
+    ).fetchall()]
+
+    # Engagement triples WITHOUT complete location data still count toward
+    # expenditure but cannot fabricate an engagement (same rule as the
+    # aggregate builder).
+    blank_key_totals = db.execute(text("""
+        SELECT COUNT(*) AS tx, ROUND(SUM(expenditure_amount), 2) AS amount
+        FROM expenditures
+        WHERE normkey(vendor) = :k
+          AND (work_description IS NULL OR trim(work_description) = ''
+               OR constituency IS NULL OR trim(constituency) = ''
+               OR state IS NULL OR trim(state) = '')
+    """), {"k": vendor_key}).fetchone()
+
+    # Linked real projects: exact work-key match for THIS vendor only.
+    linked = db.execute(text("""
+        SELECT ve.wk, ve.ck, ve.sk,
+               p.id, p.project_name, p.state, p.district, p.constituency,
+               p.project_type, p.sanctioned_amount, p.expenditure,
+               p.completion_percentage, p.status,
+               rs.risk_score, rs.risk_level
+        FROM (
+            SELECT DISTINCT normkey(work_description) wk,
+                            normkey(constituency) ck,
+                            normkey(state) sk
+            FROM expenditures
+            WHERE normkey(vendor) = :k
+              AND work_description IS NOT NULL AND trim(work_description) <> ''
+              AND constituency IS NOT NULL AND trim(constituency) <> ''
+              AND state IS NOT NULL AND trim(state) <> ''
+        ) ve
+        JOIN projects p
+          ON normkey(p.project_name) = ve.wk
+         AND normkey(p.constituency) = ve.ck
+         AND normkey(p.state) = ve.sk
+        LEFT JOIN risk_scores rs ON rs.project_id = p.id
+    """), {"k": vendor_key}).fetchall()
+
+    linked_projects = []
+    risk_scores = []
+    risk_counts = {"High": 0, "Medium": 0, "Low": 0}
+    progress_counts = {"zero": 0, "low": 0, "completed": 0, "mismatch": 0}
+    matched_ids: set = set()
+    key_to_projects: Dict[tuple, list] = {}
+    for row in linked:
+        if row.id in matched_ids:
+            continue
+        matched_ids.add(row.id)
+        score = int(row.risk_score or 0)
+        level = str(row.risk_level or "Low").title()
+        level = level if level in ("High", "Medium", "Low") else "Low"
+        risk_counts[level] += 1
+        risk_scores.append(score)
+        completion = float(row.completion_percentage or 0)
+        expenditure = float(row.expenditure or 0)
+        sanctioned = float(row.sanctioned_amount or 0)
+        if completion <= 0:
+            progress_counts["zero"] += 1
+        elif completion < 50:
+            progress_counts["low"] += 1
+        elif completion >= 100:
+            progress_counts["completed"] += 1
+        if (sanctioned > 0 and expenditure > sanctioned) or (expenditure > 0 and completion <= 0):
+            progress_counts["mismatch"] += 1
+        linked_projects.append({
+            "id": row.id,
+            "project_name": row.project_name,
+            "state": row.state,
+            "district": row.district,
+            "constituency": row.constituency,
+            "project_type": row.project_type,
+            "sanctioned_amount": row.sanctioned_amount or 0,
+            "expenditure": row.expenditure or 0,
+            "completion_percentage": row.completion_percentage or 0,
+            "status": row.status,
+            "risk": {"score": score, "level": level},
+        })
+        key_to_projects.setdefault((row.wk, row.ck, row.sk), []).append(row.id)
+
+    engagements = []
+    for row in engagements_rows:
+        engagements.append({
+            "work_description": row.work_description,
+            "constituency": row.constituency,
+            "state": row.state,
+            "transaction_count": int(row.tx or 0),
+            "total_amount": round(float(row.amount or 0), 2),
+            "project_ids": key_to_projects.get((row.wk, row.ck, row.sk), []),
+        })
+    if blank_key_totals and int(blank_key_totals.tx or 0) > 0:
+        engagements.append({
+            "work_description": "(Expenditure records without complete work/location data)",
+            "constituency": "—",
+            "state": "—",
+            "transaction_count": int(blank_key_totals.tx or 0),
+            "total_amount": round(float(blank_key_totals.amount or 0), 2),
+            "project_ids": [],
+        })
+    engagement_count = len(engagements_rows)
+
+    payload = {
+        "normalized_name": vendor_key,
+        "vendor_name": vendor_name,
+        "raw_names": [vendor_name],
+        "type": vtype,
+        "type_confidence": vconf,
+        "project_count": engagement_count,
+        "engagement_count": engagement_count,
+        "linked_project_count": len(matched_ids),
+        "transaction_count": transaction_count,
+        "total_expenditure": round(vendor_total, 2),
+        "states": sorted(states),
+        "constituencies": sorted(constituencies),
+        "high_risk_projects": risk_counts["High"],
+        "risk_counts": risk_counts,
+        "average_risk": round(sum(risk_scores) / len(risk_scores), 1) if risk_scores else 0,
+        "highest_risk": max(risk_scores) if risk_scores else 0,
+        "progress_counts": progress_counts,
+        "expenditure_share": round((vendor_total / total * 100) if total else 0, 2),
+        "engagements": engagements,
+        "projects": linked_projects,
+    }
+    _intel_cache_set(cache_key, payload)
+    return payload
 
 
 @app.get("/vendor-intelligence", tags=["Vendor Intelligence"])
@@ -1829,11 +2017,9 @@ def get_vendor_intelligence(
 
 @app.get("/vendor-intelligence/{vendor_key}", tags=["Vendor Intelligence"])
 def get_vendor_profile(vendor_key: str, db: Session = Depends(get_db)):
-    payload = _vendor_intelligence_payload(db, include_projects=True)
-    for vendor in payload["vendors"]:
-        if vendor.get("normalized_name") == _vendor_key(vendor_key):
-            return vendor
-    raise HTTPException(status_code=404, detail="Vendor not found in the current MPLADS dataset")
+    # On-demand single-vendor build — no full-payload construction, no
+    # full-table scans. Bounded per-vendor cache, cleared on data sync.
+    return _vendor_profile_payload(db, _vendor_key(vendor_key))
 
 
 @app.get("/completed-works", tags=["MP Operations"])
