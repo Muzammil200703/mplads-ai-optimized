@@ -13,3 +13,4 @@ passlib[bcrypt]
 bcrypt<5
 email-validator
 python-multipart
+Pillow
