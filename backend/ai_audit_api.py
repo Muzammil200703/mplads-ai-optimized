@@ -24,11 +24,14 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 import ai_audit
+import auth
 import models
+from auth import require_capability
 from database import SessionLocal
 
 
@@ -42,6 +45,21 @@ def get_db():
         db.close()
 
 router = APIRouter(prefix="/ai", tags=["AI Audit"])
+
+_bearer = HTTPBearer(auto_error=False)
+
+
+def _optional_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+                   db: Session = Depends(get_db)) -> Optional[models.User]:
+    """Best-effort identity: attaches the signed-in user when a valid bearer
+    token is present, else None. Used to attribute submissions without
+    forcing sign-in for legacy anonymous use."""
+    if credentials is None or not credentials.credentials:
+        return None
+    uid = auth._decode_token(credentials.credentials)
+    if uid is None:
+        return None
+    return db.query(models.User).filter(models.User.id == uid, models.User.is_active.is_(True)).first()
 
 # Category benchmark index: {category: {state: (count, sum)}} — tiny.
 _bench_lock = threading.Lock()
@@ -786,16 +804,35 @@ async def verify_report(
     lon: Optional[float] = Query(None),
     reporter_name: Optional[str] = Query(None),
     note: Optional[str] = Query(None),
+    inquiry_id: Optional[int] = Query(None, description="Link this submission to an auditor inquiry"),
     file: Optional[UploadFile] = File(None),
+    user: Optional[models.User] = Depends(_optional_user),
     db: Session = Depends(get_db),
 ):
-    """Submit a live field verification (photo + browser GPS + 1-click status)."""
+    """Submit a live field verification (photo + browser GPS + 1-click status).
+
+    Signed-in Field Verifiers / Auditors / Admins get full attribution
+    (user_id + role). Anonymous submissions remain possible for the legacy
+    public portal but are flagged as unattributed.
+    """
     status_clean = status.strip()
     if status_clean not in ("Functional", "Non-Functional", "Work Not Started"):
         raise HTTPException(400, "status must be Functional, Non-Functional, or Work Not Started")
     project = db.query(models.Project.id).filter(models.Project.id == project_id).first()
     if not project:
         raise HTTPException(404, f"Project {project_id} not found")
+
+    # Enquiry linkage: a field verifier responding to an inquiry must target
+    # an inquiry that actually exists and is still open.
+    inquiry_row = None
+    if inquiry_id is not None:
+        inquiry_row = db.query(models.Inquiry).filter(models.Inquiry.id == inquiry_id).first()
+        if not inquiry_row:
+            raise HTTPException(404, f"Inquiry {inquiry_id} not found")
+        if inquiry_row.project_id != project_id:
+            raise HTTPException(400, "This inquiry belongs to a different project")
+        if inquiry_row.status != "open":
+            raise HTTPException(400, "This inquiry has already been responded to or closed")
 
     photo_hash_id = None
     exif = None
@@ -836,9 +873,25 @@ async def verify_report(
         if site_fix and site_fix.lat is not None:
             distance_m = ai_audit.haversine_m(lat, lon, site_fix.lat, site_fix.lon)
 
+    # Identity attribution: signed-in users always take precedence over a
+    # self-typed name; anonymous submissions keep the legacy name field.
+    if user is not None:
+        attrib_name = user.name[:120]
+        attrib_role = user.role
+        attrib_uid = user.id
+    else:
+        attrib_name = (reporter_name or "Anonymous")[:120]
+        attrib_role = "public"
+        attrib_uid = None
+
+    # Citizen submissions are a distinct evidence class — labelled and kept
+    # pending until a field verifier dispositions them. Verifier/auditor
+    # submissions remain trusted 'field' reports as before.
+    submission_kind = "citizen" if (attrib_role in ("citizen", "public")) else "field"
+
     report = models.VerificationReport(
         project_id=project_id,
-        reporter_name=(reporter_name or "Anonymous")[:120],
+        reporter_name=attrib_name,
         status=status_clean,
         lat=lat, lon=lon,
         distance_m=distance_m,
@@ -846,8 +899,32 @@ async def verify_report(
         photo_hash_id=photo_hash_id,
         note=(note or "")[:1000],
         created_at=datetime.utcnow().isoformat(),
+        user_id=attrib_uid,
+        user_role=attrib_role,
+        inquiry_id=inquiry_id,
+        submission_kind=submission_kind,
+        review_status=("pending" if submission_kind == "citizen" else "verified"),
     )
     db.add(report)
+    db.flush()
+    db.add(models.EvidenceEvent(
+        report_id=report.id,
+        event="submitted" if submission_kind == "citizen" else "submitted_field",
+        actor_user_id=attrib_uid,
+        actor_name=attrib_name,
+        actor_role=attrib_role,
+        note=(note or "")[:300],
+        created_at=datetime.utcnow().isoformat(),
+    ))
+
+    # A signed-in response to an inquiry advances the inquiry workflow.
+    if inquiry_row is not None and user is not None:
+        inquiry_row.status = "responded"
+        inquiry_row.response_text = (note or "")[:2000] or status_clean
+        inquiry_row.responded_by_user_id = user.id
+        inquiry_row.responded_by_name = user.name[:120]
+        inquiry_row.responded_at = datetime.utcnow().isoformat()
+
     db.commit()
     db.refresh(report)
 
@@ -855,13 +932,217 @@ async def verify_report(
         "report_id": report.id,
         "project_id": project_id,
         "status_recorded": status_clean,
+        "reported_by": attrib_name,
+        "reported_by_role": attrib_role,
+        "submission_kind": submission_kind,
+        "review_status": report.review_status,
+        "inquiry_id": inquiry_id,
+        "inquiry_status": (inquiry_row.status if inquiry_row is not None else None),
         "gps_captured": bool(lat is not None and lon is not None),
         "gps_source": gps_source or "none",
         "photo_stored": photo_hash_id is not None,
         "exif": exif,
         "distance_from_previous_field_fix_m": distance_m,
-        "message": "Verification recorded. Thank you for strengthening ground truth.",
+        "message": (
+            "Citizen evidence submitted — it will be reviewed by a field verifier "
+            "before being counted as verified evidence."
+            if submission_kind == "citizen"
+            else "Verification recorded. Thank you for strengthening ground truth."
+        ),
     }
+
+
+@router.get("/verify/mine")
+def my_verifications(
+    limit: int = Query(50, ge=1, le=200),
+    user: models.User = Depends(require_capability("verification:read_own")),
+    db: Session = Depends(get_db),
+):
+    """Verification reports submitted by the signed-in user (citizen's own
+    evidence / verifier's own field reports). Strict ownership filter."""
+    rows = (
+        db.query(models.VerificationReport, models.Project.project_name)
+        .outerjoin(models.Project, models.Project.id == models.VerificationReport.project_id)
+        .filter(models.VerificationReport.user_id == user.id)
+        .order_by(models.VerificationReport.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    items = [{
+        "report_id": r.id,
+        "project_id": r.project_id,
+        "project_name": name,
+        "status": r.status,
+        "lat": r.lat, "lon": r.lon,
+        "gps_source": r.gps_source,
+        "photo_hash_id": r.photo_hash_id,
+        "note": r.note,
+        "inquiry_id": r.inquiry_id,
+        "submission_kind": r.submission_kind or "field",
+        "review_status": r.review_status or "verified",
+        "review_note": r.review_note,
+        "reviewed_by_name": r.reviewed_by_name,
+        "reviewed_at": r.reviewed_at,
+        "created_at": r.created_at,
+    } for r, name in rows]
+    return {"items": items, "total": len(items)}
+
+
+# ────────────────────────────────────────────────────────────────────
+# 7b. Citizen evidence review workflow (field verifier / auditor / admin)
+# ────────────────────────────────────────────────────────────────────
+
+REVIEW_EVENTS = {
+    "verified": "review_verified",
+    "rejected": "review_rejected",
+    "escalated": "escalated",
+}
+
+
+@router.get("/evidence/queue")
+def evidence_queue(
+    review_status: str = Query("pending", pattern="^(pending|verified|rejected|escalated|all)$"),
+    limit: int = Query(50, ge=1, le=200),
+    user: models.User = Depends(require_capability("verification:review")),
+    db: Session = Depends(get_db),
+):
+    """Citizen evidence submissions for review. Field verifiers see pending
+    first (their job is triage); auditors/admins see everything. Only
+    citizen-kind submissions appear here — verifier field reports are
+    trusted by definition."""
+    q = (
+        db.query(models.VerificationReport, models.Project.project_name,
+                 models.Project.state, models.Project.status)
+        .outerjoin(models.Project, models.Project.id == models.VerificationReport.project_id)
+        .filter(models.VerificationReport.submission_kind == "citizen")
+    )
+    if review_status != "all":
+        q = q.filter(models.VerificationReport.review_status == review_status)
+    rows = q.order_by(models.VerificationReport.created_at.desc()).limit(limit).all()
+    items = [{
+        "report_id": r.id,
+        "project_id": r.project_id,
+        "project_name": name,
+        "project_state": state,
+        "project_official_status": official,
+        "citizen_status": r.status,
+        "reporter": r.reporter_name,
+        "lat": r.lat, "lon": r.lon, "gps_source": r.gps_source,
+        "photo_hash_id": r.photo_hash_id,
+        "note": r.note,
+        "review_status": r.review_status,
+        "reviewed_by_name": r.reviewed_by_name,
+        "review_note": r.review_note,
+        "reviewed_at": r.reviewed_at,
+        "created_at": r.created_at,
+    } for r, name, state, official in rows]
+    counts = dict(
+        db.query(models.VerificationReport.review_status, func.count(models.VerificationReport.id))
+        .filter(models.VerificationReport.submission_kind == "citizen")
+        .group_by(models.VerificationReport.review_status)
+        .all()
+    )
+    return {"items": items, "total": len(items), "counts": counts}
+
+
+@router.post("/evidence/{report_id}/review")
+def evidence_review(
+    report_id: int,
+    decision: str = Query(..., pattern="^(verified|rejected|escalated)$"),
+    note: Optional[str] = Query(None),
+    user: models.User = Depends(require_capability("verification:review")),
+    db: Session = Depends(get_db),
+):
+    """Disposition a citizen submission. Rejection REQUIRES a note. Escalation
+    flags it for auditor attention (auditor/admin only). This records the
+    verification outcome — it never touches official project data, risk
+    scores, or audit flags."""
+    if decision == "escalated" and not auth.has_role_rank(user, "auditor"):
+        raise HTTPException(403, "Only auditors and administrators can escalate citizen evidence")
+    report = db.query(models.VerificationReport).filter(
+        models.VerificationReport.id == report_id,
+        models.VerificationReport.submission_kind == "citizen",
+    ).first()
+    if not report:
+        raise HTTPException(404, "Citizen submission not found")
+    if report.review_status not in ("pending", "escalated"):
+        raise HTTPException(400, f"This submission is already {report.review_status}")
+    clean_note = (note or "").strip()
+    if decision == "rejected" and not clean_note:
+        raise HTTPException(400, "A rejection note is required so the citizen understands the decision")
+
+    now = datetime.utcnow().isoformat()
+    report.review_status = decision
+    report.reviewed_by_user_id = user.id
+    report.reviewed_by_name = user.name[:120]
+    report.review_note = clean_note[:1000] or None
+    report.reviewed_at = now
+    db.add(models.EvidenceEvent(
+        report_id=report.id,
+        event=REVIEW_EVENTS[decision],
+        actor_user_id=user.id,
+        actor_name=user.name[:120],
+        actor_role=user.role,
+        note=clean_note[:300] or None,
+        created_at=now,
+    ))
+    db.commit()
+    labels = {
+        "verified": "Citizen evidence verified — it now counts as corroborating ground truth.",
+        "rejected": "Citizen evidence rejected (note recorded).",
+        "escalated": "Citizen evidence escalated for auditor review.",
+    }
+    return {"report_id": report.id, "review_status": decision,
+            "reviewed_by": report.reviewed_by_name, "message": labels[decision]}
+
+
+@router.get("/evidence/all")
+def evidence_all(
+    limit: int = Query(100, ge=1, le=500),
+    user: models.User = Depends(require_capability("verification:review")),
+    db: Session = Depends(get_db),
+):
+    """Auditor/admin view: every citizen submission incl. verifier decisions
+    and the full event trail per report (bounded to the returned page)."""
+    rows = (
+        db.query(models.VerificationReport, models.Project.project_name)
+        .outerjoin(models.Project, models.Project.id == models.VerificationReport.project_id)
+        .filter(models.VerificationReport.submission_kind == "citizen")
+        .order_by(models.VerificationReport.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    ids = [r.id for r, _ in rows]
+    trail: Dict[int, List[dict]] = {}
+    if ids:
+        events = (
+            db.query(models.EvidenceEvent)
+            .filter(models.EvidenceEvent.report_id.in_(ids))
+            .order_by(models.EvidenceEvent.created_at.asc())
+            .all()
+        )
+        for e in events:
+            trail.setdefault(e.report_id, []).append({
+                "event": e.event, "actor": e.actor_name, "actor_role": e.actor_role,
+                "note": e.note, "created_at": e.created_at,
+            })
+    items = [{
+        "report_id": r.id,
+        "project_id": r.project_id,
+        "project_name": name,
+        "citizen_status": r.status,
+        "reporter": r.reporter_name,
+        "lat": r.lat, "lon": r.lon, "gps_source": r.gps_source,
+        "photo_hash_id": r.photo_hash_id,
+        "note": r.note,
+        "review_status": r.review_status,
+        "reviewed_by_name": r.reviewed_by_name,
+        "review_note": r.review_note,
+        "reviewed_at": r.reviewed_at,
+        "created_at": r.created_at,
+        "trail": trail.get(r.id, []),
+    } for r, name in rows]
+    return {"items": items, "total": len(items)}
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -874,26 +1155,48 @@ def audit_action(
     action: str = Query(..., description="approve | inquiry | escalate"),
     note: Optional[str] = Query(None),
     actor: Optional[str] = Query(None),
+    user: models.User = Depends(require_capability("audit:action")),
     db: Session = Depends(get_db),
 ):
-    """Record an auditor disposition from the inspection modal."""
+    """Record an auditor disposition from the inspection modal. When the
+    action is an inquiry, an Inquiry row is created and routed to the
+    project's district authority."""
     action_clean = action.strip().lower()
     if action_clean not in ("approve", "inquiry", "escalate"):
         raise HTTPException(400, "action must be approve, inquiry, or escalate")
-    if not db.query(models.Project.id).filter(models.Project.id == project_id).first():
+    project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if not project:
         raise HTTPException(404, f"Project {project_id} not found")
     row = models.AuditAction(
         project_id=project_id,
         action=action_clean,
         note=(note or "")[:2000],
-        actor=(actor or "auditor")[:120],
+        actor=(user.name or user.email)[:120],
         created_at=datetime.utcnow().isoformat(),
     )
     db.add(row)
+
+    inquiry_id = None
+    if action_clean == "inquiry":
+        if not (note or "").strip():
+            raise HTTPException(400, "A question/note is required when issuing an inquiry")
+        inq = models.Inquiry(
+            project_id=project_id,
+            issued_by_user_id=user.id,
+            issued_by_name=(user.name or user.email)[:120],
+            district=project.district,
+            question=(note or "").strip()[:2000],
+            status="open",
+            created_at=datetime.utcnow().isoformat(),
+        )
+        db.add(inq)
+        db.flush()
+        inquiry_id = inq.id
+
     db.commit()
     db.refresh(row)
     labels = {"approve": "Flag approved & cleared", "inquiry": "Inquiry issued to district authority", "escalate": "Escalated to Auditor General"}
-    return {"id": row.id, "project_id": project_id, "action": action_clean, "message": labels[action_clean]}
+    return {"id": row.id, "project_id": project_id, "action": action_clean, "inquiry_id": inquiry_id, "message": labels[action_clean]}
 
 
 @router.get("/audit-actions/{project_id}")
@@ -977,6 +1280,13 @@ def inspection_bundle(project_id: int, db: Session = Depends(get_db)):
         .all()
     )
     actions = list_audit_actions(project_id, db=db)
+    inquiries = (
+        db.query(models.Inquiry)
+        .filter(models.Inquiry.project_id == project_id)
+        .order_by(models.Inquiry.created_at.desc())
+        .limit(10)
+        .all()
+    )
 
     return {
         "project": {
@@ -996,10 +1306,87 @@ def inspection_bundle(project_id: int, db: Session = Depends(get_db)):
         "verifications": [
             {
                 "status": v.status, "reporter": v.reporter_name,
-                "distance_m": v.distance_m, "gps_source": v.gps_source,
+                "reporter_role": v.user_role, "distance_m": v.distance_m,
+                "gps_source": v.gps_source,
                 "note": (v.note or "")[:200], "created_at": v.created_at,
             }
             for v in verifications
         ],
+        "inquiries": [
+            {
+                "id": i.id, "question": i.question, "status": i.status,
+                "issued_by": i.issued_by_name, "created_at": i.created_at,
+                "response_text": i.response_text,
+                "responded_by": i.responded_by_name, "responded_at": i.responded_at,
+            }
+            for i in inquiries
+        ],
         "actions": actions,
     }
+
+
+# ────────────────────────────────────────────────────────────────────
+# 7. Inquiry workflow: auditor issues → district authority responds
+#    → auditor reviews/closes. Enforced via capabilities.
+# ────────────────────────────────────────────────────────────────────
+
+@router.get("/inquiries")
+def list_inquiries(
+    status_filter: Optional[str] = Query(None, alias="status"),
+    limit: int = Query(100, ge=1, le=500),
+    user: models.User = Depends(require_capability("inquiry:review")),
+    db: Session = Depends(get_db),
+):
+    """All inquiries (auditor/admin view), newest first."""
+    q = db.query(models.Inquiry, models.Project.project_name).outerjoin(
+        models.Project, models.Project.id == models.Inquiry.project_id
+    )
+    if status_filter in ("open", "responded", "closed"):
+        q = q.filter(models.Inquiry.status == status_filter)
+    rows = q.order_by(models.Inquiry.created_at.desc()).limit(limit).all()
+    items = [{
+        "inquiry_id": i.id, "project_id": i.project_id, "project_name": name,
+        "district": i.district, "question": i.question, "status": i.status,
+        "issued_by": i.issued_by_name, "created_at": i.created_at,
+        "response_text": i.response_text, "responded_by": i.responded_by_name,
+        "responded_at": i.responded_at, "closed_at": i.closed_at,
+    } for i, name in rows]
+    counts = dict(
+        db.query(models.Inquiry.status, func.count(models.Inquiry.id))
+        .group_by(models.Inquiry.status)
+        .all()
+    )
+    return {"items": items, "total": len(items), "counts": counts}
+
+
+@router.post("/inquiries/{inquiry_id}/close")
+def close_inquiry(
+    inquiry_id: int,
+    user: models.User = Depends(require_capability("inquiry:review")),
+    db: Session = Depends(get_db),
+):
+    """Auditor reviews the authority's response and closes the inquiry."""
+    inq = db.query(models.Inquiry).filter(models.Inquiry.id == inquiry_id).first()
+    if not inq:
+        raise HTTPException(404, f"Inquiry {inquiry_id} not found")
+    if inq.status != "responded":
+        raise HTTPException(400, "Only a responded inquiry can be closed")
+    inq.status = "closed"
+    inq.closed_by_user_id = user.id
+    inq.closed_at = datetime.utcnow().isoformat()
+    db.commit()
+    return {"inquiry_id": inq.id, "status": inq.status, "message": "Inquiry closed"}
+
+
+@router.get("/verify/photo/{photo_hash_id}")
+def serve_photo_hash(
+    photo_hash_id: int,
+    user: models.User = Depends(require_capability("inquiry:review")),
+    db: Session = Depends(get_db),
+):
+    """Metadata for a stored verification photo (auditor/admin)."""
+    row = db.query(models.PhotoHash).filter(models.PhotoHash.id == photo_hash_id).first()
+    if not row:
+        raise HTTPException(404, "Photo not found")
+    return {"id": row.id, "project_id": row.project_id, "dhash": row.dhash,
+            "source": row.source, "created_at": row.created_at}

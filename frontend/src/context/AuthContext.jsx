@@ -3,8 +3,30 @@ import { fetchMe, getToken, login as apiLogin, signup as apiSignup, logout as ap
 
 const AuthContext = createContext(null)
 
-// Role hierarchy for UI gating — mirrors backend auth.ROLE_RANK
-const ROLE_RANK = { public: 0, analyst: 1, auditor: 2, admin: 3 }
+// Role hierarchy for UI gating — mirrors backend auth.ROLE_RANK.
+// field_verifier / district_authority are LATERAL roles below analyst:
+// they never inherit the analyst workspace and instead rely on the
+// explicit capabilities the backend returns with /auth/me.
+const ROLE_RANK = {
+  public: 0,
+  citizen: 1,
+  field_verifier: 1,
+  district_authority: 1,
+  analyst: 2,
+  auditor: 3,
+  admin: 4,
+}
+
+// Display labels + accent colors for the profile area.
+export const ROLE_LABELS = {
+  public: "Guest",
+  citizen: "Citizen",
+  field_verifier: "Field Verifier",
+  district_authority: "District Authority",
+  analyst: "Analyst",
+  auditor: "Auditor",
+  admin: "Administrator",
+}
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
@@ -57,9 +79,19 @@ export function AuthProvider({ children }) {
     [user]
   )
 
+  // Explicit capability check — mirrors backend ROLE_CAPABILITIES. Used for
+  // lateral roles whose powers cannot be expressed by rank alone.
+  const can = useCallback(
+    (capability) => {
+      if (!user) return false
+      return Array.isArray(user.capabilities) && user.capabilities.includes(capability)
+    },
+    [user]
+  )
+
   const value = useMemo(
-    () => ({ user, loading, login, signup, logout, hasRole }),
-    [user, loading, login, signup, logout, hasRole]
+    () => ({ user, loading, login, signup, logout, hasRole, can }),
+    [user, loading, login, signup, logout, hasRole, can]
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

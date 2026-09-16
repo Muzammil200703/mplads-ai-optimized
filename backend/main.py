@@ -18,6 +18,7 @@ import models
 # SIH 26102 — AI Audit & Verification endpoints (new capability; mounts
 # alongside existing routes, modifies nothing)
 from ai_audit_api import router as ai_audit_router
+from assistant import router as assistant_router
 import audit_intel
 from schemas import ProjectCreate
 from ml.predictor import predict_risk
@@ -35,6 +36,88 @@ from fastapi import UploadFile, File, Form
 
 # Create tables
 Base.metadata.create_all(bind=engine)
+
+# Startup column migrations for databases created before the role-system
+# expansion (adds users.assigned_district/state, verification_reports.
+# user_id/user_role/inquiry_id when missing). Idempotent.
+from database import run_lightweight_migrations
+run_lightweight_migrations()
+
+# One-time data-integrity repair: a historical backfill stamped aggregate
+# expenditure totals onto individual project rows (e.g. every same-named work
+# in a constituency sharing one ₹7.76 Cr group total; a second variant used
+# per-MP/per-IDA sums). This poisoned risk scores via the overspend /
+# disbursement-with-zero-progress rules. Both repair passes (idempotent via
+# sync_metadata markers) zero the provable stamps and the affected rows' risk
+# scores are recomputed with the existing predictor.
+try:
+    import logging as _logging
+
+    _repair_logger = _logging.getLogger("mplads.data_repair")
+    from database import (
+        repair_expenditure_stamps,
+        repair_expenditure_stamp_variants,
+    )
+
+    _repaired_count = (
+        repair_expenditure_stamps() + repair_expenditure_stamp_variants()
+    )
+    if _repaired_count:
+        _repair_logger.warning(
+            "data repair: cleared %d fabricated expenditure stamps; "
+            "recomputing affected risk scores",
+            _repaired_count,
+        )
+        from models import Project as _Project, RiskScore as _RiskScore
+        from ml.predictor import predict_risk as _predict_risk
+
+        _db = SessionLocal()
+        try:
+            # The affected rows are exactly: zero-expenditure projects whose
+            # stored risk reasons still cite an expenditure rule — i.e. rows
+            # this repair (and only this repair) changed.
+            _rows = (
+                _db.query(_Project)
+                .join(_RiskScore, _Project.id == _RiskScore.project_id)
+                .filter(
+                    _Project.expenditure == 0,
+                    _RiskScore.reasons.like(
+                        "%Expenditure exceeds sanctioned amount%"
+                    ),
+                )
+                .all()
+            )
+            _rescored = 0
+            for _p in _rows:
+                _risk = _predict_risk(_p, batch_mode=True)
+                _rs = (
+                    _db.query(_RiskScore)
+                    .filter(_RiskScore.project_id == _p.id)
+                    .first()
+                )
+                if _rs:
+                    _rs.ml_anomaly = _risk["ml_anomaly"]
+                    _rs.ml_score = _risk["ml_score"]
+                    _rs.risk_score = _risk["risk_score"]
+                    _rs.risk_level = _risk["risk_level"]
+                    _rs.reasons = ", ".join(_risk.get("reasons") or [])
+                    _rescored += 1
+            _db.commit()
+            if _rescored:
+                _repair_logger.warning(
+                    "data repair: recomputed %d risk scores after clearing "
+                    "fabricated expenditure stamps",
+                    _rescored,
+                )
+        except Exception:
+            _db.rollback()
+            _repair_logger.exception(
+                "risk rescore after expenditure repair failed"
+            )
+        finally:
+            _db.close()
+except Exception:
+    pass  # repair is best-effort; never block startup
 
 # One-time expenditure vendor index (CREATE INDEX IF NOT EXISTS is a no-op
 # once it exists). Backs the vendor-intelligence per-vendor profile queries
@@ -296,6 +379,9 @@ app = FastAPI(
 # SIH 26102 — AI Audit & Verification router (audit queue, image forensics,
 # cost anomaly, vendor network, /verify portal, audit actions)
 app.include_router(ai_audit_router)
+
+# Universal MPLADS AI Assistant (role-aware Q&A over live data + knowledge base)
+app.include_router(assistant_router)
 
 # =========================================================
 # CORS CONFIGURATION (production-safe)

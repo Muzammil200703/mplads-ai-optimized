@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react"
+import { useAuth } from "../context/AuthContext"
 import { submitVerificationReport, verifyProjectLookup } from "../services/api"
 import { formatMoney } from "../utils/format"
 
@@ -50,6 +51,11 @@ function useGeolocation() {
 }
 
 export default function VerifyPortal() {
+  const { user, can } = useAuth()
+  // Citizen mode: signed-in citizens (and guests) submit CITIZEN EVIDENCE —
+  // kept pending until a field verifier dispositions it. Field verifiers,
+  // auditors and admins submit trusted field reports as before.
+  const isCitizenMode = !user || user.role === "citizen"
   const [query, setQuery] = useState(() => {
     const m = window.location.hash.match(/project=(\d+)/)
     return m ? m[1] : ""
@@ -107,7 +113,12 @@ export default function VerifyPortal() {
         note: note.trim() || undefined,
         file: file || undefined,
       })
-      setResult(res)
+      // Citizen mode hint: where to track the submission afterwards
+      if (isCitizenMode && user) {
+        setResult({ _mineHint: true, ...res })
+      } else {
+        setResult(res)
+      }
       // refresh recent list
       verifyProjectLookup(project.id).then((d) => setRecent(d.recent_reports || [])).catch(() => {})
       setStatus(null); setNote(""); setFile(null)
@@ -122,11 +133,27 @@ export default function VerifyPortal() {
   return (
     <div className="min-h-full p-4 sm:p-6">
     <div className="mx-auto max-w-[1440px] space-y-4 sm:space-y-6">
-      <header>
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Ground Truth Verification</h1>
-        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-          Check what an MPLADS project actually looks like on the ground. Your live photo and GPS report become independent evidence auditors can compare against recorded data.
-        </p>
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="flex flex-wrap items-center gap-2 text-2xl font-bold text-gray-900 dark:text-white">
+            Ground Truth Verification
+            {isCitizenMode && (
+              <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[0.6875rem] font-bold uppercase tracking-wide text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+                Submit Evidence as Citizen
+              </span>
+            )}
+          </h1>
+          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+            {isCitizenMode
+              ? "Report what a project actually looks like on the ground. Your photo, GPS and status go in as Citizen Evidence — a field verifier reviews it before it counts as verified. It never changes the official record."
+              : "Authorized field verification: your live photo and GPS report are recorded as trusted field evidence auditors can compare against recorded data."}
+          </p>
+        </div>
+        {user && can("verification:read_own") && (
+          <span className="rounded-lg bg-white px-3 py-1.5 text-xs font-bold text-[#031632] shadow-sm dark:bg-[#111827] dark:text-[#f3f4f6]">
+            Track yours under {user.role === "citizen" ? "My Evidence" : "My Verifications"}
+          </span>
+        )}
       </header>
 
       {/* Step 1 — find the project */}
@@ -245,15 +272,19 @@ export default function VerifyPortal() {
             disabled={!status || submitting}
             className="mt-3 w-full rounded-lg bg-blue-600 py-3 text-sm font-bold text-white transition hover:bg-blue-700 disabled:opacity-50"
           >
-            {submitting ? "Submitting…" : "Submit verification report"}
+            {submitting ? "Submitting…" : (isCitizenMode ? "Submit Citizen Evidence" : "Submit verification report")}
           </button>
           {result && (
             <div className="mt-3 rounded-lg bg-green-50 p-3 text-sm text-green-800 dark:bg-green-950/40 dark:text-green-300">
               <p className="font-bold">✓ {result.message}</p>
               <p className="mt-0.5 text-xs">
+                {result.submission_kind === "citizen" && <>Review status: {result.review_status} · </>}
                 GPS captured: {result.gps_captured ? `yes (${result.gps_source})` : "no"} · photo stored: {result.photo_stored ? "yes" : "no"}
                 {result.distance_from_previous_field_fix_m != null && <> · {result.distance_from_previous_field_fix_m}m from the previous field position</>}
               </p>
+              {result._mineHint && (
+                <p className="mt-1 text-xs font-semibold">Track this submission under “My Evidence” in the sidebar.</p>
+              )}
             </div>
           )}
         </section>
@@ -272,6 +303,7 @@ export default function VerifyPortal() {
               </li>
             ))}
           </ul>
+          <p className="mt-2 text-[0.6875rem] text-gray-400">Reports shown here are individual submissions — verification status is managed by field verifiers and auditors.</p>
         </section>
       )}
     </div>

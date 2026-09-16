@@ -1,5 +1,6 @@
 import { useState, useEffect, lazy, Suspense, memo, useRef } from "react"
 import Sidebar from "./components/Sidebar"
+import AssistantWidget from "./components/AssistantWidget"
 import TopBar from "./components/TopBar"
 import { PageSkeleton } from "./components/Skeleton"
 import { AuthProvider, useAuth } from "./context/AuthContext"
@@ -15,6 +16,10 @@ const SavedProjectsPage = lazy(() => import("./pages/Workspace").then((m) => ({ 
 const MyInvestigationsPage = lazy(() => import("./pages/Workspace").then((m) => ({ default: m.MyInvestigationsPage })))
 const MyAuditCasesPage = lazy(() => import("./pages/Workspace").then((m) => ({ default: m.MyAuditCasesPage })))
 const AdminPage = lazy(() => import("./pages/Workspace").then((m) => ({ default: m.AdminPage })))
+const MyVerificationsPage = lazy(() => import("./pages/MyVerifications"))
+const MyDistrictPage = lazy(() => import("./pages/MyDistrict"))
+const InquiriesPage = lazy(() => import("./pages/Inquiries"))
+const VerificationQueuePage = lazy(() => import("./pages/VerificationQueue"))
 const SettingsPage = lazy(() => import("./pages/Settings"))
 
 // Lazy-load page components — only the active page is loaded
@@ -239,6 +244,18 @@ function AppShell() {
     setTimeout(dispatch, 1200)
   }
 
+  // Context for the AI Assistant: which project the user is looking at
+  // ("project:<id>" page tag) so "why is this risky?" resolves correctly.
+  const [assistantProjectId, setAssistantProjectId] = useState(null)
+  useEffect(() => {
+    const handler = (e) => setAssistantProjectId(e.detail?.projectId || null)
+    window.addEventListener("open-project", handler)
+    return () => window.removeEventListener("open-project", handler)
+  }, [])
+  useEffect(() => {
+    if (currentPage !== "Projects") setAssistantProjectId(null)
+  }, [currentPage])
+
   // Page state preservation: track which pages have been visited so we keep them mounted
   const visitedPages = useRef(new Set(["Overview"]))
   // Add current page to visited set synchronously (not in useEffect)
@@ -253,7 +270,7 @@ function AppShell() {
 
     const pages = [
       { key: "Overview", el: <Overview darkMode={darkMode} onDrillDown={handleDrillDown} fy={selectedFY} /> },
-      { key: "Projects", el: <Projects projectSearchQuery={projectSearchQuery} onClearProjectSearch={() => setProjectSearchQuery("")} drillDownParams={drillDownParams} onClearDrillDown={() => setDrillDownParams(null)} fy={selectedFY} /> },
+      { key: "Projects", el: <Projects projectSearchQuery={projectSearchQuery} onClearProjectSearch={() => setProjectSearchQuery("")} drillDownParams={drillDownParams} onClearDrillDown={() => setDrillDownParams(null)} fy={selectedFY} onNavigate={handleNavigate} /> },
       { key: "Risk Center", el: <RiskCenter drillDownParams={drillDownParams} onClearDrillDown={() => setDrillDownParams(null)} fy={selectedFY} /> },
       { key: "AI Audit Center", el: <AuditCenter onOpenProject={openProjectFromWorkspace} fy={selectedFY} /> },
       { key: "Vendor Network", el: <VendorNetwork /> },
@@ -268,6 +285,10 @@ function AppShell() {
       { key: "Saved Projects", el: <SavedProjectsPage onOpenProject={openProjectFromWorkspace} /> },
       { key: "My Investigations", el: <MyInvestigationsPage onOpenProject={openProjectFromWorkspace} /> },
       { key: "My Audit Cases", el: <MyAuditCasesPage onOpenProject={openProjectFromWorkspace} /> },
+      { key: "My Verifications", el: <MyVerificationsPage onOpenProject={openProjectFromWorkspace} /> },
+      { key: "My District", el: <MyDistrictPage onOpenProject={openProjectFromWorkspace} /> },
+      { key: "Inquiries", el: <InquiriesPage onOpenProject={openProjectFromWorkspace} /> },
+      { key: "Evidence Queue", el: <VerificationQueuePage onOpenProject={openProjectFromWorkspace} /> },
       { key: "Administration", el: <AdminPage /> },
     ]
     return (
@@ -342,6 +363,13 @@ function AppShell() {
       >
         {renderPage()}
       </main>
+
+      <AssistantWidget
+        currentPage={currentPage}
+        contextProjectId={assistantProjectId}
+        onNavigate={handleNavigate}
+        onOpenProject={openProjectFromWorkspace}
+      />
     </div>
   )
 }

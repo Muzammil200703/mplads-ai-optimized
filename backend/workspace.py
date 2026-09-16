@@ -48,15 +48,16 @@ class SignupRequest(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
-    # Role is self-service capped at analyst; auditor/admin are provisioned by
-    # an admin. 'public' is the unauthenticated tier and not a signup choice.
-    role: str = "analyst"
+    # Role is self-service capped at analyst; field/audit/admin roles are
+    # provisioned by an admin. 'public' is the unauthenticated tier and not a
+    # signup choice.
+    role: str = "citizen"
 
     @field_validator("role")
     @classmethod
     def _role_cap(cls, v: str) -> str:
-        if v not in ("analyst", "auditor"):
-            raise ValueError("role must be 'analyst' or 'auditor' — higher roles are provisioned by an admin")
+        if v not in ("citizen", "analyst", "auditor"):
+            raise ValueError("role must be 'citizen', 'analyst' or 'auditor' — field and admin roles are provisioned by an admin")
         return v
 
 
@@ -81,6 +82,26 @@ class UserOut(BaseModel):
     role: str
     is_active: bool
     created_at: str
+    assigned_district: Optional[str] = None
+    assigned_state: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class MeOut(BaseModel):
+    """Signed-in profile + effective server-side capabilities so the UI can
+    render role-aware navigation without ever being the enforcement point."""
+
+    id: int
+    name: str
+    email: str
+    role: str
+    is_active: bool
+    created_at: str
+    assigned_district: Optional[str] = None
+    assigned_state: Optional[str] = None
+    capabilities: list[str] = []
 
     class Config:
         from_attributes = True
@@ -89,12 +110,32 @@ class UserOut(BaseModel):
 class UserAdminUpdate(BaseModel):
     role: Optional[str] = None
     is_active: Optional[bool] = None
+    assigned_district: Optional[str] = None
+    assigned_state: Optional[str] = None
 
     @field_validator("role")
     @classmethod
     def _valid_role(cls, v):
         if v is not None and v not in auth.ROLES:
             raise ValueError(f"role must be one of {auth.ROLES}")
+        return v
+
+
+class UserCreateRequest(BaseModel):
+    """Admin provisioning — any role, with optional district assignment."""
+
+    name: str = Field(min_length=2, max_length=120)
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
+    role: str = "analyst"
+    assigned_district: Optional[str] = None
+    assigned_state: Optional[str] = None
+
+    @field_validator("role")
+    @classmethod
+    def _valid_role(cls, v):
+        if v not in auth.ROLES or v == "public":
+            raise ValueError(f"role must be one of {auth.ROLES[1:]}")
         return v
 
 
@@ -117,8 +158,11 @@ def _issue_token(user: models.User) -> str:
 
 
 def _user_payload(user: models.User, token: str) -> dict:
+    """Login/signup response. Includes effective capabilities so the UI can
+    render role-aware navigation immediately without a follow-up /me call."""
     return {
-        "user": UserOut.model_validate(user).model_dump(),
+        "user": UserOut.model_validate(user).model_dump()
+        | {"capabilities": sorted(auth.user_capabilities(user))},
         "token": token,
         "token_type": "bearer",
     }
@@ -277,10 +321,12 @@ def reset_password(payload: ResetRequest, db: Session = Depends(get_db)):
     return {"message": "Password updated. You can now sign in with the new password."}
 
 
-@router.get("/me", response_model=UserOut)
+@router.get("/me", response_model=MeOut)
 def me(current: models.User = Depends(auth.require_role("public"))):
-    """Profile of the signed-in user."""
-    return current
+    """Profile of the signed-in user incl. effective capabilities."""
+    out = MeOut.model_validate(current).model_dump()
+    out["capabilities"] = sorted(auth.user_capabilities(current))
+    return out
 
 
 # ═══════════════ User management (admin only) ═══════════════
@@ -289,6 +335,31 @@ def me(current: models.User = Depends(auth.require_role("public"))):
 def list_users(db: Session = Depends(get_db)):
     users = db.query(models.User).order_by(models.User.id).all()
     return {"users": [UserOut.model_validate(u).model_dump() for u in users], "total": len(users)}
+
+
+@router.post("/users", status_code=201, dependencies=[Depends(auth.require_role("admin"))])
+def create_user(payload: UserCreateRequest, db: Session = Depends(get_db)):
+    """Admin provisions an account with any role (e.g. Field Verifiers or
+    District Authorities), optionally assigned to a district/state."""
+    email = payload.email.lower().strip()
+    if not _email_ok(email):
+        raise HTTPException(status_code=400, detail="Invalid email address")
+    if db.query(models.User).filter(models.User.email == email).first():
+        raise HTTPException(status_code=409, detail="An account with this email already exists")
+    user = models.User(
+        name=payload.name.strip(),
+        email=email,
+        password_hash=auth.hash_password(payload.password),
+        role=payload.role,
+        is_active=True,
+        created_at=_now_iso(),
+        assigned_district=(payload.assigned_district.strip() if payload.assigned_district else None),
+        assigned_state=(payload.assigned_state.strip() if payload.assigned_state else None),
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return UserOut.model_validate(user).model_dump()
 
 
 @router.patch("/users/{user_id}", dependencies=[Depends(auth.require_role("admin"))])
@@ -302,6 +373,10 @@ def update_user(user_id: int, payload: UserAdminUpdate, db: Session = Depends(ge
         if user.id == admin.id and payload.is_active is False:
             raise HTTPException(status_code=400, detail="You cannot deactivate your own account")
         user.is_active = payload.is_active
+    if payload.assigned_district is not None:
+        user.assigned_district = payload.assigned_district.strip() or None
+    if payload.assigned_state is not None:
+        user.assigned_state = payload.assigned_state.strip() or None
     db.commit()
     return UserOut.model_validate(user).model_dump()
 
@@ -600,3 +675,131 @@ def all_investigations(
         "updated_at": inv.updated_at,
     } for inv, project, user in rows]
     return {"items": items, "total": len(items)}
+
+
+# ═══════════════ District Authority (lateral role) ═══════════════
+
+@router.get("/me/district/projects")
+def district_projects(
+    limit: int = 200,
+    current: models.User = Depends(auth.require_capability("inquiry:respond")),
+    db: Session = Depends(get_db),
+):
+    """Projects for the authority's assigned district. Falls back to the
+    assigned state when no district is set; returns nothing meaningful when
+    neither is assigned (admin must set an assignment first)."""
+    if current.assigned_district:
+        filt = models.Project.district == current.assigned_district
+    elif current.assigned_state:
+        filt = models.Project.state == current.assigned_state
+    else:
+        return {"items": [], "total": 0, "scope": None,
+                "message": "No district/state assignment yet — contact an administrator"}
+    scope = current.assigned_district or current.assigned_state
+    rows = (
+        db.query(models.Project, models.RiskScore)
+        .outerjoin(models.RiskScore, models.RiskScore.project_id == models.Project.id)
+        .filter(filt)
+        .order_by(models.RiskScore.risk_score.desc().nullslast())
+        .limit(max(1, min(limit, 500)))
+        .all()
+    )
+    items = [{
+        "project_id": p.id,
+        "project_name": p.project_name,
+        "state": p.state,
+        "district": p.district,
+        "constituency": p.constituency,
+        "status": p.status,
+        "sanctioned_amount": p.sanctioned_amount,
+        "expenditure": p.expenditure,
+        "completion_percentage": p.completion_percentage,
+        "risk_score": (r.risk_score if r else None),
+        "risk_level": (r.risk_level if r else None),
+    } for p, r in rows]
+    return {"items": items, "total": len(items), "scope": scope}
+
+
+@router.get("/me/inquiries")
+def my_inquiries(
+    current: models.User = Depends(auth.require_capability("inquiry:respond")),
+    db: Session = Depends(get_db),
+):
+    """Open + recently-responded inquiries routed to this authority's district."""
+    q = db.query(models.Inquiry, models.Project)
+    if current.assigned_district:
+        q = q.filter(models.Inquiry.district == current.assigned_district)
+    elif current.assigned_state:
+        q = q.join(models.Project, models.Project.id == models.Inquiry.project_id).filter(
+            models.Project.state == current.assigned_state
+        )
+    else:
+        return {"items": [], "total": 0, "scope": None}
+    rows = q.order_by(models.Inquiry.created_at.desc()).limit(200).all()
+    items = [{
+        "inquiry_id": i.id,
+        "project_id": p.id if p else i.project_id,
+        "project_name": (p.project_name if p else None),
+        "district": i.district,
+        "question": i.question,
+        "status": i.status,
+        "response_text": i.response_text,
+        "responded_by_name": i.responded_by_name,
+        "responded_at": i.responded_at,
+        "issued_by_name": i.issued_by_name,
+        "created_at": i.created_at,
+    } for i, p in rows]
+    return {"items": items, "total": len(items), "scope": current.assigned_district or current.assigned_state}
+
+
+@router.get("/me/district/summary")
+def district_summary(
+    current: models.User = Depends(auth.require_capability("inquiry:respond")),
+    db: Session = Depends(get_db),
+):
+    """Small aggregate dashboard for the assigned district (SQL-side)."""
+    from sqlalchemy import func
+    if not (current.assigned_district or current.assigned_state):
+        return {"scope": None, "projects": 0, "open_inquiries": 0,
+                "high_risk": 0, "total_sanctioned": 0, "total_expenditure": 0}
+    filt = (
+        models.Project.district == current.assigned_district
+        if current.assigned_district
+        else models.Project.state == current.assigned_state
+    )
+    scope = current.assigned_district or current.assigned_state
+    proj = db.query(
+        func.count(models.Project.id).label("n"),
+        func.coalesce(func.sum(models.Project.sanctioned_amount), 0.0).label("sanc"),
+        func.coalesce(func.sum(models.Project.expenditure), 0.0).label("exp"),
+    ).filter(filt).one()
+    filt_risk = filt
+    high_risk = (
+        db.query(func.count(models.Project.id))
+        .join(models.RiskScore, models.RiskScore.project_id == models.Project.id)
+        .filter(filt_risk, models.RiskScore.risk_score >= 75)
+        .scalar()
+    ) or 0
+    if current.assigned_district:
+        open_inq = (
+            db.query(func.count(models.Inquiry.id))
+            .filter(models.Inquiry.district == current.assigned_district,
+                    models.Inquiry.status == "open")
+            .scalar()
+        ) or 0
+    else:
+        open_inq = (
+            db.query(func.count(models.Inquiry.id))
+            .join(models.Project, models.Project.id == models.Inquiry.project_id)
+            .filter(models.Project.state == current.assigned_state,
+                    models.Inquiry.status == "open")
+            .scalar()
+        ) or 0
+    return {
+        "scope": scope,
+        "projects": proj.n,
+        "total_sanctioned": float(proj.sanc or 0),
+        "total_expenditure": float(proj.exp or 0),
+        "high_risk": high_risk,
+        "open_inquiries": open_inq,
+    }

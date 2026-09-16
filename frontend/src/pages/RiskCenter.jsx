@@ -671,7 +671,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
 
         return (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 sm:p-4 backdrop-blur-2xs" onClick={() => setSelectedAnomaly(null)}>
-          <div onClick={(e) => e.stopPropagation()} className="flex max-h-[92vh] sm:max-h-[88vh] w-full sm:max-w-3xl flex-col rounded-t-2xl sm:rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-[#1f2937]">
+          <div onClick={(e) => e.stopPropagation()} className="flex max-h-[92vh] sm:max-h-[88vh] w-full sm:max-w-3xl flex-col rounded-t-2xl sm:rounded-2xl border border-gray-200 bg-white shadow-soft-lg dark:border-gray-700 dark:bg-[#1f2937]">
 
             {/* ── HEADER ── */}
             <div className="flex items-start justify-between border-b border-gray-200 p-5 dark:border-gray-700">

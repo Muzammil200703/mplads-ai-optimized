@@ -563,7 +563,7 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
 
         return (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 sm:p-4 backdrop-blur-2xs" onClick={() => setSelectedProject(null)}>
-          <div onClick={(e) => e.stopPropagation()} className="flex max-h-[90vh] sm:max-h-[85vh] w-full sm:max-w-2xl flex-col rounded-t-2xl sm:rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-[#1f2937]">
+          <div onClick={(e) => e.stopPropagation()} className="flex max-h-[90vh] sm:max-h-[85vh] w-full sm:max-w-2xl flex-col rounded-t-2xl sm:rounded-2xl border border-gray-200 bg-white shadow-soft-lg dark:border-gray-700 dark:bg-[#1f2937]">
             {/* Header */}
             <div className="flex items-start justify-between border-b border-gray-200 p-5 dark:border-gray-700">
               <div className="min-w-0 flex-1">

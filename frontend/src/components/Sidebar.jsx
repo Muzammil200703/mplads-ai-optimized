@@ -96,7 +96,7 @@ function Sidebar({
   isOpen,
   onClose,
 }) {
-  const { user, hasRole } = useAuth()
+  const { user, hasRole, can } = useAuth()
   const mainNav = [
     { name: "Overview", href: "Overview", icon: "▦" },
     { name: "Projects", href: "Projects", icon: "▤" },
@@ -105,20 +105,32 @@ function Sidebar({
     { name: "Reports", href: "Reports", icon: "▣" },
     { name: "Compare Projects", href: "Compare Projects", icon: "⚖" },
   ]
+  // Audit + vendor sections are ANALYST-tier features — hidden from the
+  // lateral field roles (they never inherit the analyst workspace).
+  const analystTier = user ? hasRole("analyst") : true
   // Audit section — grouped separately below a divider (detection +
   // prioritization), same NavRow grid as the main tabs.
-  const auditNav = [
-    { name: "AI Audit Center", href: "AI Audit Center", icon: "🛡️", badge: "NEW" },
-    { name: "Audit Priority", href: "Audit Priority", icon: "🎯" },
-  ]
+  const auditNav = analystTier
+    ? [
+        { name: "AI Audit Center", href: "AI Audit Center", icon: "🛡️", badge: "NEW" },
+        { name: "Audit Priority", href: "Audit Priority", icon: "🎯" },
+      ]
+    : []
   // Vendor section — grouped separately below a divider (same NavRow grid,
   // same icons/labels/badges; only the grouping differs).
-  const vendorNav = [
-    { name: "Vendor Network", href: "Vendor Network", icon: "🕸️", badge: "BETA" },
-    { name: "Vendor Intelligence", href: "Vendor Intelligence", icon: "briefcase", badge: "BETA" },
-  ]
+  const vendorNav = analystTier
+    ? [
+        { name: "Vendor Network", href: "Vendor Network", icon: "🕸️", badge: "BETA" },
+        { name: "Vendor Intelligence", href: "Vendor Intelligence", icon: "briefcase", badge: "BETA" },
+      ]
+    : []
   const bottomNav = [
-    { label: "Ground Verification", href: "Ground Truth Verification", icon: "✅" },
+    ...(can("verification:submit") || !user
+      ? [{ label: "Ground Verification", href: "Ground Truth Verification", icon: "✅" }]
+      : []),
+    ...(can("inquiry:respond")
+      ? [{ label: "My District", href: "My District", icon: "map-pin" }]
+      : []),
     { label: "Settings", href: "Settings", icon: "⚙" },
     { label: "Support", href: null, icon: "headphones" },
     { label: "FAQ", href: "FAQ", icon: "❓" },
@@ -131,6 +143,19 @@ function Sidebar({
   if (user && hasRole("auditor")) {
     workspaceNav.push({ name: "My Audit Cases", href: "My Audit Cases", icon: "briefcase" })
   }
+  if (user && can("inquiry:review")) {
+    workspaceNav.push({ name: "Inquiries", href: "Inquiries", icon: "✉️" })
+  }
+  if (user && can("verification:read_own")) {
+    workspaceNav.push({
+      name: user.role === "citizen" ? "My Evidence" : "My Verifications",
+      href: "My Verifications",
+      icon: "✅",
+    })
+  }
+  if (user && can("verification:review")) {
+    workspaceNav.push({ name: "Evidence Queue", href: "Evidence Queue", icon: "📥" })
+  }
   if (user && hasRole("admin")) {
     workspaceNav.push({ name: "Administration", href: "Administration", icon: "shield" })
   }
@@ -138,7 +163,7 @@ function Sidebar({
   if (isMobile) {
     return (
       <>
-        <aside className={`fixed left-0 top-0 z-[60] flex h-screen min-h-0 w-64 flex-col border-r border-[#c5c6ce] bg-[#f9f9ff] text-[#151c27] dark:border-[#374151] dark:bg-[#111827] dark:text-[#f3f4f6] transition-transform duration-300 ease-in-out px-4 ${isOpen ? "translate-x-0" : "-translate-x-full"}`}>
+        <aside className={`fixed left-0 top-0 z-[60] flex h-screen min-h-0 w-64 flex-col border-r border-[#dcdde4] bg-[#f9f9ff] text-[#151c27] dark:border-[#3f4657] dark:bg-[#111827] dark:text-[#f3f4f6] transition-transform duration-300 ease-in-out px-4 ${isOpen ? "translate-x-0" : "-translate-x-full"}`}>
           <div className="flex min-w-0 flex-none items-center gap-3 pb-4 pt-1">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[#1a2b48] text-lg leading-none text-white dark:bg-[#243b5a]">🏛</div>
             <div className="min-w-0 overflow-hidden">
@@ -149,9 +174,9 @@ function Sidebar({
           <nav className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-2">
             <div className="flex flex-col gap-1">
               {mainNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} badge={item.badge} collapsed={collapsed} />)}
-              <div className="my-2 border-t border-[#c5c6ce] dark:border-[#374151]" role="separator" aria-label="Audit section" />
+              {auditNav.length > 0 && <div className="my-2 border-t border-[#dcdde4] dark:border-[#3f4657]" role="separator" aria-label="Audit section" />}
               {auditNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} badge={item.badge} collapsed={collapsed} />)}
-              <div className="my-2 border-t border-[#c5c6ce] dark:border-[#374151]" role="separator" aria-label="Vendor section" />
+              {vendorNav.length > 0 && <div className="my-2 border-t border-[#dcdde4] dark:border-[#3f4657]" role="separator" aria-label="Vendor section" />}
               {vendorNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} badge={item.badge} collapsed={collapsed} />)}
             {workspaceNav.length > 0 && (
               <>
@@ -159,7 +184,7 @@ function Sidebar({
                 {workspaceNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} collapsed={collapsed} />)}
               </>
             )}
-              <div className="mt-2 flex flex-col gap-1 border-t border-[#c5c6ce] pt-2 dark:border-[#374151]">
+              <div className="mt-2 flex flex-col gap-1 border-t border-[#dcdde4] pt-2 dark:border-[#3f4657]">
                 {bottomNav.map((item) => <NavRow key={item.label} icon={item.icon} label={item.label} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} collapsed={collapsed} />)}
               </div>
             </div>
@@ -170,7 +195,7 @@ function Sidebar({
   }
 
   return (
-    <aside className={`fixed left-0 top-0 z-30 hidden h-screen min-h-0 flex-col border-r border-[#c5c6ce] bg-[#f9f9ff] text-[#151c27] dark:border-[#374151] dark:bg-[#111827] dark:text-[#f3f4f6] transition-all duration-300 ease-in-out lg:flex ${collapsed ? "w-16 px-2" : "w-60 px-4"}`}>
+    <aside className={`fixed left-0 top-0 z-30 hidden h-screen min-h-0 flex-col border-r border-[#dcdde4] bg-[#f9f9ff] text-[#151c27] dark:border-[#3f4657] dark:bg-[#111827] dark:text-[#f3f4f6] transition-all duration-300 ease-in-out lg:flex ${collapsed ? "w-16 px-2" : "w-60 px-4"}`}>
       <div className={`flex min-w-0 flex-none items-center pb-4 pt-1 ${collapsed ? "justify-center gap-0" : "gap-3"}`}>
         <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[#1a2b48] text-lg leading-none text-white dark:bg-[#243b5a]">🏛</div>
         <div className={`overflow-hidden transition-all duration-300 ${collapsed ? "w-0 opacity-0" : "w-auto opacity-100"}`}>
@@ -181,9 +206,9 @@ function Sidebar({
       <nav className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-2">
         <div className="flex flex-col gap-1">
           {mainNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} badge={item.badge} collapsed={collapsed} />)}
-          <div className="my-2 border-t border-[#c5c6ce] dark:border-[#374151]" role="separator" aria-label="Audit section" />
+          <div className="my-2 border-t border-[#dcdde4] dark:border-[#3f4657]" role="separator" aria-label="Audit section" />
           {auditNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} badge={item.badge} collapsed={collapsed} />)}
-          <div className="my-2 border-t border-[#c5c6ce] dark:border-[#374151]" role="separator" aria-label="Vendor section" />
+          {auditNav.length > 0 && <div className="my-2 border-t border-[#dcdde4] dark:border-[#3f4657]" role="separator" aria-label="Vendor section" />}
           {vendorNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} badge={item.badge} collapsed={collapsed} />)}
           {workspaceNav.length > 0 && (
             <>
@@ -191,7 +216,7 @@ function Sidebar({
               {workspaceNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} collapsed={collapsed} />)}
             </>
           )}
-          <div className="mt-2 flex flex-col gap-1 border-t border-[#c5c6ce] pt-2 dark:border-[#374151]">
+          <div className="mt-2 flex flex-col gap-1 border-t border-[#dcdde4] pt-2 dark:border-[#3f4657]">
             {bottomNav.map((item) => <NavRow key={item.label} icon={item.icon} label={item.label} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} collapsed={collapsed} />)}
           </div>
         </div>

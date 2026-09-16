@@ -2,9 +2,49 @@
 
 @theme {
   --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
+
+  /* ═══ Rounded design language (Apple/iOS-inspired soft surfaces) ═══
+     Overrides Tailwind v4's default radius tokens so the ENTIRE app picks
+     up the large smooth radii without touching a single component class:
+       rounded-sm/md → 10/14px  (small controls, chips, badges)
+       rounded-lg    → 20px     (cards, buttons, inputs)
+       rounded-xl    → 24px     (major cards, panels, table cards)
+       rounded-2xl   → 28px     (floating panels: dropdowns, assistant, modals)
+       rounded-3xl   → 32px     (hero surfaces) */
+  --radius-sm: 0.625rem;   /* 10px */
+  --radius-md: 0.875rem;   /* 14px */
+  --radius-lg: 1.25rem;    /* 20px */
+  --radius-xl: 1.5rem;     /* 24px */
+  --radius-2xl: 1.75rem;   /* 28px */
+  --radius-3xl: 2rem;      /* 32px */
+
+  /* Soft diffuse shadows for floating elements — large blur, low opacity,
+     slight vertical offset (iOS浮层 feel) instead of sharp dark shadows. */
+  --shadow-soft: 0 8px 30px rgba(3, 22, 50, 0.10), 0 2px 8px rgba(3, 22, 50, 0.05);
+  --shadow-soft-lg: 0 16px 50px rgba(3, 22, 50, 0.16), 0 4px 14px rgba(3, 22, 50, 0.07);
+  --shadow-soft-sm: 0 2px 10px rgba(3, 22, 50, 0.07);
 }
 
 @custom-variant dark (&:where(.dark, .dark *));
+
+/* Dark-mode variant of the soft shadows (deeper black, same diffuse shape) */
+.dark {
+  --shadow-soft: 0 8px 30px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.3);
+  --shadow-soft-lg: 0 16px 50px rgba(0, 0, 0, 0.55), 0 4px 14px rgba(0, 0, 0, 0.35);
+  --shadow-soft-sm: 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+
+/* Utility hooks so components can opt into the soft elevation with one class
+   (shadow-soft / shadow-soft-lg / shadow-soft-sm). */
+@utility shadow-soft {
+  box-shadow: var(--shadow-soft);
+}
+@utility shadow-soft-lg {
+  box-shadow: var(--shadow-soft-lg);
+}
+@utility shadow-soft-sm {
+  box-shadow: var(--shadow-soft-sm);
+}
 
 /* Apply Inter globally */
 body {

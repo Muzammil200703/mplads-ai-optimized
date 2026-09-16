@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { getAuditQueue } from "../services/api"
 import { TableRowsSkeleton } from "../components/Skeletons"
-import ForensicsPanel from "../components/ForensicsPanel"
+import InspectionModal from "../components/InspectionModal"
 import { formatMoney } from "../utils/format"
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -47,36 +47,8 @@ function FlagPill({ label }) {
 
 /* local import-free FlagPill used by the table; ForensicsPanel has its own shared copy */
 
-/* ──────────── Inspection modal ──────────── */
+/* ──────────── Inspection modal — shared component (components/InspectionModal.jsx) ──────────── */
 
-function InspectionModal({ projectId, onClose, onOpenProject }) {
-  return (
-    <ModalShell onClose={onClose} title="AI Inspection & Forensic Summary">
-      <div className="p-5">
-        <ForensicsPanel projectId={projectId} onOpenProject={onOpenProject} />
-      </div>
-    </ModalShell>
-  )
-}
-
-function ModalShell({ title, onClose, children }) {
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose() }
-    window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
-  }, [onClose])
-  return (
-    <div className="fixed inset-0 z-[75] flex items-start justify-center overflow-y-auto bg-black/50 p-3 sm:p-6" onClick={onClose} role="dialog" aria-modal="true" aria-label={title}>
-      <div className="w-full max-w-2xl rounded-2xl bg-white shadow-2xl dark:bg-gray-900" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between border-b border-gray-200 px-5 py-3 dark:border-gray-700">
-          <h3 className="text-sm font-bold uppercase tracking-wide text-gray-700 dark:text-gray-200">{title}</h3>
-          <button onClick={onClose} aria-label="Close" className="rounded-lg p-1.5 text-xl leading-none text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800">✕</button>
-        </div>
-        {children}
-      </div>
-    </div>
-  )
-}
 
 /* ──────────── Main page ──────────── */
 

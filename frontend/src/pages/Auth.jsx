@@ -11,7 +11,7 @@ import { forgotPassword, resetPassword } from "../services/api"
 function AuthShell({ title, subtitle, children, footer }) {
   return (
     <div className="flex min-h-full items-center justify-center px-4 py-10">
-      <div className="w-full max-w-md rounded-xl border border-[#c5c6ce] bg-white p-6 shadow-sm dark:border-[#374151] dark:bg-[#111827]">
+      <div className="w-full max-w-md rounded-xl border border-[#dcdde4] bg-white p-6 shadow-sm dark:border-[#3f4657] dark:bg-[#111827]">
         <div className="mb-5 text-center">
           <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-[#1a2b48] text-xl text-white dark:bg-[#243b5a]">
             🏛
@@ -20,14 +20,14 @@ function AuthShell({ title, subtitle, children, footer }) {
           <p className="mt-1 text-sm text-[#44474d] dark:text-[#9ca3af]">{subtitle}</p>
         </div>
         {children}
-        {footer && <div className="mt-5 border-t border-[#c5c6ce] pt-4 text-center text-sm dark:border-[#374151]">{footer}</div>}
+        {footer && <div className="mt-5 border-t border-[#dcdde4] pt-4 text-center text-sm dark:border-[#3f4657]">{footer}</div>}
       </div>
     </div>
   )
 }
 
 const inputClass =
-  "mt-1 w-full rounded-lg border border-[#c5c6ce] bg-white px-3 py-2.5 text-[0.9375rem] text-[#151c27] outline-none transition focus:border-[#031632] focus:ring-2 focus:ring-[#031632]/10 dark:border-[#374151] dark:bg-[#1f2937] dark:text-[#f3f4f6]"
+  "mt-1 w-full rounded-lg border border-[#dcdde4] bg-white px-3 py-2.5 text-[0.9375rem] text-[#151c27] outline-none transition focus:border-[#031632] focus:ring-2 focus:ring-[#031632]/10 dark:border-[#3f4657] dark:bg-[#1f2937] dark:text-[#f3f4f6]"
 
 export function LoginView({ onSwitch }) {
   const { login } = useAuth()
@@ -169,8 +169,8 @@ export function SignupView({ onSwitch }) {
 
   return (
     <AuthShell
-      title="Create auditor account"
-      subtitle="Save projects, run investigations and manage audit cases."
+      title="Create your account"
+      subtitle="Submit citizen evidence, save projects, run investigations and manage audit cases."
       footer={<p>New users receive the selected role; higher roles are granted by an administrator.</p>}
     >
       <form onSubmit={submit} className="space-y-4">
@@ -185,6 +185,7 @@ export function SignupView({ onSwitch }) {
         <div>
           <label className="text-sm font-semibold text-[#44474d] dark:text-[#9ca3af]">Role</label>
           <select value={form.role} onChange={(e) => setForm((f) => ({ ...f, role: e.target.value }))} className={inputClass}>
+            <option value="citizen">Citizen — submit ground evidence for projects</option>
             <option value="analyst">Analyst — save projects, create investigations</option>
             <option value="auditor">Auditor — also manage audit cases</option>
           </select>

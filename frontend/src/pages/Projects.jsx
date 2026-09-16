@@ -6,9 +6,12 @@ import {
   getConstituencies,
   getProjectDetail,
 } from "../services/api"
+import { useAuth } from "../context/AuthContext"
 // Heavy drawer (project detail + full Audit Intelligence suite) is code-split:
 // it only loads when a user actually opens a project.
 const ProjectDetail = lazy(() => import("../components/ProjectDetail"))
+// Project-selection interface (AI Inspection & Forensic Summary modal).
+const InspectionModal = lazy(() => import("../components/InspectionModal"))
 import { formatMoney, formatNumber } from "../utils/format"
 import { TableRowsSkeleton, MobileCardsSkeleton } from "../components/Skeletons"
 
@@ -63,7 +66,7 @@ function getStaleProgressFlag(project) {
   return null
 }
 
-const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSearch, drillDownParams, onClearDrillDown, fy }) {
+const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSearch, drillDownParams, onClearDrillDown, fy, onNavigate }) {
   const [projects, setProjects] = useState([])
   const [totalCount, setTotalCount] = useState(0)
   const [states, setStates] = useState([])
@@ -80,6 +83,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
   const [sortDir, setSortDir] = useState("desc")
   const [currentPage, setCurrentPage] = useState(1)
   const [selectedProjectId, setSelectedProjectId] = useState(null)
+  const [inspectionProjectId, setInspectionProjectId] = useState(null)
   const [compareIds, setCompareIds] = useState([])
   const [showComparison, setShowComparison] = useState(false)
   const [projectSearchApplied, setProjectSearchApplied] = useState(false)
@@ -208,7 +212,11 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
   }, [fetchProjectsData])
 
   const handleOpenDetail = (proj) => {
-    setSelectedProjectId(proj.id)
+    // Project-selection interface: opens the shared AI Inspection &
+    // Forensic Summary modal over the still-mounted Projects list, so
+    // search/filter/pagination state is intact on close.
+    setInspectionProjectId(proj.id)
+    window.dispatchEvent(new CustomEvent("open-project", { detail: { projectId: proj.id } }))
   }
 
   const handleToggleCompare = (e, projId) => {
@@ -270,19 +278,13 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
           </div>
         )}
 
-        <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
-          <div>
-            <h2 className="text-2xl font-bold text-[#031632] dark:text-white">
-              Projects Explorer
-            </h2>
-            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-              Live MPLADS projects database with real-time AI risk evaluation.
-            </p>
-          </div>
-
-          <div className="rounded-lg border border-blue-200 bg-[#e7eefe] px-3.5 py-1.5 font-mono text-xs font-bold text-blue-900 shadow-2xs dark:border-blue-800 dark:bg-blue-950/70 dark:text-blue-200">
-            {totalCount.toLocaleString("en-IN")} Total Projects Found
-          </div>
+        <div>
+          <h2 className="text-2xl font-bold text-[#031632] dark:text-white">
+            Projects Explorer
+          </h2>
+          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+            Live MPLADS projects database with real-time AI risk evaluation.
+          </p>
         </div>
 
         <form onSubmit={handleApplySearch} className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-colors dark:border-gray-700/80 dark:bg-[#1f2937]">
@@ -656,10 +658,31 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
         </div>
       </div>
 
-      {/* Project Detail Panel */}
-      {selectedProjectId && (
+      {/* Project Detail Panel — deep-link/peer-comparison target */}
+      {selectedProjectId && !inspectionProjectId && (
         <Suspense fallback={null}>
           <ProjectDetail projectId={selectedProjectId} onClose={() => setSelectedProjectId(null)} />
+        </Suspense>
+      )}
+
+      {/* Project selection interface — AI Inspection & Forensic Summary.
+          Rendered over the still-mounted list; closing restores the exact
+          search/filter/scroll state the user had. */}
+      {inspectionProjectId && (
+        <Suspense fallback={null}>
+          <InspectionModal
+            projectId={inspectionProjectId}
+            onClose={() => setInspectionProjectId(null)}
+            onOpenProject={(target) => {
+              // ForensicsPanel dispatches either a project id (duplicate-photo
+              // match) or a page name (Verification Portal link).
+              if (typeof target === "number" || /^\d+$/.test(String(target))) {
+                setSelectedProjectId(Number(target))
+              } else if (onNavigate) {
+                onNavigate(target)
+              }
+            }}
+          />
         </Suspense>
       )}
 
@@ -692,7 +715,7 @@ function ComparisonModal({ projectIds, onClose, onRemove }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 sm:p-4 backdrop-blur-2xs" onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} className="flex max-h-[90vh] sm:max-h-[85vh] w-full sm:max-w-4xl flex-col rounded-t-2xl sm:rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-[#1f2937]">
+      <div onClick={(e) => e.stopPropagation()} className="flex max-h-[90vh] sm:max-h-[85vh] w-full sm:max-w-4xl flex-col rounded-t-2xl sm:rounded-2xl border border-gray-200 bg-white shadow-soft-lg dark:border-gray-700 dark:bg-[#1f2937]">
         <div className="flex items-start justify-between border-b border-gray-200 p-5 dark:border-gray-700">
           <div>
             <h3 className="text-lg font-bold text-gray-900 dark:text-white">Project Comparison</h3>

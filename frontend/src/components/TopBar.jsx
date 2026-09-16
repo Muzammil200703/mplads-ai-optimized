@@ -162,13 +162,12 @@ function TopBar({
     "Risk Center",
     "Audit Priority",
     "State Intelligence",
-    "Reports",
     "Vendor Intelligence",
   ]
 
   return (
     <header
-      className="fixed left-0 right-0 top-0 z-[70] h-[64px] lg:h-[72px] border-b border-[#c5c6ce] bg-[#f9f9ff] text-[#151c27] dark:border-[#374151] dark:bg-[#111827] dark:text-[#f3f4f6] transition-colors duration-300"
+      className="fixed left-0 right-0 top-0 z-[70] h-[64px] lg:h-[72px] border-b border-[#dcdde4] bg-[#f9f9ff] text-[#151c27] dark:border-[#3f4657] dark:bg-[#111827] dark:text-[#f3f4f6] transition-colors duration-300"
     >
       <div
         className={`
@@ -186,7 +185,7 @@ flex h-full min-w-0 items-center gap-1.5 px-2 sm:gap-3 sm:px-4 lg:gap-4 lg:px-5 
           className="
             flex h-10 w-10 shrink-0 items-center
             justify-center rounded-lg
-            border border-[#c5c6ce]
+            border border-[#dcdde4]
             bg-[#f0f3ff]
             text-[#031632]
             transition-all duration-200
@@ -194,7 +193,7 @@ flex h-full min-w-0 items-center gap-1.5 px-2 sm:gap-3 sm:px-4 lg:gap-4 lg:px-5 
             hover:border-[#031632]
             hover:shadow-sm
             active:scale-95
-            dark:border-[#374151]
+            dark:border-[#3f4657]
             dark:bg-[#1f2937]
             dark:text-[#f3f4f6]
             dark:hover:bg-[#374151]
@@ -241,8 +240,9 @@ flex h-full min-w-0 items-center gap-1.5 px-2 sm:gap-3 sm:px-4 lg:gap-4 lg:px-5 
           })}
         </nav>
 
-        {/* SEARCH + HISTORY DROPDOWN */}
-        <div className="relative min-w-0 flex-[1_1_0%]" ref={historyRef}>
+        {/* SEARCH + HISTORY DROPDOWN — flexes into the space freed by moving
+            Reports out of the top nav (Reports stays available in the sidebar) */}
+        <div className="relative min-w-0 flex-[2_1_0%] max-w-[560px]" ref={historyRef}>
           <span
             className="
               pointer-events-none absolute inset-y-0 left-3
@@ -286,14 +286,14 @@ flex h-full min-w-0 items-center gap-1.5 px-2 sm:gap-3 sm:px-4 lg:gap-4 lg:px-5 
             }}
             className="
               h-10 w-full rounded-lg
-              border border-[#c5c6ce]
+              border border-[#dcdde4]
               bg-white
               pl-9 pr-3
               text-sm text-[#151c27]
               outline-none
               placeholder:text-[#9ca3af]
               focus:border-[#031632] focus:ring-1 focus:ring-[#031632]
-              dark:border-[#374151] dark:bg-[#1f2937] dark:text-[#f3f4f6]
+              dark:border-[#3f4657] dark:bg-[#1f2937] dark:text-[#f3f4f6]
               dark:placeholder:text-[#6b7280]
               dark:focus:border-[#8293b5] dark:focus:ring-[#8293b5]
             "
@@ -307,8 +307,8 @@ flex h-full min-w-0 items-center gap-1.5 px-2 sm:gap-3 sm:px-4 lg:gap-4 lg:px-5 
                 overflow-hidden rounded-xl
                 border border-[#e2e5ec]
                 bg-white
-                shadow-lg
-                dark:border-[#374151] dark:bg-[#1f2937]
+                shadow-soft
+                dark:border-[#3f4657] dark:bg-[#1f2937]
               "
             >
               {historyCleared ? (
@@ -321,7 +321,7 @@ flex h-full min-w-0 items-center gap-1.5 px-2 sm:gap-3 sm:px-4 lg:gap-4 lg:px-5 
                 </div>
               ) : (
                 <>
-                  <div className="flex items-center justify-between border-b border-[#f0f1f3] px-4 py-2 dark:border-[#374151]">
+                  <div className="flex items-center justify-between border-b border-[#f0f1f3] px-4 py-2 dark:border-[#3f4657]">
                     <span className="text-[0.6875rem] font-semibold uppercase tracking-wide text-[#9ca3af] dark:text-[#6b7280]">
                       Recent Searches
                     </span>
@@ -388,11 +388,11 @@ flex h-full min-w-0 items-center gap-1.5 px-2 sm:gap-3 sm:px-4 lg:gap-4 lg:px-5 
             onChange={(e) => onFYChange && onFYChange(e.target.value)}
             className="
               h-10 rounded-lg
-              border border-[#c5c6ce] bg-white
+              border border-[#dcdde4] bg-white
               px-3 text-sm font-medium text-[#031632]
               outline-none
               focus:border-[#031632] focus:ring-1 focus:ring-[#031632]
-              dark:border-[#374151] dark:bg-[#1f2937] dark:text-[#f3f4f6]
+              dark:border-[#3f4657] dark:bg-[#1f2937] dark:text-[#f3f4f6]
               dark:focus:border-[#8293b5] dark:focus:ring-[#8293b5]
             "
           >

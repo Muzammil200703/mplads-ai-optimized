@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
+import { useAuth } from "../context/AuthContext"
 import { getInspectionBundle, recordAuditAction } from "../services/api"
 import { formatMoney } from "../utils/format"
 
@@ -48,11 +49,15 @@ function ScoreDial({ score, severity }) {
 }
 
 export default function ForensicsPanel({ projectId, onOpenProject }) {
+  const { can } = useAuth()
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [actionNote, setActionNote] = useState("")
   const [actionBusy, setActionBusy] = useState(false)
   const [actionDone, setActionDone] = useState(null)
+  // Server-enforced: /ai/audit-action rejects callers without audit:action.
+  // The UI hides the controls for other roles rather than disabling them.
+  const canAct = can("audit:action")
 
   const load = useCallback(() => {
     getInspectionBundle(projectId)
@@ -119,19 +124,66 @@ export default function ForensicsPanel({ projectId, onOpenProject }) {
         <ScoreDial score={risk_index} severity={severity} />
       </div>
 
-      {/* Detailed flags */}
+      {/* Verified facts — straight from the project record (SOURCE DATA) */}
+      <section className="rounded-xl border border-gray-200 p-4 dark:border-gray-700">
+        <div className="flex items-center justify-between gap-2">
+          <h4 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-gray-500">
+            <span aria-hidden>📋</span> Project Details
+          </h4>
+          <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[0.5625rem] font-bold uppercase tracking-wide text-gray-500 dark:bg-gray-800">Source data</span>
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3">
+          <div>
+            <p className="text-[0.5625rem] font-bold uppercase tracking-wide text-gray-400">Project ID</p>
+            <p className="font-mono text-sm font-bold text-gray-800 dark:text-gray-100">#{project.id}</p>
+          </div>
+          <div>
+            <p className="text-[0.5625rem] font-bold uppercase tracking-wide text-gray-400">Category</p>
+            <p className="truncate text-sm text-gray-800 dark:text-gray-100" title={project.project_type || ""}>{project.project_type || "—"}</p>
+          </div>
+          <div>
+            <p className="text-[0.5625rem] font-bold uppercase tracking-wide text-gray-400">Status</p>
+            <p className={`text-sm font-semibold ${project.status === "Completed" ? "text-green-600 dark:text-green-400" : project.status === "Ongoing" ? "text-blue-600 dark:text-blue-400" : "text-amber-600 dark:text-amber-400"}`}>{project.status || "—"}</p>
+          </div>
+          <div>
+            <p className="text-[0.5625rem] font-bold uppercase tracking-wide text-gray-400">Expenditure</p>
+            <p className="text-sm text-gray-800 dark:text-gray-100">{formatMoney(project.expenditure || 0)}</p>
+          </div>
+          <div>
+            <p className="text-[0.5625rem] font-bold uppercase tracking-wide text-gray-400">Physical completion</p>
+            <p className="text-sm text-gray-800 dark:text-gray-100">{project.completion_percentage ?? 0}%</p>
+          </div>
+          <div>
+            <p className="text-[0.5625rem] font-bold uppercase tracking-wide text-gray-400">Constituency</p>
+            <p className="truncate text-sm text-gray-800 dark:text-gray-100" title={project.constituency || ""}>{project.constituency || "—"}</p>
+          </div>
+        </div>
+        <p className="mt-3 border-t border-gray-100 pt-2 text-[0.625rem] text-gray-400 dark:border-gray-800">
+          Values above are recorded MPLADS source data. Flags below are AI-generated indicators that require human verification — they are not findings of fraud.
+        </p>
+      </section>
+
+      {/* Detailed flags — AI/SYSTEM INFERENCE */}
       {flags.length > 0 && (
-        <ul className="space-y-2">
-          {flags.map((f) => (
-            <li key={f.type} className="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800/60">
-              <div className="flex items-center justify-between gap-2">
-                <FlagPill label={f.label} />
-                <span className="font-mono text-[0.6875rem] text-gray-400">{f.type}</span>
-              </div>
-              <p className="mt-1.5 text-sm text-gray-700 dark:text-gray-300">{f.detail}</p>
-            </li>
-          ))}
-        </ul>
+        <div>
+          <div className="flex items-center justify-between gap-2">
+            <h4 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-gray-500">
+              <span aria-hidden>🤖</span> AI-Detected Indicators
+            </h4>
+            <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[0.5625rem] font-bold uppercase tracking-wide text-purple-600 dark:bg-purple-950 dark:text-purple-300">AI / system inference</span>
+          </div>
+          <ul className="mt-2 space-y-2">
+            {flags.map((f) => (
+              <li key={f.type} className="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800/60">
+                <div className="flex items-center justify-between gap-2">
+                  <FlagPill label={f.label} />
+                  <span className="font-mono text-[0.6875rem] text-gray-400">{f.type}</span>
+                </div>
+                <p className="mt-1.5 text-sm text-gray-700 dark:text-gray-300">{f.detail}</p>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {/* Computer Vision Analysis card */}
@@ -224,22 +276,28 @@ export default function ForensicsPanel({ projectId, onOpenProject }) {
         )}
       </section>
 
-      {/* Audit action controls */}
+      {/* Audit action controls — auditor/admin only (server-enforced too) */}
       <section className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/60">
         <h4 className="text-xs font-bold uppercase tracking-wide text-gray-500">Audit Action Controls</h4>
-        <input
-          type="text"
-          value={actionNote}
-          onChange={(e) => setActionNote(e.target.value)}
-          placeholder="Optional note for the audit trail…"
-          className="mt-2 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-200"
-        />
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button disabled={actionBusy} onClick={() => runAction("approve")} className="rounded-lg bg-green-600 px-3.5 py-2 text-sm font-bold text-white transition hover:bg-green-700 disabled:opacity-50">✓ Approve &amp; Clear Flag</button>
-          <button disabled={actionBusy} onClick={() => runAction("inquiry")} className="rounded-lg bg-amber-500 px-3.5 py-2 text-sm font-bold text-white transition hover:bg-amber-600 disabled:opacity-50">✉ Issue Inquiry to District Authority</button>
-          <button disabled={actionBusy} onClick={() => runAction("escalate")} className="rounded-lg bg-red-600 px-3.5 py-2 text-sm font-bold text-white transition hover:bg-red-700 disabled:opacity-50">⬆ Escalate to Auditor General</button>
-        </div>
-        {actionDone && <p className="mt-2 text-sm font-semibold text-blue-600 dark:text-blue-400">{actionDone}</p>}
+        {canAct ? (
+          <>
+            <input
+              type="text"
+              value={actionNote}
+              onChange={(e) => setActionNote(e.target.value)}
+              placeholder={"Optional note — or the inquiry question when issuing an inquiry…"}
+              className="mt-2 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-200"
+            />
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button disabled={actionBusy} onClick={() => runAction("approve")} className="rounded-lg bg-green-600 px-3.5 py-2 text-sm font-bold text-white transition hover:bg-green-700 disabled:opacity-50">✓ Approve &amp; Clear Flag</button>
+              <button disabled={actionBusy} onClick={() => runAction("inquiry")} className="rounded-lg bg-amber-500 px-3.5 py-2 text-sm font-bold text-white transition hover:bg-amber-600 disabled:opacity-50">✉ Issue Inquiry to District Authority</button>
+              <button disabled={actionBusy} onClick={() => runAction("escalate")} className="rounded-lg bg-red-600 px-3.5 py-2 text-sm font-bold text-white transition hover:bg-red-700 disabled:opacity-50">⬆ Escalate to Auditor General</button>
+            </div>
+            {actionDone && <p className="mt-2 text-sm font-semibold text-blue-600 dark:text-blue-400">{actionDone}</p>}
+          </>
+        ) : (
+          <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">Audit dispositions are available to auditors and administrators only.</p>
+        )}
         {actions.length > 0 && (
           <ul className="mt-3 space-y-1 border-t border-gray-200 pt-2 text-xs text-gray-500 dark:border-gray-700">
             {actions.slice(0, 4).map((a) => (

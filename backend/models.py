@@ -3,7 +3,8 @@ from database import Base
 
 
 class User(Base):
-    """Registered portal user (auditor/analyst/admin)."""
+    """Registered portal user (field verifier, district authority, analyst,
+    auditor, admin)."""
 
     __tablename__ = "users"
 
@@ -11,10 +12,15 @@ class User(Base):
     name = Column(String, nullable=False)
     email = Column(String, unique=True, index=True, nullable=False)
     password_hash = Column(String, nullable=False)
-    # 'public' | 'analyst' | 'auditor' | 'admin'
+    # 'public' | 'field_verifier' | 'district_authority' | 'analyst'
+    #   | 'auditor' | 'admin'
     role = Column(String, index=True, nullable=False, default="analyst")
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(String, nullable=False)
+    # Optional territorial assignment (used by district_authority users for
+    # district-scoped views; admins manage these via the admin panel).
+    assigned_district = Column(String, index=True)
+    assigned_state = Column(String, index=True)
 
 
 class PasswordReset(Base):
@@ -342,10 +348,50 @@ class VerificationReport(Base):
     photo_hash_id = Column(Integer, index=True)  # optional link to stored photo
     note = Column(Text)
     created_at = Column(String, nullable=False)
+    # Submitting user's identity (set for signed-in field verifiers; legacy
+    # rows keep reporter_name only).
+    user_id = Column(Integer, index=True)
+    user_role = Column(String)
+    # Set when the report responds to an auditor inquiry.
+    inquiry_id = Column(Integer, index=True)
+    # Citizen-evidence lifecycle. submission_kind: 'field' (verifier) |
+    # 'citizen'. review_status: pending | verified | rejected | escalated.
+    submission_kind = Column(String, index=True, default="field")
+    review_status = Column(String, index=True, default="pending")
+    # Review outcome — verifier identity/note/timestamp when dispositioned.
+    reviewed_by_user_id = Column(Integer, index=True)
+    reviewed_by_name = Column(String)
+    review_note = Column(Text)
+    reviewed_at = Column(String)
+    # Optional routing: verifier assigned to review this submission.
+    assigned_verifier_id = Column(Integer, index=True)
 
     __table_args__ = (
         Index("idx_verification_project", "project_id"),
         Index("idx_verification_status", "status"),
+        Index("idx_verification_review", "review_status"),
+        Index("idx_verification_kind", "submission_kind"),
+    )
+
+
+class EvidenceEvent(Base):
+    """Append-only audit trail for a verification report's lifecycle
+    (submitted → review_verified / review_rejected / escalated → …).
+    One row per status change; never updated or deleted."""
+
+    __tablename__ = "evidence_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    report_id = Column(Integer, index=True, nullable=False)
+    event = Column(String, nullable=False)      # submitted | review_verified | review_rejected | escalated
+    actor_user_id = Column(Integer, index=True)
+    actor_name = Column(String)
+    actor_role = Column(String)
+    note = Column(Text)
+    created_at = Column(String, nullable=False)
+
+    __table_args__ = (
+        Index("idx_evidence_event_report", "report_id"),
     )
 
 
@@ -364,3 +410,32 @@ class AuditAction(Base):
         Index("idx_audit_action_project", "project_id"),
     )
     details = Column(Text)  # JSON string with additional sync details
+
+
+class Inquiry(Base):
+    """Auditor inquiry on a project, routed to the project's district
+    authority. Workflow: auditor issues -> authority responds -> auditor
+    reviews/closes."""
+
+    __tablename__ = "inquiries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, index=True, nullable=False)
+    issued_by_user_id = Column(Integer, index=True)
+    issued_by_name = Column(String)
+    district = Column(String, index=True)  # routing key (project district)
+    question = Column(Text, nullable=False)
+    status = Column(String, index=True, nullable=False, default="open")
+    # open | responded | closed
+    response_text = Column(Text)
+    responded_by_user_id = Column(Integer, index=True)
+    responded_by_name = Column(String)
+    responded_at = Column(String)
+    closed_by_user_id = Column(Integer, index=True)
+    closed_at = Column(String)
+    created_at = Column(String, nullable=False)
+
+    __table_args__ = (
+        Index("idx_inquiry_status", "status"),
+        Index("idx_inquiry_district", "district"),
+    )

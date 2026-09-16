@@ -327,7 +327,7 @@ function ProjectDetail({ projectId, onClose }) {
   if (loading) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-2xs" onClick={onClose}>
-        <div className="rounded-2xl bg-white p-12 text-center shadow-2xl dark:bg-[#1f2937]" onClick={(e) => e.stopPropagation()}>
+        <div className="rounded-2xl bg-white p-12 text-center shadow-soft-lg dark:bg-[#1f2937]" onClick={(e) => e.stopPropagation()}>
           <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent" />
           <p className="mt-3 text-sm font-medium">Loading project details...</p>
         </div>
@@ -338,7 +338,7 @@ function ProjectDetail({ projectId, onClose }) {
   if (!detail) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-2xs" onClick={onClose}>
-        <div className="rounded-2xl bg-white p-8 text-center shadow-2xl dark:bg-[#1f2937]" onClick={(e) => e.stopPropagation()}>
+        <div className="rounded-2xl bg-white p-8 text-center shadow-soft-lg dark:bg-[#1f2937]" onClick={(e) => e.stopPropagation()}>
           <p className="text-sm text-gray-500">Project not found.</p>
           <button onClick={onClose} className="mt-4 rounded-lg bg-[#031632] px-4 py-2 text-xs font-bold text-white">Close</button>
         </div>
@@ -361,7 +361,7 @@ function ProjectDetail({ projectId, onClose }) {
 
   return (
     <div className="fixed inset-0 z-[80] bg-black/50 backdrop-blur-2xs transition-opacity" onClick={onClose}>
-      <div className="absolute right-0 top-0 h-full w-full sm:w-[720px] max-w-[95vw] overflow-y-auto border-l border-gray-200 bg-white p-4 sm:p-6 text-gray-900 shadow-2xl dark:border-gray-700 dark:bg-[#1f2937] dark:text-white" onClick={(e) => e.stopPropagation()}>
+      <div className="absolute right-0 top-0 h-full w-full sm:w-[720px] max-w-[95vw] overflow-y-auto border-l border-gray-200 bg-white p-4 sm:p-6 text-gray-900 shadow-soft-lg dark:border-gray-700 dark:bg-[#1f2937] dark:text-white" onClick={(e) => e.stopPropagation()}>
 
         {/* Header */}
         <div className="flex items-start justify-between">
@@ -894,7 +894,7 @@ function ActivitySection({ activity }) {
                   style={{ height: `${Math.max(4, (m.amount / maxAmt) * 70)}px` }}
                 />
                 <span className="mt-0.5 text-[0.5rem] text-gray-400">{fmtMonth(m.month)}</span>
-                <div className="pointer-events-none absolute bottom-full z-10 mb-1 hidden whitespace-nowrap rounded bg-gray-900 px-2 py-1 text-[0.5625rem] text-white shadow-lg group-hover:block dark:bg-gray-700">
+                <div className="pointer-events-none absolute bottom-full z-10 mb-1 hidden whitespace-nowrap rounded bg-gray-900 px-2 py-1 text-[0.5625rem] text-white shadow-soft group-hover:block dark:bg-gray-700">
                   <div className="font-bold">{fmtMonth(m.month)}</div>
                   <div>{formatMoney(m.amount)}</div>
                   <div>{m.transaction_count} record{m.transaction_count > 1 ? "s" : ""}</div>

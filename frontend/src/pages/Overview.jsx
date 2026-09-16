@@ -236,7 +236,7 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
 
         {/* HIGH RISK WORKS */}
         <div
-          className={`rounded-xl border-2 border-l-4 border-l-red-500 border-t-red-200 border-r-red-200 border-b-red-200 dark:border-l-red-500 dark:border-t-red-900/50 dark:border-r-red-900/50 dark:border-b-red-900/50 p-3 sm:p-4 shadow-sm cursor-pointer transition-all duration-200 hover:shadow-lg hover:-translate-y-0.5 ${cardClasses}`}
+          className={`rounded-xl border-2 border-l-4 border-l-red-500 border-t-red-200 border-r-red-200 border-b-red-200 dark:border-l-red-500 dark:border-t-red-900/50 dark:border-r-red-900/50 dark:border-b-red-900/50 p-3 sm:p-4 shadow-sm cursor-pointer transition-all duration-200 hover:shadow-soft-lg hover:-translate-y-0.5 ${cardClasses}`}
           onClick={() => onDrillDown && onDrillDown("Risk Center", { risk_level: "High" })}
         >
           <div className="flex items-start justify-between gap-3">

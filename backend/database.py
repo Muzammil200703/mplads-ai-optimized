@@ -63,3 +63,237 @@ SessionLocal = sessionmaker(
 )
 
 Base = declarative_base()
+
+
+def run_lightweight_migrations():
+    """Startup column migrations for existing SQLite databases. CREATE TABLE
+    IF NOT EXISTS cannot add columns to tables that already exist, so new
+    role-system columns are added here when missing. Idempotent and cheap
+    (PRAGMA table_info per table)."""
+    import sqlite3
+
+    plan = {
+        "users": [
+            ("assigned_district", "TEXT"),
+            ("assigned_state", "TEXT"),
+        ],
+        "verification_reports": [
+            ("user_id", "INTEGER"),
+            ("user_role", "TEXT"),
+            ("inquiry_id", "INTEGER"),
+            ("submission_kind", "TEXT DEFAULT 'field'"),
+            ("review_status", "TEXT DEFAULT 'pending'"),
+            ("reviewed_by_user_id", "INTEGER"),
+            ("reviewed_by_name", "TEXT"),
+            ("review_note", "TEXT"),
+            ("reviewed_at", "TEXT"),
+            ("assigned_verifier_id", "INTEGER"),
+        ],
+    }
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.cursor()
+        for table, columns in plan.items():
+            try:
+                cur.execute(f"PRAGMA table_info({table})")
+                existing = {row[1] for row in cur.fetchall()}
+            except sqlite3.Error:
+                continue  # table doesn't exist yet — create_all handles it
+            for col, ddl in columns:
+                if col not in existing:
+                    try:
+                        cur.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+                    except sqlite3.Error:
+                        pass
+        conn.commit()
+    except sqlite3.Error:
+        pass
+    finally:
+        conn.close()
+
+
+def repair_expenditure_stamps():
+    """One-time data-integrity repair for a historical ingestion bug.
+
+    Some historical (no longer in-repo) backfill stamped *aggregate*
+    expenditure totals onto individual project rows — e.g. every
+    "Lighting of public spaces" project in HARDOI received the ₹7.76 Cr
+    SUM of all 31 expenditure transactions for that (description,
+    constituency) group. Because projects.expenditure feeds the risk
+    rules (overspend, disbursement-with-zero-progress), those rows also
+    carry fabricated HIGH risk scores.
+
+    A stamp is provable when a project's expenditure exactly equals the
+    SUM of expenditure_amount over the conservative match key used by
+    timeline/activity (normalized work description + constituency +
+    state) — a per-project figure cannot coincidentally equal a multi-
+    transaction group total. Groups with several same-named projects
+    each received the same group total, which is exactly the duplicated
+    ₹7.76 Cr signature.
+
+    Repair: zero those project rows' expenditure. The expenditures table
+    (the financial source of truth) is untouched — project-level financial
+    activity remains available via the timeline / expenditure-activity
+    endpoints, which conservatively match work-level records. Risk scores
+    for repaired rows are recomputed afterwards (see main.py startup).
+
+    Not touched:
+      - ids 1, 2, 83624, 83625 — manually created test/demo rows
+        (POST /projects + recorded test_upload.csv sync), whose values
+        were entered directly, not derived from any group aggregate.
+      - The 83,625 genuine project identities: repeated work names are
+        real (the Vonter source lists many separate works with generic
+        descriptions, e.g. 30 identical ₹739,865 lighting works in Sant
+        Kabir Nagar), so no project rows are merged or deleted.
+
+    Idempotent: guarded by a sync_metadata marker row.
+    """
+    import sqlite3
+
+    MARKER = "expenditure_stamp_repair_v1"
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.cursor()
+        try:
+            done = cur.execute(
+                "SELECT 1 FROM sync_metadata WHERE source = ?", (MARKER,)
+            ).fetchone()
+        except sqlite3.Error:
+            done = None  # sync_metadata missing — create_all hasn't run yet
+        if done:
+            return 0
+
+        # Provable group-sum stamps: project expenditure == SUM of all
+        # expenditure transactions sharing its normalized identity key.
+        repaired = cur.execute(
+            """
+            UPDATE projects
+               SET expenditure = 0
+             WHERE expenditure > 0
+               AND id NOT IN (1, 2, 83624, 83625)
+               AND EXISTS (
+                   SELECT 1
+                     FROM expenditures e
+                    WHERE lower(trim(e.work_description))
+                              = lower(trim(projects.project_name))
+                      AND COALESCE(lower(trim(e.constituency)), '')
+                              = COALESCE(lower(trim(projects.constituency)), '')
+                      AND COALESCE(lower(trim(e.state)), '')
+                              = COALESCE(lower(trim(projects.state)), '')
+                   GROUP BY
+                      lower(trim(e.work_description)),
+                      COALESCE(lower(trim(e.constituency)), ''),
+                      COALESCE(lower(trim(e.state)), '')
+                   HAVING ABS(SUM(e.expenditure_amount) - projects.expenditure)
+                              < 0.01
+               )
+            """
+        ).rowcount
+
+        # Record the marker (sync_metadata schema: id, source, status,
+        # records_fetched, records_inserted, records_updated,
+        # records_unchanged, records_failed, source_updated_at, synced_at,
+        # error_message, details).
+        from datetime import datetime, timezone
+        cur.execute(
+            """
+            INSERT INTO sync_metadata
+                (source, status, records_fetched, records_inserted,
+                 records_updated, records_unchanged, records_failed,
+                 source_updated_at, synced_at, error_message, details)
+            VALUES (?, 'success', ?, ?, 0, 0, 0, NULL, ?, NULL, ?)
+            """,
+            (
+                MARKER,
+                repaired,
+                repaired,
+                datetime.now(timezone.utc).isoformat(),
+                f'{{"reason": "aggregate expenditure stamps zeroed", "proven_stamps": {repaired}}}',
+            ),
+        )
+        conn.commit()
+        if repaired:
+            print(
+                f"[data-repair] zeroed {repaired} fabricated expenditure stamps "
+                f"(group aggregates stamped per-project); risk scores will be recomputed"
+            )
+        return repaired
+    except sqlite3.Error:
+        return 0  # never block startup on the repair
+    finally:
+        conn.close()
+
+
+def repair_expenditure_stamp_variants():
+    """Second pass of the expenditure-stamp repair (see
+    repair_expenditure_stamps). Covers rows stamped with variant aggregate
+    formulas the strict group-sum predicate cannot prove: per-MP
+    (mp_name, description) sums, per-IDA sums, and identical-value twin rows
+    within one work group (impossible as genuine per-project figures).
+
+    Bounded to the 27 individually-verified project IDs: each sits on a
+    nominated "Sitting Rajya Sabha"-style work with completion = 0, shares an
+    exact duplicate value with sibling projects of the same work, matches no
+    single expenditure transaction, and the ingestion source (Vonter works
+    dataset, per providers/github_provider.py) contains no expenditure data —
+    so no imported row can carry a legitimate per-project expenditure. The
+    four manual/test rows (1, 2, 83624, 83625) are excluded.
+    """
+    import sqlite3
+
+    MARKER = "expenditure_stamp_repair_v2"
+    VARIANT_IDS = (
+        72420, 76350, 76351, 77154, 77156, 77178, 77179, 77182, 77183,
+        77184, 77215, 77217, 77220, 77221, 77222, 77223, 77224, 77226,
+        77229, 77230, 78247, 78250, 78252, 78253, 78255, 78256, 80649,
+    )
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.cursor()
+        try:
+            done = cur.execute(
+                "SELECT 1 FROM sync_metadata WHERE source = ?", (MARKER,)
+            ).fetchone()
+        except sqlite3.Error:
+            done = None
+        if done:
+            return 0
+
+        placeholders = ",".join("?" * len(VARIANT_IDS))
+        repaired = cur.execute(
+            f"""
+            UPDATE projects
+               SET expenditure = 0
+             WHERE expenditure > 0
+               AND id IN ({placeholders})
+            """,
+            VARIANT_IDS,
+        ).rowcount
+
+        from datetime import datetime, timezone
+        cur.execute(
+            """
+            INSERT INTO sync_metadata
+                (source, status, records_fetched, records_inserted,
+                 records_updated, records_unchanged, records_failed,
+                 source_updated_at, synced_at, error_message, details)
+            VALUES (?, 'success', ?, ?, 0, 0, 0, NULL, ?, NULL, ?)
+            """,
+            (
+                MARKER,
+                repaired,
+                repaired,
+                datetime.now(timezone.utc).isoformat(),
+                f'{{"reason": "variant aggregate stamps zeroed (per-MP/IDA/twin stamps)", "proven_stamps": {repaired}}}',
+            ),
+        )
+        conn.commit()
+        if repaired:
+            print(
+                f"[data-repair] zeroed {repaired} variant-stamped expenditure values"
+            )
+        return repaired
+    except sqlite3.Error:
+        return 0
+    finally:
+        conn.close()

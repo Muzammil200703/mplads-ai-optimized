@@ -22,7 +22,7 @@ export default function Settings({ darkMode, onThemeToggle }) {
   return (
     <SettingsShell>
       {/* THEME */}
-      <section className="rounded-xl border border-[#c5c6ce] bg-white p-4 shadow-sm sm:p-5 dark:border-[#374151] dark:bg-[#111827]">
+      <section className="rounded-xl border border-[#dcdde4] bg-white p-4 shadow-sm sm:p-5 dark:border-[#3f4657] dark:bg-[#111827]">
         <div className="mb-4">
           <h2 className="text-lg font-bold text-[#031632] dark:text-[#f3f4f6]">Theme</h2>
           <p className="mt-0.5 text-sm text-[#44474d] dark:text-[#9ca3af]">
@@ -43,13 +43,13 @@ export default function Settings({ darkMode, onThemeToggle }) {
                 className={`rounded-lg border px-3 py-3 text-left transition ${
                   selected
                     ? "border-[#031632] bg-[#f0f3ff] ring-2 ring-[#031632]/10 dark:border-blue-500 dark:bg-[#1f2937]"
-                    : "border-[#c5c6ce] bg-white hover:border-[#44474d]/50 dark:border-[#374151] dark:bg-[#111827] dark:hover:border-[#9ca3af]/50"
+                    : "border-[#dcdde4] bg-white hover:border-[#44474d]/50 dark:border-[#3f4657] dark:bg-[#111827] dark:hover:border-[#9ca3af]/50"
                 }`}
               >
                 <span className="flex items-center gap-2">
                   <span
                     className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 ${
-                      selected ? "border-[#031632] dark:border-blue-400" : "border-[#c5c6ce] dark:border-[#4b5563]"
+                      selected ? "border-[#031632] dark:border-blue-400" : "border-[#dcdde4] dark:border-[#4b5563]"
                     }`}
                   >
                     {selected && <span className="h-2 w-2 rounded-full bg-[#031632] dark:bg-blue-400" />}

@@ -392,10 +392,10 @@ export async function verifyProjectLookup(projectId) {
   return request(`/ai/verify/project/${projectId}`)
 }
 
-export async function submitVerificationReport({ projectId, status, lat, lon, reporterName, note, file }) {
+export async function submitVerificationReport({ projectId, status, lat, lon, reporterName, note, inquiryId, file }) {
   const form = new FormData()
   if (file) form.append("file", file)
-  const qs = buildQuery({ project_id: projectId, status, lat, lon, reporter_name: reporterName, note })
+  const qs = buildQuery({ project_id: projectId, status, lat, lon, reporter_name: reporterName, note, inquiry_id: inquiryId })
   return request(`/ai/verify/report${qs}`, { method: "POST", body: form })
 }
 
@@ -645,6 +645,71 @@ export async function listUsers() {
 
 export async function updateUser(userId, payload) {
   return request(`/auth/users/${userId}`, { method: "PATCH", body: JSON.stringify(payload) })
+}
+
+export async function createUser(payload) {
+  return request("/auth/users", { method: "POST", body: JSON.stringify(payload) })
+}
+
+// ═══════════════ ROLE PORTALS (field verifier / district authority / inquiries) ═══════════════
+
+export async function getMyVerifications() {
+  return request("/ai/verify/mine")
+}
+
+export async function getDistrictProjects(limit = 200) {
+  return request(`/auth/me/district/projects?limit=${limit}`)
+}
+
+export async function getDistrictSummary() {
+  return request("/auth/me/district/summary")
+}
+
+export async function getMyDistrictInquiries() {
+  return request("/auth/me/inquiries")
+}
+
+export async function getAllInquiries(status) {
+  const q = status ? `?status=${encodeURIComponent(status)}` : ""
+  return request(`/ai/inquiries${q}`)
+}
+
+export async function closeInquiry(inquiryId) {
+  return request(`/ai/inquiries/${inquiryId}/close`, { method: "POST" })
+}
+
+// ═══════════════ MPLADS AI ASSISTANT ═══════════════
+
+export async function askAssistant(question, page) {
+  return request("/assistant/ask", {
+    method: "POST",
+    body: JSON.stringify({ question, page: page || null }),
+  })
+}
+
+export async function getAssistantSuggestions(page) {
+  const qs = page && !page.startsWith("project:") ? `?page=${encodeURIComponent(page)}` : ""
+  return request(`/assistant/suggestions${qs}`)
+}
+
+export async function getAssistantContextHelp(page) {
+  return request(`/assistant/context-help?page=${encodeURIComponent(page)}`)
+}
+
+// ═══════════════ CITIZEN EVIDENCE REVIEW (verifier/auditor) ═══════════════
+
+export async function getEvidenceQueue(reviewStatus = "pending") {
+  return request(`/ai/evidence/queue?review_status=${encodeURIComponent(reviewStatus)}`)
+}
+
+export async function reviewEvidence(reportId, decision, note) {
+  const params = new URLSearchParams({ decision })
+  if (note) params.set("note", note)
+  return request(`/ai/evidence/${reportId}/review?${params.toString()}`, { method: "POST" })
+}
+
+export async function getAllEvidence() {
+  return request("/ai/evidence/all")
 }
 
 // ═══════════════ WORKSPACE API (saved projects / investigations / cases) ═══════════════

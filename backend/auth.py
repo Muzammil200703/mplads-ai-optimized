@@ -3,13 +3,16 @@ Authentication & authorization for the MPLADS auditor portal.
 
 - Passwords: bcrypt via passlib (never stored in plain text)
 - Sessions: signed JWT bearer tokens (24 h validity)
-- Roles: 'public' | 'analyst' | 'auditor' | 'admin'
+- Roles: 'citizen' | 'field_verifier' | 'district_authority' | 'analyst' | 'auditor' | 'admin' (+ 'public' = anonymous)
 
-Role capabilities (enforced by require_role()):
-  public  — read-only project analytics (all existing endpoints stay public)
-  analyst — save projects, create/manage own investigations
-  auditor — everything an analyst can do + save/manage audit cases
-  admin   — everything + user management + system-wide investigation view
+Role capabilities (enforced by require_role() / require_capability()):
+  public            — read-only project analytics (all existing endpoints stay public)
+  field_verifier    — ground-truth verification submissions + own submission history
+  district_authority— view own-district projects, respond to auditor inquiries
+  analyst           — save projects, create/manage own investigations
+  auditor           — everything an analyst can do + audit cases, audit actions,
+                      image forensics, inquiry issuance/review
+  admin             — everything + user/role management + system-wide views
 
 Users can only ever read/write their OWN saved projects, investigations and
 cases; broader access requires an explicit role grant (admin sees all).
@@ -48,9 +51,55 @@ ALGORITHM = "HS256"
 TOKEN_EXPIRE_HOURS = 24
 RESET_TOKEN_EXPIRE_MINUTES = 30
 
-ROLES = ("public", "analyst", "auditor", "admin")
-# Higher rank = broader access. admin(3) passes auditor(2) checks, etc.
-ROLE_RANK = {"public": 0, "analyst": 1, "auditor": 2, "admin": 3}
+ROLES = ("public", "citizen", "field_verifier", "district_authority", "analyst", "auditor", "admin")
+
+# Higher rank = broader analyst-ladder access. admin(4) passes auditor(3)
+# checks, etc. citizen + the two field roles are LATERAL: they rank below
+# analyst so they never inherit the analyst workspace, and receive their
+# specific powers through ROLE_CAPABILITIES instead of rank.
+ROLE_RANK = {
+    "public": 0,
+    "citizen": 1,
+    "field_verifier": 1,
+    "district_authority": 1,
+    "analyst": 2,
+    "auditor": 3,
+    "admin": 4,
+}
+
+# Capability grants — explicit, non-hierarchical permissions checked per
+# endpoint via require_capability(). Admin holds every capability.
+CAP_ALL = {
+    "verification:submit",      # submit ground-truth verification reports
+    "verification:read_own",    # view own submitted verification reports
+    "verification:review",      # review citizen evidence: verify/reject/escalate + queue
+    "inquiry:respond",          # respond to auditor inquiries
+    "inquiry:issue",            # issue inquiries on flagged projects
+    "inquiry:review",           # see all inquiries + close them
+    "audit:action",             # approve/escalate audit flags (disposition)
+    "forensics:image",          # upload images through the forensic pipeline
+    "users:manage",             # manage users, roles, district assignments
+}
+ROLE_CAPABILITIES = {
+    "public": set(),
+    "citizen": {"verification:submit", "verification:read_own"},
+    "field_verifier": {"verification:submit", "verification:read_own", "verification:review"},
+    "district_authority": {"inquiry:respond"},
+    "analyst": set(),
+    "auditor": {
+        "verification:submit", "verification:read_own", "verification:review",
+        "inquiry:issue", "inquiry:review",
+        "audit:action", "forensics:image",
+    },
+    "admin": set(CAP_ALL),
+}
+
+
+def user_capabilities(user: "models.User") -> set:
+    """Effective capability set for a user (empty for anonymous)."""
+    if user is None:
+        return set()
+    return set(ROLE_CAPABILITIES.get(user.role, set()))
 
 # bcrypt 5.x raises on >72-byte secrets; passlib 1.7.4 predates that API.
 # Pinning to the last bcrypt 4.x release restores compatibility.
@@ -124,6 +173,15 @@ def get_current_user(
     return user
 
 
+def has_role_rank(user, minimum_role: str) -> bool:
+    """Non-dependency rank check for use inside service code (e.g. the
+    assistant engine): True when the user's role ranks at or above
+    `minimum_role`."""
+    if user is None:
+        return False
+    return ROLE_RANK.get(user.role, 0) >= ROLE_RANK.get(minimum_role, 99)
+
+
 def require_role(minimum_role: str):
     """
     Dependency factory: 401 when not authenticated, 403 when the account's
@@ -154,6 +212,44 @@ def require_role(minimum_role: str):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"This action requires the '{minimum_role}' role",
+            )
+        return user
+
+    return dependency
+
+
+def require_capability(capability: str):
+    """
+    Dependency factory: 401 when unauthenticated, 403 when the account's
+    role does not hold `capability`. This is the enforcement point for the
+    lateral field roles (verification submissions, inquiry responses) —
+    rank alone cannot express these permissions.
+    """
+
+    def dependency(
+        credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+        db: Session = Depends(get_db),
+    ) -> models.User:
+        if credentials is None or not credentials.credentials:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        user_id = _decode_token(credentials.credentials)
+        if user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Session expired or invalid — please sign in again",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        user = db.query(models.User).filter(models.User.id == user_id).first()
+        if user is None or not user.is_active:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account not found or disabled")
+        if capability not in ROLE_CAPABILITIES.get(user.role, set()):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"This action requires the '{capability}' permission",
             )
         return user
 

@@ -1,27 +1,23 @@
 import { useEffect, useRef, useState } from "react"
-import { useAuth } from "../context/AuthContext"
+import { useAuth, ROLE_LABELS } from "../context/AuthContext"
 
 /* ═══════════════════════════════════════════════════════════
    Profile menu for the TopBar — shows the signed-in user's
    name/email/role and the sign-out action.
    ═══════════════════════════════════════════════════════════ */
 
-const ROLE_LABEL = {
-  public: "Public user",
-  analyst: "Analyst",
-  auditor: "Auditor",
-  admin: "Administrator",
-}
-
 const ROLE_BADGE = {
   public: "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300",
+  citizen: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+  field_verifier: "bg-teal-100 text-teal-700 dark:bg-teal-950 dark:text-teal-300",
+  district_authority: "bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300",
   analyst: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
   auditor: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
   admin: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
 }
 
 export default function ProfileMenu({ onNavigate }) {
-  const { user, logout } = useAuth()
+  const { user, logout, hasRole } = useAuth()
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
 
@@ -64,42 +60,50 @@ export default function ProfileMenu({ onNavigate }) {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-12 z-50 w-72 overflow-hidden rounded-xl border border-[#c5c6ce] bg-white shadow-lg dark:border-[#374151] dark:bg-[#111827]">
-          <div className="border-b border-[#c5c6ce] px-4 py-3 dark:border-[#374151]">
+        <div className="absolute right-0 top-12 z-50 w-72 overflow-hidden rounded-2xl border border-[#dcdde4] bg-white shadow-soft-lg dark:border-[#3f4657] dark:bg-[#111827]">
+          <div className="border-b border-[#dcdde4] px-5 pb-4 pt-5 dark:border-[#3f4657]">
             <p className="truncate text-sm font-bold text-[#031632] dark:text-[#f3f4f6]">{user.name}</p>
-            <p className="truncate text-xs text-[#44474d] dark:text-[#9ca3af]">{user.email}</p>
+            <p className="mt-0.5 truncate text-xs text-[#44474d] dark:text-[#9ca3af]">{user.email}</p>
             <span className={`mt-2 inline-block rounded px-2 py-0.5 text-[0.6875rem] font-bold ${ROLE_BADGE[user.role] || ROLE_BADGE.public}`}>
-              {ROLE_LABEL[user.role] || user.role}
+              {ROLE_LABELS[user.role] || user.role}
+              {(user.assigned_district || user.assigned_state) && (
+                <span className="ml-1 font-semibold opacity-80">· 📍 {user.assigned_district || user.assigned_state}</span>
+              )}
             </span>
           </div>
-          <div className="px-4 py-2 text-xs text-[#44474d] dark:text-[#9ca3af]">
+          <div className="px-4 py-3 text-xs text-[#44474d] dark:text-[#9ca3af]">
             <p className="font-semibold uppercase tracking-wider">Workspace</p>
-            <div className="mt-1 space-y-1">
+            <div className="mt-1.5 space-y-1">
               {[
                 { label: "Saved Projects", page: "Saved Projects", minRole: "analyst" },
                 { label: "My Investigations", page: "My Investigations", minRole: "analyst" },
                 { label: "My Audit Cases", page: "My Audit Cases", minRole: "auditor" },
-              ].map((it) => {
-                const allowed = it.minRole === "analyst" ? true : it.minRole === "auditor" ? ["auditor", "admin"].includes(user.role) : false
-                return (
+                { label: "My Verifications", page: "My Verifications", cap: "verification:read_own" },
+                { label: "My District", page: "My District", cap: "inquiry:respond" },
+                { label: "Inquiries", page: "Inquiries", cap: "inquiry:review" },
+              ]
+                .filter((it) =>
+                  it.cap
+                    ? Array.isArray(user.capabilities) && user.capabilities.includes(it.cap)
+                    : it.minRole === "analyst"
+                      ? hasRole("analyst")
+                      : hasRole("auditor")
+                )
+                .map((it) => (
                   <button
                     key={it.page}
-                    disabled={!allowed}
                     onClick={() => { setOpen(false); onNavigate && onNavigate(it.page) }}
-                    className={`block w-full rounded px-2 py-1.5 text-left text-[0.8125rem] transition ${
-                      allowed ? "text-[#151c27] hover:bg-[#f0f3ff] dark:text-[#f3f4f6] dark:hover:bg-[#1f2937]" : "cursor-not-allowed text-[#44474d]/50 dark:text-[#9ca3af]/50"
-                    }`}
+                    className="block w-full rounded-lg px-2.5 py-2 text-left text-[0.8125rem] text-[#151c27] transition hover:bg-[#f0f3ff] dark:text-[#f3f4f6] dark:hover:bg-[#1f2937]"
                   >
-                    {it.label}{!allowed && " (auditor)"}
+                    {it.label}
                   </button>
-                )
-              })}
+                ))}
             </div>
           </div>
-          <div className="border-t border-[#c5c6ce] dark:border-[#374151]">
+          <div className="border-t border-[#dcdde4] dark:border-[#3f4657]">
             <button
               onClick={() => { setOpen(false); logout() }}
-              className="block w-full px-4 py-3 text-left text-sm font-semibold text-red-600 transition hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30"
+              className="block w-full px-5 py-4 text-left text-sm font-semibold text-red-600 transition hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30"
             >
               Sign out
             </button>
