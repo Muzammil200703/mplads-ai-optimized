@@ -5,6 +5,7 @@ import {
   getDashboardStates,
   getAnomaliesSummary,
   getEarlyWarning,
+  healthCheck,
 } from "../services/api"
 import { formatCrore, formatNumber } from "../utils/format"
 
@@ -18,6 +19,7 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const [backendConnected, setBackendConnected] = useState(false)
+  const [dataReady, setDataReady] = useState(true)
 
   useEffect(() => {
     async function loadData() {
@@ -26,7 +28,8 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
         setError("")
 
         const fyParams = fy ? { fy } : {}
-        const [ovRes, narrRes, statesRes, anomRes, ewRes] = await Promise.allSettled([
+        const [healthRes, ovRes, narrRes, statesRes, anomRes, ewRes] = await Promise.allSettled([
+          healthCheck(),
           getDashboardOverview(fyParams),
           getAINarrativeInsights(fyParams),
           getDashboardStates(fyParams),
@@ -34,9 +37,22 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
           getEarlyWarning(fyParams),
         ])
 
-        if (ovRes.status === "fulfilled") {
+        const projectCount = healthRes.status === "fulfilled"
+          ? Number(healthRes.value?.total_projects || 0)
+          : 0
+        const hasData = healthRes.status === "fulfilled" && healthRes.value?.data_ready !== false && projectCount > 0
+
+        if (hasData && ovRes.status === "fulfilled") {
           setOverview(ovRes.value)
           setBackendConnected(true)
+          setDataReady(true)
+        } else if (healthRes.status === "fulfilled" && !hasData) {
+          setDataReady(false)
+          setBackendConnected(false)
+          setOverview(null)
+          setError(
+            "Audit data is not loaded in this deployment. Results are intentionally withheld so an empty database is never mistaken for a clean audit outcome."
+          )
         }
 
         if (narrRes.status === "fulfilled" && narrRes.value?.insights) {
@@ -55,7 +71,8 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
           setEarlyWarning(ewRes.value)
         }
 
-        if (ovRes.status === "rejected" && statesRes.status === "rejected") {
+        if (healthRes.status === "rejected" || (ovRes.status === "rejected" && statesRes.status === "rejected")) {
+          setDataReady(false)
           setBackendConnected(false)
           setError(
             "Backend is unreachable right now. On the free hosting tier the server sleeps when idle and takes about a minute to wake — please retry in a moment. If this keeps happening, the backend URL may be down or misconfigured."
@@ -103,6 +120,25 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
           <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent" />
           <p className={`mt-3 font-medium ${mutedText}`}>Loading live MPLADS intelligence from backend...</p>
         </div>
+      </div>
+    )
+  }
+
+  if (!dataReady) {
+    return (
+      <div className={`min-h-full p-4 sm:p-6 ${pageClasses}`}>
+        <h1 className="text-xl sm:text-2xl md:text-3xl font-bold">Executive Overview</h1>
+        <section className={`mt-6 max-w-3xl rounded-xl border p-6 sm:p-8 ${cardClasses}`}>
+          <p className="text-2xl" aria-hidden>⚠️</p>
+          <h2 className="mt-3 text-lg font-bold">Audit dataset unavailable</h2>
+          <p className={`mt-2 text-sm leading-6 ${mutedText}`}>
+            No project-level audit results are displayed because this deployment has not loaded its MPLADS dataset.
+            This safeguard prevents an empty database from being presented as “zero risk.”
+          </p>
+          <p className={`mt-3 text-xs leading-5 ${mutedText}`}>
+            For deployment: ensure the Git-LFS dataset is fetched before the API starts, then reload this page.
+          </p>
+        </section>
       </div>
     )
   }

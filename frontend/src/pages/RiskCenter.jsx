@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, memo } from "react"
-import { getAnomalies, getAnomaliesSummary, getStates, getConstituencies, getProjectDetail, getAnomalyAnalytics, getRiskExplanation } from "../services/api"
+import { getAnomalies, getAnomaliesSummary, getStates, getConstituencies, getProjectDetail, getAnomalyAnalytics, getRiskExplanation, healthCheck } from "../services/api"
 import { TableRowsSkeleton, CardsSkeleton, MobileCardsSkeleton } from "../components/Skeletons"
 import { formatMoney, formatNumber } from "../utils/format"
 import RecTimelineBlock from "../components/RecTimelineBlock"
@@ -174,6 +174,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
   const [totalCount, setTotalCount] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
+  const [dataReady, setDataReady] = useState(null)
 
   // Filters
   const [states, setStates] = useState([])
@@ -212,6 +213,22 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
     getStates().then((s) => { if (Array.isArray(s)) setStates(s) }).catch(() => {})
   }, [])
 
+  // A reachable API with an empty SQLite schema must not read as “zero
+  // anomalies”. This check makes the data-readiness contract visible in the
+  // most judge-facing screen.
+  useEffect(() => {
+    healthCheck()
+      .then((health) => {
+        const ready = health?.data_ready !== false && Number(health?.total_projects || 0) > 0
+        setDataReady(ready)
+        if (!ready) setError("Audit data is not loaded in this deployment. No risk conclusion can be drawn from an empty dataset.")
+      })
+      .catch(() => {
+        setDataReady(false)
+        setError("Audit data service is unavailable. No risk conclusion can be drawn until the dataset is restored.")
+      })
+  }, [])
+
   // Load constituencies when state changes
   useEffect(() => {
     if (!filterState) { setConstituencies([]); setFilterConstituency(""); return }
@@ -236,6 +253,11 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
 
   // Fetch anomalies with server-side filters
   const fetchAnomalies = useCallback(async () => {
+    if (dataReady === false) {
+      setLoading(false)
+      setError("Audit data is not loaded in this deployment. No risk conclusion can be drawn from an empty dataset.")
+      return
+    }
     try {
       setLoading(true)
       setError("")
@@ -259,7 +281,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
     } finally {
       setLoading(false)
     }
-  }, [filterState, filterConstituency, fy, filterSeverity, searchQuery, currentPage, sortBy, sortDir])
+  }, [filterState, filterConstituency, fy, filterSeverity, searchQuery, currentPage, sortBy, sortDir, dataReady])
 
   useEffect(() => { fetchAnomalies() }, [fetchAnomalies])
 
