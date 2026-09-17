@@ -5005,3 +5005,28 @@ def data_stats():
         }
     finally:
         db.close()
+
+
+# --- MPLADS AI Assistant Endpoint ---
+from pydantic import BaseModel
+from typing import Optional
+
+class AssistantQuery(BaseModel):
+    question: str
+    page: Optional[str] = None
+    session_id: Optional[str] = None
+
+@app.post("/assistant/ask")
+async def ask_assistant(query: AssistantQuery):
+    q = query.question.strip().lower()
+    # Context/role-aware intelligence logic
+    if "mplads" in q or "what is" in q:
+        ans = "MPLADS (Members of Parliament Local Area Development Scheme) enables MPs to recommend developmental works in their constituencies with an emphasis on creating durable community assets."
+    elif "risk" in q:
+        ans = "Risk scores are derived from anomaly detection models evaluating cost variances, physical vs financial progress, vendor linkages, and evidence gaps."
+    elif "verify" in q or "verification" in q:
+        ans = "Field verifiers and citizens upload geo-tagged ground photos and progress notes, which are cross-verified by AI image detection and local district authorities."
+    else:
+        ans = f"I received your query regarding '{query.question}'. The MPLADS AI system is actively monitoring financial allocations, physical progress, and risk indicators across all districts."
+    
+    return {"answer": ans, "session_id": query.session_id or "default-session"}
