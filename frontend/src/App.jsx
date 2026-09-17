@@ -1,3 +1,5 @@
+const Landing = lazy(() => import("./pages/Landing"))
+const Landing = lazy(() => import("./pages/Landing"))
 import { useState, useEffect, lazy, Suspense, memo, useRef } from "react"
 import Sidebar from "./components/Sidebar"
 import AssistantWidget from "./components/AssistantWidget"
@@ -164,8 +166,7 @@ function AppShell() {
   ScrollManager()
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [darkMode, setDarkMode] = useState(false)
-  const [currentPage, setCurrentPage] = useState(
-    () => (typeof window !== "undefined" && window.location.hash === "#signin" ? "Sign in" : "Overview")
+  const [currentPage, setCurrentPage] = useState(() => (typeof window !== "undefined" && window.location.hash === "#signin" ? "Sign in" : "Landing"))
   )
   // Global search — independent from project search
   const [globalSearchQuery, setGlobalSearchQuery] = useState("")
@@ -269,6 +270,7 @@ function AppShell() {
     if (currentPage === "Sign up") return <SignupView onSwitch={() => setCurrentPage("Sign in")} />
 
     const pages = [
+      { key: "Landing", el: <Landing onLaunch={() => setCurrentPage("Overview")} /> },
       { key: "Overview", el: <Overview darkMode={darkMode} onDrillDown={handleDrillDown} fy={selectedFY} /> },
       { key: "Projects", el: <Projects projectSearchQuery={projectSearchQuery} onClearProjectSearch={() => setProjectSearchQuery("")} drillDownParams={drillDownParams} onClearDrillDown={() => setDrillDownParams(null)} fy={selectedFY} onNavigate={handleNavigate} /> },
       { key: "Risk Center", el: <RiskCenter drillDownParams={drillDownParams} onClearDrillDown={() => setDrillDownParams(null)} fy={selectedFY} /> },
@@ -387,3 +389,4 @@ function App() {
 }
 
 export default App
+
