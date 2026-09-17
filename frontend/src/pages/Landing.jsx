@@ -1,57 +1,37 @@
-import React from "react";
-import { ShieldAlert, BrainCircuit, Search, CheckCircle2, ArrowRight } from "lucide-react";
+import React from 'react';
 
 export default function Landing({ onLaunch }) {
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans">
-      <header className="border-b border-slate-800 bg-slate-950/80 backdrop-blur sticky top-0 z-50 px-8 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-indigo-600 rounded-lg text-white">
-            <ShieldAlert className="w-6 h-6" />
-          </div>
-          <span className="text-xl font-bold tracking-tight text-white">MPLADS Audit AI</span>
+    <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col justify-between p-8 font-sans">
+      <header className="flex justify-between items-center max-w-6xl mx-auto w-full py-4 border-b border-slate-800">
+        <div className="flex items-center space-x-3">
+          <div className="w-10 h-10 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-xl text-white shadow-lg shadow-indigo-500/30">M</div>
+          <span className="text-xl font-bold tracking-tight text-white">MPLADS<span className="text-indigo-400">-AI</span></span>
         </div>
-        <button onClick={onLaunch} className="px-5 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition flex items-center gap-2 shadow-lg shadow-indigo-500/20">
-          Launch Dashboard <ArrowRight className="w-4 h-4" />
+        <button onClick={onLaunch} className="bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-5 py-2.5 rounded-lg transition-all shadow-md hover:shadow-indigo-500/20 active:scale-95">
+          Launch App &rarr;
         </button>
       </header>
-      <section className="px-8 py-20 max-w-6xl mx-auto text-center flex flex-col items-center justify-center">
-        <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-sm font-medium mb-6">
-          <BrainCircuit className="w-4 h-4" /> AI-Driven Financial Integrity for Public Funds
+
+      <main className="max-w-4xl mx-auto text-center py-20 px-4 flex-1 flex flex-col justify-center items-center">
+        <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 text-sm font-medium mb-8">
+          <span>AI-Powered Public Expenditure Intelligence</span>
         </div>
-        <h1 className="text-4xl md:text-6xl font-extrabold text-white tracking-tight leading-tight max-w-4xl">
-          Autonomous Anomaly Detection & Transparency for <span className="text-indigo-400">MPLADS Development Works</span>
+        <h1 className="text-5xl md:text-6xl font-extrabold tracking-tight text-white mb-6 leading-tight">
+          Transparency & Forensics for <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-cyan-400">MPLADS Projects</span>
         </h1>
-        <p className="mt-6 text-lg text-slate-400 max-w-2xl leading-relaxed">
-          Transforming public fund oversight into actionable, explainable intelligence. Detecting fund misuse, duplicate proposals, and physical vs. financial progress mismatches in real time.
+        <p className="text-lg md:text-xl text-slate-400 max-w-2xl mb-10 leading-relaxed">
+          Real-time anomaly detection, audit risk scoring, and automated forensic tracking for parliamentary constituency development funds.
         </p>
-        <div className="mt-8 flex flex-wrap gap-4 justify-center">
-          <button onClick={onLaunch} className="px-6 py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold transition text-lg flex items-center gap-2 shadow-xl shadow-indigo-600/25">
-            Open Risk Intelligence Center <ArrowRight className="w-5 h-5" />
+        <div className="flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4">
+          <button onClick={onLaunch} className="bg-indigo-600 hover:bg-indigo-500 text-white text-lg font-semibold px-8 py-4 rounded-xl shadow-xl shadow-indigo-600/30 hover:shadow-indigo-500/40 transition-all active:scale-95">
+            Explore Dashboard Now
           </button>
         </div>
-      </section>
-      <section className="px-8 py-16 bg-slate-950/50 border-y border-slate-800">
-        <div className="max-w-6xl mx-auto grid md:grid-cols-3 gap-8">
-          <div className="p-6 rounded-xl bg-slate-900 border border-slate-800">
-            <Search className="w-8 h-8 text-indigo-400 mb-4" />
-            <h3 className="text-xl font-bold text-white mb-2">The Anomaly Problem</h3>
-            <p className="text-slate-400 text-sm leading-relaxed">Thousands of constituency projects receive 100% disbursed funds while physical completion remains stagnated or unverified due to manual oversight bottlenecks.</p>
-          </div>
-          <div className="p-6 rounded-xl bg-slate-900 border border-slate-800">
-            <BrainCircuit className="w-8 h-8 text-emerald-400 mb-4" />
-            <h3 className="text-xl font-bold text-white mb-2">Explainable AI (XAI)</h3>
-            <p className="text-slate-400 text-sm leading-relaxed">Every flag is backed by transparent statistical rules and feature attribution—showing auditors exactly why a project is high risk without black-box opacity.</p>
-          </div>
-          <div className="p-6 rounded-xl bg-slate-900 border border-slate-800">
-            <CheckCircle2 className="w-8 h-8 text-cyan-400 mb-4" />
-            <h3 className="text-xl font-bold text-white mb-2">Auditor Decision Flow</h3>
-            <p className="text-slate-400 text-sm leading-relaxed">Equips nodal officers and vigilance committees with verifiable audit trails, role-based workflows, direct resolution tracking, and citizen reporting access.</p>
-          </div>
-        </div>
-      </section>
-      <footer className="mt-auto border-t border-slate-800 bg-slate-950 px-8 py-6 text-center text-slate-500 text-sm">
-        MPLADS AI Optimization System — Built for Transparency, Integrity, and Decision Support.
+      </main>
+
+      <footer className="max-w-6xl mx-auto w-full py-6 text-center text-xs text-slate-500 border-t border-slate-800">
+        &copy; 2026 MPLADS-AI Transparency Platform. All rights reserved.
       </footer>
     </div>
   );
