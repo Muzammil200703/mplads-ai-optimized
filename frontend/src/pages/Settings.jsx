@@ -22,7 +22,7 @@ export default function Settings({ darkMode, onThemeToggle }) {
   return (
     <SettingsShell>
       {/* THEME */}
-      <section className="rounded-xl border border-[#dcdde4] bg-white p-4 shadow-sm sm:p-5 dark:border-[#3f4657] dark:bg-[#111827]">
+      <section className="rounded-xl border border-[#dcdde4] bg-white p-4 shadow-sm sm:p-5 dark:border-[#2e2e33] dark:bg-[#0a0a0c]">
         <div className="mb-4">
           <h2 className="text-lg font-bold text-[#031632] dark:text-[#f3f4f6]">Theme</h2>
           <p className="mt-0.5 text-sm text-[#44474d] dark:text-[#9ca3af]">
@@ -42,8 +42,8 @@ export default function Settings({ darkMode, onThemeToggle }) {
                 aria-pressed={selected}
                 className={`rounded-lg border px-3 py-3 text-left transition ${
                   selected
-                    ? "border-[#031632] bg-[#f0f3ff] ring-2 ring-[#031632]/10 dark:border-blue-500 dark:bg-[#1f2937]"
-                    : "border-[#dcdde4] bg-white hover:border-[#44474d]/50 dark:border-[#3f4657] dark:bg-[#111827] dark:hover:border-[#9ca3af]/50"
+                    ? "border-[#031632] bg-[#f0f3ff] ring-2 ring-[#031632]/10 dark:border-blue-500 dark:bg-[#17181c]"
+                    : "border-[#dcdde4] bg-white hover:border-[#44474d]/50 dark:border-[#2e2e33] dark:bg-[#0a0a0c] dark:hover:border-[#9ca3af]/50"
                 }`}
               >
                 <span className="flex items-center gap-2">

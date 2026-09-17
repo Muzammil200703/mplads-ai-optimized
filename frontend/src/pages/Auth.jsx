@@ -11,23 +11,23 @@ import { forgotPassword, resetPassword } from "../services/api"
 function AuthShell({ title, subtitle, children, footer }) {
   return (
     <div className="flex min-h-full items-center justify-center px-4 py-10">
-      <div className="w-full max-w-md rounded-xl border border-[#dcdde4] bg-white p-6 shadow-sm dark:border-[#3f4657] dark:bg-[#111827]">
+      <div className="w-full max-w-md rounded-xl border border-[#dcdde4] bg-white p-6 shadow-sm dark:border-[#2e2e33] dark:bg-[#0a0a0c]">
         <div className="mb-5 text-center">
-          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-[#1a2b48] text-xl text-white dark:bg-[#243b5a]">
+          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-[#1a2b48] text-xl text-white dark:bg-[#2f2f36]">
             🏛
           </div>
           <h2 className="text-xl font-bold text-[#031632] dark:text-[#f3f4f6]">{title}</h2>
           <p className="mt-1 text-sm text-[#44474d] dark:text-[#9ca3af]">{subtitle}</p>
         </div>
         {children}
-        {footer && <div className="mt-5 border-t border-[#dcdde4] pt-4 text-center text-sm dark:border-[#3f4657]">{footer}</div>}
+        {footer && <div className="mt-5 border-t border-[#dcdde4] pt-4 text-center text-sm dark:border-[#2e2e33]">{footer}</div>}
       </div>
     </div>
   )
 }
 
 const inputClass =
-  "mt-1 w-full rounded-lg border border-[#dcdde4] bg-white px-3 py-2.5 text-[0.9375rem] text-[#151c27] outline-none transition focus:border-[#031632] focus:ring-2 focus:ring-[#031632]/10 dark:border-[#3f4657] dark:bg-[#1f2937] dark:text-[#f3f4f6]"
+  "mt-1 w-full rounded-lg border border-[#dcdde4] bg-white px-3 py-2.5 text-[0.9375rem] text-[#151c27] outline-none transition focus:border-[#031632] focus:ring-2 focus:ring-[#031632]/10 dark:border-[#2e2e33] dark:bg-[#17181c] dark:text-[#f3f4f6]"
 
 export function LoginView({ onSwitch }) {
   const { login } = useAuth()

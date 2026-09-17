@@ -24,12 +24,24 @@ import os
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
-from PIL import Image, ImageOps
+# PIL is imported lazily on first image use — importing it eagerly pinned
+# ~15-20 MB of image-codec modules in every backend process (including the
+# Render free instance) even when no image was ever uploaded.
+Image = None
+ImageOps = None
 
-# Remove the embedded thumbnail that can carry stripped EXIF ghost data and
-# keeps large images in memory longer than needed.
-Image.LOAD_TRUNCATED_IMAGES = False
-Image.MAX_IMAGE_PIXELS = 64_000_000  # decompression-bomb guard (~64MP)
+
+def _ensure_pil():
+    global Image, ImageOps
+    if Image is not None:
+        return
+    from PIL import Image as _Image, ImageOps as _ImageOps
+    # Remove the embedded thumbnail that can carry stripped EXIF ghost data
+    # and keeps large images in memory longer than needed.
+    _Image.LOAD_TRUNCATED_IMAGES = False
+    _Image.MAX_IMAGE_PIXELS = 64_000_000  # decompression-bomb guard (~64MP)
+    Image, ImageOps = _Image, _ImageOps
+
 
 DHASH_BITS = 64
 
@@ -40,6 +52,7 @@ DHASH_BITS = 64
 
 def dhash64(file_bytes: bytes) -> Optional[str]:
     """Return the 64-bit dHash of an image as a hex string, or None."""
+    _ensure_pil()
     try:
         img = Image.open(io.BytesIO(file_bytes))
         img = ImageOps.exif_transpose(img)
@@ -93,6 +106,7 @@ def extract_exif_gps(file_bytes: bytes) -> Dict:
     a signal auditors care about (common when photos are re-saved through
     messengers/screenshots), but it is reported, never fabricated.
     """
+    _ensure_pil()
     out: Dict = {
         "has_gps": False, "lat": None, "lon": None,
         "captured_at": None, "camera": None, "stripped": True,

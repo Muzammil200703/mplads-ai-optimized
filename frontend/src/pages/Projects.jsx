@@ -7,12 +7,11 @@ import {
   getProjectDetail,
 } from "../services/api"
 import { useAuth } from "../context/AuthContext"
-// Heavy drawer (project detail + full Audit Intelligence suite) is code-split:
-// it only loads when a user actually opens a project.
+// Project-selection interface: the original full ProjectDetail view
+// (presented as a centered rounded card), code-split so it only loads
+// when a user actually selects a project.
 const ProjectDetail = lazy(() => import("../components/ProjectDetail"))
-// Project-selection interface (AI Inspection & Forensic Summary modal).
-const InspectionModal = lazy(() => import("../components/InspectionModal"))
-import { formatMoney, formatNumber } from "../utils/format"
+import { formatMoney, formatNumber, formatDateHuman } from "../utils/format"
 import { TableRowsSkeleton, MobileCardsSkeleton } from "../components/Skeletons"
 
 function getRiskScoreBadge(project) {
@@ -82,18 +81,19 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
   const [sortBy, setSortBy] = useState("")
   const [sortDir, setSortDir] = useState("desc")
   const [currentPage, setCurrentPage] = useState(1)
-  const [selectedProjectId, setSelectedProjectId] = useState(null)
-  const [inspectionProjectId, setInspectionProjectId] = useState(null)
+  const [detailProjectId, setDetailProjectId] = useState(null)
   const [compareIds, setCompareIds] = useState([])
   const [showComparison, setShowComparison] = useState(false)
   const [projectSearchApplied, setProjectSearchApplied] = useState(false)
   const rowsPerPage = 15
 
   // Open another project's drawer from inside an open drawer (e.g. peer comparison)
+  // Single selection flow: any open-project request (deep link, assistant,
+  // workspace) opens the project-details interface — nothing else.
   useEffect(() => {
     const handler = (e) => {
       const id = e.detail?.projectId
-      if (id) setSelectedProjectId(Number(id))
+      if (id) setDetailProjectId(Number(id))
     }
     window.addEventListener("open-project", handler)
     return () => window.removeEventListener("open-project", handler)
@@ -177,6 +177,9 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
           setTotalCount(response.total || response.results.length)
         }
       } else {
+        // /projects returns one page of rows; the same filters go to
+        // /search/projects (no keyword) for the true filtered COUNT(*) so
+        // "Showing X to Y of Z" always reflects the actual query size.
         const [projList, searchCount] = await Promise.all([
           getProjects({
             state: state || undefined,
@@ -215,7 +218,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
     // Project-selection interface: opens the shared AI Inspection &
     // Forensic Summary modal over the still-mounted Projects list, so
     // search/filter/pagination state is intact on close.
-    setInspectionProjectId(proj.id)
+    setDetailProjectId(proj.id)
     window.dispatchEvent(new CustomEvent("open-project", { detail: { projectId: proj.id } }))
   }
 
@@ -229,6 +232,14 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
   }
 
   const totalPages = Math.max(1, Math.ceil(totalCount / rowsPerPage))
+
+  // A filter change can shrink the result set below the current page — clamp
+  // instead of showing an empty page with a stale page number.
+  useEffect(() => {
+    if (!loading && totalCount > 0 && currentPage > totalPages) {
+      setCurrentPage(totalPages)
+    }
+  }, [loading, totalCount, currentPage, totalPages])
 
   const handleApplySearch = (e) => {
     e.preventDefault()
@@ -248,7 +259,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
   }
 
   return (
-    <div className="min-h-full bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-gray-100">
+    <div className="min-h-full bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#0a0a0c] dark:text-gray-100">
       <div className="mx-auto max-w-[1440px] space-y-4 sm:space-y-6">
 
         {/* PROJECT SEARCH CONTEXT BANNER */}
@@ -287,7 +298,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
           </p>
         </div>
 
-        <form onSubmit={handleApplySearch} className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-colors dark:border-gray-700/80 dark:bg-[#1f2937]">
+        <form onSubmit={handleApplySearch} className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-colors dark:border-gray-700/80 dark:bg-[#17181c]">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-200">
@@ -297,7 +308,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
                 value={keyword}
                 onChange={(e) => setKeyword(e.target.value)}
                 placeholder="Search by ID, name, state, constituency, MP name, or type..."
-                className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white"
+                className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#0a0a0c] dark:text-white"
               />
             </div>
 
@@ -311,7 +322,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
                   setState(e.target.value)
                   setCurrentPage(1)
                 }}
-                className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white"
+                className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#0a0a0c] dark:text-white"
               >
                 <option value="">All States</option>
                 {states.map((s) => (
@@ -333,7 +344,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
                   setConstituency(e.target.value)
                   setCurrentPage(1)
                 }}
-                className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 dark:border-gray-600 dark:bg-[#111827] dark:text-white"
+                className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 dark:border-gray-600 dark:bg-[#0a0a0c] dark:text-white"
               >
                 <option value="">{state ? "All Constituencies" : "Select State First"}</option>
                 {constituencies.map((c) => (
@@ -354,7 +365,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
                   setStatus(e.target.value)
                   setCurrentPage(1)
                 }}
-                className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white"
+                className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#0a0a0c] dark:text-white"
               >
                 <option value="">All Statuses</option>
                 <option value="Completed">Completed</option>
@@ -371,6 +382,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
               { value: "", label: "Default" },
               { value: "id", label: "Project ID" },
               { value: "project_name", label: "Name" },
+              { value: "recommended_date", label: "Recommended Date" },
               { value: "sanctioned_amount", label: "Sanctioned" },
               { value: "expenditure", label: "Expenditure" },
               { value: "completion_percentage", label: "Progress" },
@@ -379,6 +391,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
               <button
                 key={opt.value}
                 type="button"
+                title={opt.value === "recommended_date" ? "Newest recommendations first — undated projects at the end" : undefined}
                 onClick={() => {
                   if (sortBy === opt.value) {
                     setSortDir((d) => d === "asc" ? "desc" : "asc")
@@ -391,7 +404,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
                 className={`rounded-lg px-3 py-1.5 text-[0.6875rem] font-bold transition ${
                   sortBy === opt.value
                     ? "bg-[#031632] text-white dark:bg-blue-600"
-                    : "border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:bg-[#1f2937] dark:text-gray-300"
+                    : "border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:bg-[#17181c] dark:text-gray-300"
                 }`}
               >
                 {opt.label}
@@ -422,7 +435,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
               <button
                 type="button"
                 onClick={handleResetFilters}
-                className="rounded-lg border border-gray-300 bg-white px-3 sm:px-4 py-2 text-xs font-bold uppercase tracking-wider text-gray-700 shadow-2xs transition hover:bg-gray-50 dark:border-gray-600 dark:bg-[#111827] dark:text-gray-200 dark:hover:bg-gray-800"
+                className="rounded-lg border border-gray-300 bg-white px-3 sm:px-4 py-2 text-xs font-bold uppercase tracking-wider text-gray-700 shadow-2xs transition hover:bg-gray-50 dark:border-gray-600 dark:bg-[#0a0a0c] dark:text-gray-200 dark:hover:bg-gray-800"
               >
                 Reset
               </button>
@@ -439,7 +452,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
           </div>
         )}
 
-        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm transition-colors dark:border-gray-700/80 dark:bg-[#1f2937]">
+        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm transition-colors dark:border-gray-700/80 dark:bg-[#17181c]">
           {loading ? (
             <>
               <TableRowsSkeleton rows={8} cols={6} className="hidden lg:block" />
@@ -452,11 +465,12 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
                 <div className="hidden lg:block overflow-x-auto">
                 <table className="w-full min-w-[900px]">
                   <thead>
-                    <tr className="border-b-2 border-gray-200 bg-gray-50 text-left text-[0.625rem] font-bold uppercase tracking-widest text-gray-500 dark:border-gray-700 dark:bg-[#172033] dark:text-gray-400">
+                    <tr className="border-b-2 border-gray-200 bg-gray-50 text-left text-[0.625rem] font-bold uppercase tracking-widest text-gray-500 dark:border-gray-700 dark:bg-[#141418] dark:text-gray-400">
                       <th className="px-3 py-3 w-10"></th>
                       <th className="px-3 py-3 w-20">ID</th>
                       <th className="px-3 py-3">Work Name & Category</th>
                       <th className="px-3 py-3 w-36">Location</th>
+                      <th className="px-3 py-3 w-28">Recommended</th>
                       <th className="px-3 py-3 w-28 text-right">Sanctioned</th>
                       <th className="px-3 py-3 w-28 text-right">Expenditure</th>
                       <th className="px-3 py-3 w-24 text-center">Status</th>
@@ -465,7 +479,10 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
                     </tr>
                   </thead>
 
-                  <tbody>
+                  <tbody
+                    key={`${keyword}|${state}|${constituency}|${status}|${sortBy}|${sortDir}|${currentPage}`}
+                    className="rise-refresh"
+                  >
                     {projects.map((proj) => {
                       const riskBadge = getRiskScoreBadge(proj)
                       return (
@@ -499,6 +516,22 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
                               {proj.constituency || proj.state || "N/A"}
                             </p>
                             <p className="mt-0.5 text-[0.6875rem] text-gray-400 dark:text-gray-500 truncate">{proj.state}</p>
+                          </td>
+                          <td className="px-3 py-2.5 text-xs whitespace-nowrap">
+                            {formatDateHuman(proj.rec?.recommendation_date) ? (
+                              <div>
+                                <p className="font-mono text-[0.6875rem] font-semibold text-gray-700 dark:text-gray-300">
+                                  {formatDateHuman(proj.rec.recommendation_date)}
+                                </p>
+                                {proj.rec.recommended_by && (
+                                  <p className="mt-0.5 max-w-[110px] truncate text-[0.625rem] text-gray-400 dark:text-gray-500" title={`Recommended by ${proj.rec.recommended_by}`}>
+                                    {proj.rec.recommended_by}
+                                  </p>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-[0.6875rem] italic text-gray-300 dark:text-gray-600" title="Recommendation date unavailable in the source dataset">—</span>
+                            )}
                           </td>
                           <td className="px-3 py-2.5 text-right font-mono text-xs font-semibold tabular-nums text-gray-800 dark:text-gray-200">
                             {formatMoney(proj.sanctioned_amount)}
@@ -607,7 +640,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
                 )}
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-200 bg-gray-50/80 px-4 py-3 sm:px-5 sm:py-3.5 dark:border-gray-700 dark:bg-[#172033]">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-200 bg-gray-50/80 px-4 py-3 sm:px-5 sm:py-3.5 dark:border-gray-700 dark:bg-[#141418]">
                 <div className="flex items-center gap-3">
                   <span className="text-xs text-gray-500 dark:text-gray-400">
                   Showing <strong>{totalCount === 0 ? 0 : (currentPage - 1) * rowsPerPage + 1}</strong> to{" "}
@@ -635,19 +668,19 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
                   <button
                     disabled={currentPage === 1}
                     onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                    className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-2xs transition hover:bg-gray-50 disabled:opacity-40 dark:border-gray-600 dark:bg-[#1f2937] dark:text-gray-200 dark:hover:bg-gray-700"
+                    className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-2xs transition hover:bg-gray-50 disabled:opacity-40 dark:border-gray-600 dark:bg-[#17181c] dark:text-gray-200 dark:hover:bg-gray-700"
                   >
                     ← Previous
                   </button>
 
-                  <span className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 font-mono text-xs font-bold text-gray-700 dark:border-gray-600 dark:bg-[#1f2937] dark:text-gray-200">
+                  <span className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 font-mono text-xs font-bold text-gray-700 dark:border-gray-600 dark:bg-[#17181c] dark:text-gray-200">
                     {currentPage} / {totalPages}
                   </span>
 
                   <button
                     disabled={currentPage >= totalPages}
                     onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                    className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-2xs transition hover:bg-gray-50 disabled:opacity-40 dark:border-gray-600 dark:bg-[#1f2937] dark:text-gray-200 dark:hover:bg-gray-700"
+                    className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-2xs transition hover:bg-gray-50 disabled:opacity-40 dark:border-gray-600 dark:bg-[#17181c] dark:text-gray-200 dark:hover:bg-gray-700"
                   >
                     Next →
                   </button>
@@ -658,30 +691,14 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
         </div>
       </div>
 
-      {/* Project Detail Panel — deep-link/peer-comparison target */}
-      {selectedProjectId && !inspectionProjectId && (
+      {/* Project selection interface — the full ProjectDetail view in a
+          centered rounded card. Rendered over the still-mounted list;
+          closing restores the exact search/filter/scroll state. */}
+      {detailProjectId && (
         <Suspense fallback={null}>
-          <ProjectDetail projectId={selectedProjectId} onClose={() => setSelectedProjectId(null)} />
-        </Suspense>
-      )}
-
-      {/* Project selection interface — AI Inspection & Forensic Summary.
-          Rendered over the still-mounted list; closing restores the exact
-          search/filter/scroll state the user had. */}
-      {inspectionProjectId && (
-        <Suspense fallback={null}>
-          <InspectionModal
-            projectId={inspectionProjectId}
-            onClose={() => setInspectionProjectId(null)}
-            onOpenProject={(target) => {
-              // ForensicsPanel dispatches either a project id (duplicate-photo
-              // match) or a page name (Verification Portal link).
-              if (typeof target === "number" || /^\d+$/.test(String(target))) {
-                setSelectedProjectId(Number(target))
-              } else if (onNavigate) {
-                onNavigate(target)
-              }
-            }}
+          <ProjectDetail
+            projectId={detailProjectId}
+            onClose={() => setDetailProjectId(null)}
           />
         </Suspense>
       )}
@@ -715,7 +732,7 @@ function ComparisonModal({ projectIds, onClose, onRemove }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 sm:p-4 backdrop-blur-2xs" onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} className="flex max-h-[90vh] sm:max-h-[85vh] w-full sm:max-w-4xl flex-col rounded-t-2xl sm:rounded-2xl border border-gray-200 bg-white shadow-soft-lg dark:border-gray-700 dark:bg-[#1f2937]">
+      <div onClick={(e) => e.stopPropagation()} className="flex max-h-[90vh] sm:max-h-[85vh] w-full sm:max-w-4xl flex-col rounded-t-2xl sm:rounded-2xl border border-gray-200 bg-white shadow-soft-lg dark:border-gray-700 dark:bg-[#17181c]">
         <div className="flex items-start justify-between border-b border-gray-200 p-5 dark:border-gray-700">
           <div>
             <h3 className="text-lg font-bold text-gray-900 dark:text-white">Project Comparison</h3>

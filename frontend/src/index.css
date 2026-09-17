@@ -27,6 +27,47 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* ── Centralized animation tokens ───────────────────────────────────
+   Single source of truth for durations + easing across the UI so all
+   motion feels consistent. Entrances = ease-out, state changes =
+   ease-in-out, everything opacity/transform only (compositor-cheap). */
+:root {
+  --anim-out: cubic-bezier(0.2, 0.8, 0.3, 1);   /* entrances */
+  --anim-inout: cubic-bezier(0.6, 0, 0.3, 1);   /* state changes */
+}
+
+/* Button press feedback: gentle transform-only dip on :active.
+   Hover transitions come from each element's own Tailwind classes. */
+@media (prefers-reduced-motion: no-preference) {
+  button:active {
+    transform: scale(0.97);
+  }
+  /* Smooth focus feedback on form controls (elements without their own
+     Tailwind transition class inherit this gentle ease-in-out). */
+  input,
+  select,
+  textarea {
+    transition:
+      box-shadow 0.18s var(--anim-inout),
+      border-color 0.18s var(--anim-inout);
+  }
+}
+
+/* Global entrance motion via @starting-style: newly-added elements that
+   opt in with .rise-in play a 200ms fade/rise once on mount — no React
+   state, no re-renders, purely declarative CSS. */
+@media (prefers-reduced-motion: no-preference) {
+  .rise-in {
+    @starting-style {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    transition:
+      opacity 0.2s var(--anim-out),
+      transform 0.2s var(--anim-out);
+  }
+}
+
 /* Dark-mode variant of the soft shadows (deeper black, same diffuse shape) */
 .dark {
   --shadow-soft: 0 8px 30px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.3);
@@ -152,5 +193,185 @@ table td:first-child, table td:nth-child(2) {
 @media (max-width: 639px) {
   .max-h-\[85vh\] {
     max-height: 90vh;
+  }
+}
+
+/* ── Sidebar scrollbar: auto-hiding ─────────────────────────────────
+   Scoped to the sidebar's scroll containers (.sidebar-scroll). The
+   track space is always reserved (no layout shift) — only the thumb's
+   color fades in while scrolling and back out ~900ms after it stops. */
+.sidebar-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.sidebar-scroll.sidebar-scrolling {
+  scrollbar-color: rgba(3, 22, 50, 0.3) transparent;
+}
+.dark .sidebar-scroll.sidebar-scrolling {
+  scrollbar-color: rgba(243, 244, 246, 0.32) transparent;
+}
+.sidebar-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.sidebar-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.sidebar-scroll::-webkit-scrollbar-thumb {
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  background-color: transparent;
+}
+.sidebar-scroll.sidebar-scrolling::-webkit-scrollbar-thumb {
+  background-color: rgba(3, 22, 50, 0.3);
+}
+.dark .sidebar-scroll.sidebar-scrolling::-webkit-scrollbar-thumb {
+  background-color: rgba(243, 244, 246, 0.32);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .sidebar-scroll {
+    transition: scrollbar-color 0.3s ease;
+  }
+  .sidebar-scroll::-webkit-scrollbar-thumb {
+    transition: background-color 0.3s ease;
+  }
+}
+
+/* ── Page-switch + results-change entrance ─────────────────────────
+   Elements with .rise-refresh play the soft 180ms fade/rise each time they
+   enter the render tree: App's page wrappers re-enter on navigation (the
+   pages are kept mounted with display toggling — a display:none → block
+   change starts @starting-style transitions), and the Projects results
+   tbody is keyed by the active filter set so a new search remounts it.
+   Pure CSS, zero JS per frame, no layout thrash. */
+@media (prefers-reduced-motion: no-preference) {
+  .rise-refresh {
+    @starting-style {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    transition:
+      opacity 0.18s var(--anim-out),
+      transform 0.18s var(--anim-out);
+  }
+}
+
+/* ── Bar/ring value fills: gentle first-paint growth ───────────────
+   Progress/risk bars render their target width inline; this makes the
+   value animate from 0 the first time the element paints. One-shot per
+   element mount — never re-runs, so values never visibly re-animate. */
+@media (prefers-reduced-motion: no-preference) {
+  .bar-fill {
+    @starting-style {
+      width: 0;
+    }
+    transition: width 0.45s var(--anim-out) 0.1s, opacity 0.3s var(--anim-inout);
+  }
+  /* Variant for bars that already manage their own transition classes:
+     supplies only the starting value; the existing transition animates it. */
+  .bar-start {
+    @starting-style {
+      width: 0;
+    }
+  }
+}
+
+/* Simple fade-in on mount for small elements (active-nav indicator, etc.) */
+@media (prefers-reduced-motion: no-preference) {
+  .fade-in-200 {
+    @starting-style {
+      opacity: 0;
+    }
+    transition: opacity 0.2s var(--anim-out);
+  }
+
+  /* Popovers/dropdowns: fade + slight vertical movement toward rest.
+     -down = menu hanging below its trigger; -up = panel above it. */
+  .pop-in-down {
+    @starting-style {
+      opacity: 0;
+      transform: translateY(-4px) scale(0.985);
+    }
+    transition:
+      opacity 0.18s var(--anim-out),
+      transform 0.18s var(--anim-out);
+  }
+  .pop-in-up {
+    @starting-style {
+      opacity: 0;
+      transform: translateY(8px) scale(0.985);
+    }
+    transition:
+      opacity 0.2s var(--anim-out),
+      transform 0.2s var(--anim-out);
+  }
+}
+
+/* ── Project-selection interface: subtle motion primitives ────────────
+   Short (150–250ms) opacity/transform transitions only. Everything is
+   disabled under prefers-reduced-motion; none of these delay interaction. */
+@keyframes overlay-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes card-pop-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes panel-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes shimmer-slide {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+.anim-overlay-in {
+  animation: overlay-fade-in 0.2s ease-out;
+}
+/* Modal closing state (driven by InspectionModal's 150ms close request):
+   fade + slight dip, mirrored on the backdrop for a unified exit. */
+@media (prefers-reduced-motion: no-preference) {
+  .is-closing {
+    opacity: 0;
+    transform: translateY(4px);
+    transition:
+      opacity 0.15s ease-in,
+      transform 0.15s ease-in;
+  }
+  .is-closing .anim-card-in {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+    transition:
+      opacity 0.15s ease-in,
+      transform 0.15s ease-in;
+  }
+}
+.anim-card-in {
+  animation: card-pop-in 0.22s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.anim-panel-in {
+  animation: panel-fade-in 0.18s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .anim-overlay-in,
+  .anim-card-in,
+  .anim-panel-in {
+    animation: none;
+  }
+}
+/* Detail-card entrance shimmer while project data loads */
+.detail-loading-shimmer {
+  background: linear-gradient(100deg, transparent 30%, rgba(120, 130, 150, 0.10) 50%, transparent 70%);
+  background-size: 200% 100%;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .detail-loading-shimmer {
+    animation: shimmer-slide 1.6s linear infinite;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .detail-loading-shimmer {
+    animation: none;
   }
 }

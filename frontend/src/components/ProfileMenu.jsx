@@ -46,11 +46,11 @@ export default function ProfileMenu({ onNavigate }) {
     <div className="relative shrink-0" ref={ref}>
       <button
         onClick={() => setOpen((o) => !o)}
-        className="flex h-10 items-center gap-2 rounded-lg px-2 transition hover:bg-[#eef1f8] dark:hover:bg-[#1f2937]"
+        className="flex h-10 items-center gap-2 rounded-lg px-2 transition hover:bg-[#eef1f8] dark:hover:bg-[#17181c]"
         aria-label="Profile menu"
         aria-expanded={open}
       >
-        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#1a2b48] text-sm font-bold text-white dark:bg-[#243b5a]">
+        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#1a2b48] text-sm font-bold text-white dark:bg-[#2f2f36]">
           {initial}
         </span>
         <span className="hidden max-w-[140px] truncate text-sm font-semibold text-[#151c27] dark:text-[#f3f4f6] lg:inline">
@@ -60,8 +60,11 @@ export default function ProfileMenu({ onNavigate }) {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-12 z-50 w-72 overflow-hidden rounded-2xl border border-[#dcdde4] bg-white shadow-soft-lg dark:border-[#3f4657] dark:bg-[#111827]">
-          <div className="border-b border-[#dcdde4] px-5 pb-4 pt-5 dark:border-[#3f4657]">
+        <div
+          className="pop-in-down absolute right-0 top-12 z-50 w-72 overflow-hidden rounded-2xl border border-[#dcdde4] bg-white shadow-soft-lg dark:border-[#2e2e33] dark:bg-[#0a0a0c]"
+          style={{ transformOrigin: "top right" }}
+        >
+          <div className="border-b border-[#dcdde4] px-5 pb-4 pt-5 dark:border-[#2e2e33]">
             <p className="truncate text-sm font-bold text-[#031632] dark:text-[#f3f4f6]">{user.name}</p>
             <p className="mt-0.5 truncate text-xs text-[#44474d] dark:text-[#9ca3af]">{user.email}</p>
             <span className={`mt-2 inline-block rounded px-2 py-0.5 text-[0.6875rem] font-bold ${ROLE_BADGE[user.role] || ROLE_BADGE.public}`}>
@@ -93,14 +96,14 @@ export default function ProfileMenu({ onNavigate }) {
                   <button
                     key={it.page}
                     onClick={() => { setOpen(false); onNavigate && onNavigate(it.page) }}
-                    className="block w-full rounded-lg px-2.5 py-2 text-left text-[0.8125rem] text-[#151c27] transition hover:bg-[#f0f3ff] dark:text-[#f3f4f6] dark:hover:bg-[#1f2937]"
+                    className="block w-full rounded-lg px-2.5 py-2 text-left text-[0.8125rem] text-[#151c27] transition hover:bg-[#f0f3ff] dark:text-[#f3f4f6] dark:hover:bg-[#17181c]"
                   >
                     {it.label}
                   </button>
                 ))}
             </div>
           </div>
-          <div className="border-t border-[#dcdde4] dark:border-[#3f4657]">
+          <div className="border-t border-[#dcdde4] dark:border-[#2e2e33]">
             <button
               onClick={() => { setOpen(false); logout() }}
               className="block w-full px-5 py-4 text-left text-sm font-semibold text-red-600 transition hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30"

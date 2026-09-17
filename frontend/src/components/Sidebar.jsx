@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react"
 import { useAuth } from "../context/AuthContext"
 
 const ICON_COL = "flex h-6 w-6 shrink-0 items-center justify-center text-base leading-none"
@@ -44,12 +45,12 @@ function NavRow({ icon, label, href, active, onNavigate, collapsed, badge }) {
         transition-colors duration-200
         ${collapsed ? "justify-center" : "justify-start"}
         ${active
-          ? "bg-[#f0f3ff] text-[#031632] dark:bg-[#1f2937] dark:text-white"
-          : "text-[#44474d] hover:bg-[#e2e8f8] hover:text-[#031632] dark:text-[#d1d5db] dark:hover:bg-[#1f2937] dark:hover:text-white"}
+          ? "bg-[#f0f3ff] text-[#031632] dark:bg-[#17181c] dark:text-white"
+          : "text-[#44474d] hover:bg-[#e2e8f8] hover:text-[#031632] dark:text-[#d1d5db] dark:hover:bg-[#17181c] dark:hover:text-white"}
         `}
     >
       {active && (
-        <span className="absolute right-0 top-1/2 h-8 w-1 -translate-y-1/2 rounded-l bg-[#bb0011]" aria-hidden="true" />
+        <span className="fade-in-200 absolute right-0 top-1/2 h-8 w-1 -translate-y-1/2 rounded-l bg-[#bb0011]" aria-hidden="true" />
       )}
       <span className={ICON_COL}>
         <IconFor icon={icon} />
@@ -97,6 +98,25 @@ function Sidebar({
   onClose,
 }) {
   const { user, hasRole, can } = useAuth()
+  // Auto-hiding scrollbar: a container-level class on the scroll element
+  // (no React re-render per scroll event). One passive listener per nav;
+  // thumb fades out ~900ms after scrolling stops.
+  const navRef = useRef(null)
+  useEffect(() => {
+    const el = navRef.current
+    if (!el) return
+    let hideTimer
+    const onScroll = () => {
+      el.classList.add("sidebar-scrolling")
+      clearTimeout(hideTimer)
+      hideTimer = setTimeout(() => el.classList.remove("sidebar-scrolling"), 900)
+    }
+    el.addEventListener("scroll", onScroll, { passive: true })
+    return () => {
+      el.removeEventListener("scroll", onScroll)
+      clearTimeout(hideTimer)
+    }
+  }, [])
   const mainNav = [
     { name: "Overview", href: "Overview", icon: "▦" },
     { name: "Projects", href: "Projects", icon: "▤" },
@@ -163,20 +183,20 @@ function Sidebar({
   if (isMobile) {
     return (
       <>
-        <aside className={`fixed left-0 top-0 z-[60] flex h-screen min-h-0 w-64 flex-col border-r border-[#dcdde4] bg-[#f9f9ff] text-[#151c27] dark:border-[#3f4657] dark:bg-[#111827] dark:text-[#f3f4f6] transition-transform duration-300 ease-in-out px-4 ${isOpen ? "translate-x-0" : "-translate-x-full"}`}>
+        <aside className={`fixed left-0 top-0 z-[60] flex h-screen min-h-0 w-64 flex-col border-r border-[#dcdde4] bg-[#f9f9ff] text-[#151c27] dark:border-[#2e2e33] dark:bg-[#0a0a0c] dark:text-[#f3f4f6] transition-transform duration-300 ease-in-out px-4 ${isOpen ? "translate-x-0" : "-translate-x-full"}`}>
           <div className="flex min-w-0 flex-none items-center gap-3 pb-4 pt-1">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[#1a2b48] text-lg leading-none text-white dark:bg-[#243b5a]">🏛</div>
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[#1a2b48] text-lg leading-none text-white dark:bg-[#2f2f36]">🏛</div>
             <div className="min-w-0 overflow-hidden">
               <h1 className="whitespace-nowrap text-lg font-bold text-[#031632] dark:text-[#f3f4f6]">MPLADS Insight</h1>
               <p className="whitespace-nowrap text-xs text-[#44474d] dark:text-[#9ca3af]">Auditor Portal</p>
             </div>
           </div>
-          <nav className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-2">
+          <nav ref={navRef} className="sidebar-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-2">
             <div className="flex flex-col gap-1">
               {mainNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} badge={item.badge} collapsed={collapsed} />)}
-              {auditNav.length > 0 && <div className="my-2 border-t border-[#dcdde4] dark:border-[#3f4657]" role="separator" aria-label="Audit section" />}
+              {auditNav.length > 0 && <div className="my-2 border-t border-[#dcdde4] dark:border-[#2e2e33]" role="separator" aria-label="Audit section" />}
               {auditNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} badge={item.badge} collapsed={collapsed} />)}
-              {vendorNav.length > 0 && <div className="my-2 border-t border-[#dcdde4] dark:border-[#3f4657]" role="separator" aria-label="Vendor section" />}
+              {vendorNav.length > 0 && <div className="my-2 border-t border-[#dcdde4] dark:border-[#2e2e33]" role="separator" aria-label="Vendor section" />}
               {vendorNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} badge={item.badge} collapsed={collapsed} />)}
             {workspaceNav.length > 0 && (
               <>
@@ -184,7 +204,7 @@ function Sidebar({
                 {workspaceNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} collapsed={collapsed} />)}
               </>
             )}
-              <div className="mt-2 flex flex-col gap-1 border-t border-[#dcdde4] pt-2 dark:border-[#3f4657]">
+              <div className="mt-2 flex flex-col gap-1 border-t border-[#dcdde4] pt-2 dark:border-[#2e2e33]">
                 {bottomNav.map((item) => <NavRow key={item.label} icon={item.icon} label={item.label} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} collapsed={collapsed} />)}
               </div>
             </div>
@@ -195,20 +215,20 @@ function Sidebar({
   }
 
   return (
-    <aside className={`fixed left-0 top-0 z-30 hidden h-screen min-h-0 flex-col border-r border-[#dcdde4] bg-[#f9f9ff] text-[#151c27] dark:border-[#3f4657] dark:bg-[#111827] dark:text-[#f3f4f6] transition-all duration-300 ease-in-out lg:flex ${collapsed ? "w-16 px-2" : "w-60 px-4"}`}>
+    <aside className={`fixed left-0 top-0 z-30 hidden h-screen min-h-0 flex-col border-r border-[#dcdde4] bg-[#f9f9ff] text-[#151c27] dark:border-[#2e2e33] dark:bg-[#0a0a0c] dark:text-[#f3f4f6] transition-all duration-300 ease-in-out lg:flex ${collapsed ? "w-16 px-2" : "w-60 px-4"}`}>
       <div className={`flex min-w-0 flex-none items-center pb-4 pt-1 ${collapsed ? "justify-center gap-0" : "gap-3"}`}>
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[#1a2b48] text-lg leading-none text-white dark:bg-[#243b5a]">🏛</div>
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[#1a2b48] text-lg leading-none text-white dark:bg-[#2f2f36]">🏛</div>
         <div className={`overflow-hidden transition-all duration-300 ${collapsed ? "w-0 opacity-0" : "w-auto opacity-100"}`}>
           <h1 className="whitespace-nowrap text-lg font-bold text-[#031632] dark:text-[#f3f4f6]">MPLADS Insight</h1>
           <p className="whitespace-nowrap text-xs text-[#44474d] dark:text-[#9ca3af]">Auditor Portal</p>
         </div>
       </div>
-      <nav className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-2">
+      <nav ref={navRef} className="sidebar-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-2">
         <div className="flex flex-col gap-1">
           {mainNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} badge={item.badge} collapsed={collapsed} />)}
-          <div className="my-2 border-t border-[#dcdde4] dark:border-[#3f4657]" role="separator" aria-label="Audit section" />
+          <div className="my-2 border-t border-[#dcdde4] dark:border-[#2e2e33]" role="separator" aria-label="Audit section" />
           {auditNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} badge={item.badge} collapsed={collapsed} />)}
-          {auditNav.length > 0 && <div className="my-2 border-t border-[#dcdde4] dark:border-[#3f4657]" role="separator" aria-label="Vendor section" />}
+          {auditNav.length > 0 && <div className="my-2 border-t border-[#dcdde4] dark:border-[#2e2e33]" role="separator" aria-label="Vendor section" />}
           {vendorNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} badge={item.badge} collapsed={collapsed} />)}
           {workspaceNav.length > 0 && (
             <>
@@ -216,7 +236,7 @@ function Sidebar({
               {workspaceNav.map((item) => <NavRow key={item.name} icon={item.icon} label={item.name} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} collapsed={collapsed} />)}
             </>
           )}
-          <div className="mt-2 flex flex-col gap-1 border-t border-[#dcdde4] pt-2 dark:border-[#3f4657]">
+          <div className="mt-2 flex flex-col gap-1 border-t border-[#dcdde4] pt-2 dark:border-[#2e2e33]">
             {bottomNav.map((item) => <NavRow key={item.label} icon={item.icon} label={item.label} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} collapsed={collapsed} />)}
           </div>
         </div>

@@ -167,7 +167,7 @@ function TopBar({
 
   return (
     <header
-      className="fixed left-0 right-0 top-0 z-[70] h-[64px] lg:h-[72px] border-b border-[#dcdde4] bg-[#f9f9ff] text-[#151c27] dark:border-[#3f4657] dark:bg-[#111827] dark:text-[#f3f4f6] transition-colors duration-300"
+      className="fixed left-0 right-0 top-0 z-[70] h-[64px] lg:h-[72px] border-b border-[#dcdde4] bg-[#f9f9ff] text-[#151c27] dark:border-[#2e2e33] dark:bg-[#0a0a0c] dark:text-[#f3f4f6] transition-colors duration-300"
     >
       <div
         className={`
@@ -193,10 +193,10 @@ flex h-full min-w-0 items-center gap-1.5 px-2 sm:gap-3 sm:px-4 lg:gap-4 lg:px-5 
             hover:border-[#031632]
             hover:shadow-sm
             active:scale-95
-            dark:border-[#3f4657]
-            dark:bg-[#1f2937]
+            dark:border-[#2e2e33]
+            dark:bg-[#17181c]
             dark:text-[#f3f4f6]
-            dark:hover:bg-[#374151]
+            dark:hover:bg-[#2a2a2f]
             dark:hover:border-[#8293b5]
           "
           aria-label="Toggle sidebar"
@@ -220,8 +220,8 @@ flex h-full min-w-0 items-center gap-1.5 px-2 sm:gap-3 sm:px-4 lg:gap-4 lg:px-5 
                   transition-all duration-150
                   ${
                     active
-                      ? `bg-[#f0f3ff] font-semibold text-[#031632] dark:bg-[#1f2937] dark:text-white`
-                      : `text-[#44474d] hover:bg-[#eef1f8] hover:text-[#031632] dark:text-[#d1d5db] dark:hover:bg-[#1f2937] dark:hover:text-white`
+                      ? `bg-[#f0f3ff] font-semibold text-[#031632] dark:bg-[#17181c] dark:text-white`
+                      : `text-[#44474d] hover:bg-[#eef1f8] hover:text-[#031632] dark:text-[#d1d5db] dark:hover:bg-[#17181c] dark:hover:text-white`
                   }
                 `}
               >
@@ -293,7 +293,7 @@ flex h-full min-w-0 items-center gap-1.5 px-2 sm:gap-3 sm:px-4 lg:gap-4 lg:px-5 
               outline-none
               placeholder:text-[#9ca3af]
               focus:border-[#031632] focus:ring-1 focus:ring-[#031632]
-              dark:border-[#3f4657] dark:bg-[#1f2937] dark:text-[#f3f4f6]
+              dark:border-[#2e2e33] dark:bg-[#17181c] dark:text-[#f3f4f6]
               dark:placeholder:text-[#6b7280]
               dark:focus:border-[#8293b5] dark:focus:ring-[#8293b5]
             "
@@ -303,12 +303,13 @@ flex h-full min-w-0 items-center gap-1.5 px-2 sm:gap-3 sm:px-4 lg:gap-4 lg:px-5 
           {showHistory && (
             <div
               className="
+                pop-in-down
                 absolute left-0 right-0 top-full z-[80] mt-1
                 overflow-hidden rounded-xl
                 border border-[#e2e5ec]
                 bg-white
                 shadow-soft
-                dark:border-[#3f4657] dark:bg-[#1f2937]
+                dark:border-[#2e2e33] dark:bg-[#17181c]
               "
             >
               {historyCleared ? (
@@ -321,7 +322,7 @@ flex h-full min-w-0 items-center gap-1.5 px-2 sm:gap-3 sm:px-4 lg:gap-4 lg:px-5 
                 </div>
               ) : (
                 <>
-                  <div className="flex items-center justify-between border-b border-[#f0f1f3] px-4 py-2 dark:border-[#3f4657]">
+                  <div className="flex items-center justify-between border-b border-[#f0f1f3] px-4 py-2 dark:border-[#2e2e33]">
                     <span className="text-[0.6875rem] font-semibold uppercase tracking-wide text-[#9ca3af] dark:text-[#6b7280]">
                       Recent Searches
                     </span>
@@ -346,11 +347,11 @@ flex h-full min-w-0 items-center gap-1.5 px-2 sm:gap-3 sm:px-4 lg:gap-4 lg:px-5 
                           className="
                             flex w-full items-center gap-3
                             px-4 py-2.5
-                            text-left text-sm text-[#374151]
+                            text-left text-sm text-[#2a2a2f]
                             transition-colors
                             hover:bg-[#f5f7fa]
                             dark:text-[#d1d5db]
-                            dark:hover:bg-[#374151]
+                            dark:hover:bg-[#2a2a2f]
                           "
                         >
                           <span className="shrink-0 text-[#9ca3af] dark:text-[#6b7280]">
@@ -392,7 +393,7 @@ flex h-full min-w-0 items-center gap-1.5 px-2 sm:gap-3 sm:px-4 lg:gap-4 lg:px-5 
               px-3 text-sm font-medium text-[#031632]
               outline-none
               focus:border-[#031632] focus:ring-1 focus:ring-[#031632]
-              dark:border-[#3f4657] dark:bg-[#1f2937] dark:text-[#f3f4f6]
+              dark:border-[#2e2e33] dark:bg-[#17181c] dark:text-[#f3f4f6]
               dark:focus:border-[#8293b5] dark:focus:ring-[#8293b5]
             "
           >

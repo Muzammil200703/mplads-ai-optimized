@@ -19,6 +19,60 @@ const STATUS_OPTIONS = [
   { value: "Work Not Started", icon: "🚧", tone: "border-amber-500 bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300" },
 ]
 
+/* Recorded Data vs Ground Evidence — pure presentation of the submission
+   records already fetched by verifyProjectLookup(). Never rewrites the
+   official record; deviations only recommend human review. */
+function GroundEvidenceComparison({ progress, recordedStatus, reports }) {
+  const reportsList = Array.isArray(reports) ? reports : []
+  if (!reportsList.length && progress == null) return null
+
+  const withDistance = reportsList.filter((r) => typeof r.distance_m === "number")
+  const maxDistance = withDistance.length ? Math.max(...withDistance.map((r) => r.distance_m)) : null
+  const statusCounts = reportsList.reduce((acc, r) => {
+    if (r?.status) acc[r.status] = (acc[r.status] || 0) + 1
+    return acc
+  }, {})
+  const disagree =
+    recordedStatus &&
+    Object.keys(statusCounts).length > 0 &&
+    statusCounts[recordedStatus] !== reportsList.length
+  const farCapture = maxDistance != null && maxDistance > 500
+
+  return (
+    <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50/60 p-3 dark:border-gray-700 dark:bg-gray-900/40">
+      <p className="text-[0.6875rem] font-bold uppercase tracking-wide text-gray-500 dark:text-gray-400">Recorded Data vs Ground Evidence</p>
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        <div className="rounded-lg bg-white p-2.5 dark:bg-gray-800">
+          <p className="text-[0.6875rem] uppercase text-gray-400">Recorded progress</p>
+          <p className="text-sm font-bold text-gray-800 dark:text-gray-200">{progress != null ? `${progress}%` : "Data unavailable in source dataset"}</p>
+        </div>
+        <div className="rounded-lg bg-white p-2.5 dark:bg-gray-800">
+          <p className="text-[0.6875rem] uppercase text-gray-400">Ground evidence</p>
+          {reportsList.length ? (
+            <p className="text-sm font-bold text-gray-800 dark:text-gray-200">
+              {reportsList.length} submission{reportsList.length > 1 ? "s" : ""}
+              {Object.entries(statusCounts).map(([s, n]) => ` · ${s}: ${n}`).join("")}
+            </p>
+          ) : (
+            <p className="text-sm font-semibold text-gray-500 dark:text-gray-400">No evidence submitted yet</p>
+          )}
+        </div>
+      </div>
+      {withDistance.length > 0 && (
+        <p className="mt-2 text-xs text-gray-600 dark:text-gray-300">
+          Field photo GPS captured up to <strong>{Math.round(maxDistance)}m</strong> from the recorded site position.
+          {farCapture && " This is above the 500m reference threshold."}
+        </p>
+      )}
+      {(disagree || farCapture) && (
+        <p className="mt-1.5 rounded-md bg-amber-50 px-2.5 py-1.5 text-xs font-semibold text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+          Significant deviation detected — human verification recommended. An AI/field flag is never treated as confirmed fraud on its own.
+        </p>
+      )}
+    </div>
+  )
+}
+
 function useGeolocation() {
   const [coords, setCoords] = useState(null)
   const [error, setError] = useState(null)
@@ -150,7 +204,7 @@ export default function VerifyPortal() {
           </p>
         </div>
         {user && can("verification:read_own") && (
-          <span className="rounded-lg bg-white px-3 py-1.5 text-xs font-bold text-[#031632] shadow-sm dark:bg-[#111827] dark:text-[#f3f4f6]">
+          <span className="rounded-lg bg-white px-3 py-1.5 text-xs font-bold text-[#031632] shadow-sm dark:bg-[#0a0a0c] dark:text-[#f3f4f6]">
             Track yours under {user.role === "citizen" ? "My Evidence" : "My Verifications"}
           </span>
         )}
@@ -197,12 +251,13 @@ export default function VerifyPortal() {
             </div>
           </div>
           <p className="mt-2 text-[0.6875rem] text-gray-400">These are the officially recorded values — your report is how the ground truth gets checked against them.</p>
+          <GroundEvidenceComparison progress={project.completion_percentage} recordedStatus={project.status} reports={recent} />
         </section>
       )}
 
       {/* Step 2 — evidence */}
       {project && (
-        <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <section className="rise-in rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
           <h2 className="flex items-center gap-2 text-sm font-bold text-gray-900 dark:text-white"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-600 text-xs font-bold text-white">2</span> Add live evidence (optional but powerful)</h2>
 
           <div className="mt-3 space-y-3">
@@ -234,11 +289,11 @@ export default function VerifyPortal() {
                 </button>
               </div>
               {gps.coords && (
-                <p className="mt-1.5 text-xs text-green-700 dark:text-green-400">
+                <p className="rise-in mt-1.5 text-xs text-green-700 dark:text-green-400">
                   Captured: {gps.coords.lat.toFixed(5)}, {gps.coords.lon.toFixed(5)} (±{Math.round(gps.coords.accuracy)}m)
                 </p>
               )}
-              {gps.error && <p className="mt-1.5 text-xs text-amber-600 dark:text-amber-400">{gps.error}</p>}
+              {gps.error && <p className="rise-in mt-1.5 text-xs text-amber-600 dark:text-amber-400">{gps.error}</p>}
             </div>
           </div>
         </section>
@@ -246,7 +301,7 @@ export default function VerifyPortal() {
 
       {/* Step 3 — status */}
       {project && (
-        <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <section className="rise-in rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
           <h2 className="flex items-center gap-2 text-sm font-bold text-gray-900 dark:text-white"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-600 text-xs font-bold text-white">3</span> Report the status</h2>
           <div className="mt-3 grid gap-2 sm:grid-cols-3">
             {STATUS_OPTIONS.map((opt) => (
@@ -266,7 +321,7 @@ export default function VerifyPortal() {
             <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Short note (optional)"
               className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-200" />
           </div>
-          {submitErr && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{submitErr}</p>}
+          {submitErr && <p className="rise-in mt-2 text-sm text-red-600 dark:text-red-400">{submitErr}</p>}
           <button
             onClick={submit}
             disabled={!status || submitting}
@@ -275,7 +330,7 @@ export default function VerifyPortal() {
             {submitting ? "Submitting…" : (isCitizenMode ? "Submit Citizen Evidence" : "Submit verification report")}
           </button>
           {result && (
-            <div className="mt-3 rounded-lg bg-green-50 p-3 text-sm text-green-800 dark:bg-green-950/40 dark:text-green-300">
+            <div className="rise-in mt-3 rounded-lg bg-green-50 p-3 text-sm text-green-800 dark:bg-green-950/40 dark:text-green-300">
               <p className="font-bold">✓ {result.message}</p>
               <p className="mt-0.5 text-xs">
                 {result.submission_kind === "citizen" && <>Review status: {result.review_status} · </>}
@@ -292,7 +347,7 @@ export default function VerifyPortal() {
 
       {/* Recent community reports */}
       {project && recent.length > 0 && (
-        <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <section className="rise-in rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
           <h3 className="text-sm font-bold text-gray-900 dark:text-white">Recent reports for this project</h3>
           <ul className="mt-2 divide-y divide-gray-100 dark:divide-gray-700">
             {recent.map((r, i) => (

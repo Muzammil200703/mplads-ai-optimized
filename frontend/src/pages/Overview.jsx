@@ -4,6 +4,7 @@ import {
   getAINarrativeInsights,
   getDashboardStates,
   getAnomaliesSummary,
+  getEarlyWarning,
 } from "../services/api"
 import { formatCrore, formatNumber } from "../utils/format"
 
@@ -12,6 +13,8 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
   const [narratives, setNarratives] = useState([])
   const [stateData, setStateData] = useState([])
   const [anomaliesSummary, setAnomaliesSummary] = useState(null)
+  const [earlyWarning, setEarlyWarning] = useState(null)
+  const [ewExpanded, setEwExpanded] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const [backendConnected, setBackendConnected] = useState(false)
@@ -23,11 +26,12 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
         setError("")
 
         const fyParams = fy ? { fy } : {}
-        const [ovRes, narrRes, statesRes, anomRes] = await Promise.allSettled([
+        const [ovRes, narrRes, statesRes, anomRes, ewRes] = await Promise.allSettled([
           getDashboardOverview(fyParams),
           getAINarrativeInsights(fyParams),
           getDashboardStates(fyParams),
           getAnomaliesSummary(fyParams),
+          getEarlyWarning(fyParams),
         ])
 
         if (ovRes.status === "fulfilled") {
@@ -45,6 +49,10 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
 
         if (anomRes.status === "fulfilled") {
           setAnomaliesSummary(anomRes.value)
+        }
+
+        if (ewRes.status === "fulfilled") {
+          setEarlyWarning(ewRes.value)
         }
 
         if (ovRes.status === "rejected" && statesRes.status === "rejected") {
@@ -66,11 +74,11 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
   }, [fy])
 
   const pageClasses = darkMode
-    ? "bg-[#111827] text-[#f3f4f6]"
+    ? "bg-[#0a0a0c] text-[#f3f4f6]"
     : "bg-[#f8fafc] text-[#151c27]"
 
   const cardClasses = darkMode
-    ? "bg-[#1f2937] border-[#374151]"
+    ? "bg-[#17181c] border-[#2a2a2f]"
     : "bg-white border-[#d9dee8]"
 
   const mutedText = darkMode ? "text-[#9ca3af]" : "text-[#64748b]"
@@ -132,7 +140,7 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
 
       {/* AI NARRATIVE INSIGHTS BANNER */}
       {narratives.length > 0 && (
-        <div className="mb-7 rounded-xl border border-blue-200 bg-gradient-to-r from-blue-50 via-white to-blue-50/50 p-5 shadow-sm dark:border-blue-900/60 dark:from-[#1e293b] dark:via-[#1f2937] dark:to-[#172033]">
+        <div className="mb-7 rounded-xl border border-blue-200 bg-gradient-to-r from-blue-50 via-white to-blue-50/50 p-5 shadow-sm dark:border-blue-900/60 dark:from-[#191a1f] dark:via-[#17181c] dark:to-[#141418]">
           <div className="mb-3 flex items-center gap-2">
             <span className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-600 text-xs text-white">✨</span>
             <h3 className="text-xs font-bold uppercase tracking-wider text-blue-950 dark:text-blue-200">
@@ -143,7 +151,7 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
             {narratives.map((item, idx) => (
               <div
                 key={idx}
-                className="rounded-lg border border-blue-100 bg-white/80 p-3 shadow-2xs dark:border-gray-700/60 dark:bg-[#111827]/70"
+                className="rounded-lg border border-blue-100 bg-white/80 p-3 shadow-2xs dark:border-gray-700/60 dark:bg-[#0a0a0c]/70"
               >
                 <div className="flex items-center gap-2">
                   <span className="text-sm">
@@ -159,6 +167,125 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* EARLY WARNING SUMMARY — derived from the risk engine + recorded fields */}
+      {earlyWarning && (
+        <div className={`mb-7 rounded-xl border p-5 shadow-sm ${cardClasses}`}>
+          <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h3 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider">
+                <span>🚨</span> Early Warning Summary
+              </h3>
+              <p className={`mt-0.5 text-xs ${mutedText}`}>
+                Portfolio health bands derived from the existing AI risk engine and recorded progress data.
+              </p>
+            </div>
+            <button
+              onClick={() => setEwExpanded((v) => !v)}
+              className="self-start rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-semibold transition hover:bg-gray-50 dark:border-gray-600 dark:hover:bg-gray-800"
+            >
+              {ewExpanded ? "Hide details ↑" : "Show details ↓"}
+            </button>
+          </div>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            {[
+              { key: "normal", label: "Normal", icon: "🟢", count: earlyWarning.bands?.normal, color: "text-green-600 dark:text-green-400", ring: "border-green-200 dark:border-green-900/60", desc: "No active risk indicators" },
+              { key: "watch", label: "Watch", icon: "🟡", count: earlyWarning.bands?.watch, color: "text-amber-600 dark:text-amber-400", ring: "border-amber-200 dark:border-amber-900/60", desc: "Leading indicators — spend with no progress, stalled starts" },
+              { key: "early", label: "Early Warning", icon: "🟠", count: earlyWarning.bands?.early_warning, color: "text-orange-600 dark:text-orange-400", ring: "border-orange-200 dark:border-orange-900/60", desc: "Medium risk score from the AI engine" },
+              { key: "critical", label: "Critical", icon: "🔴", count: earlyWarning.bands?.critical, color: "text-red-600 dark:text-red-400", ring: "border-red-200 dark:border-red-900/60", desc: "High risk score — review soon" },
+            ].map((b) => (
+              <div key={b.key} className={`rounded-xl border-2 ${b.ring} p-3.5 transition-all duration-200 hover:shadow-md`}>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wide">{b.icon} {b.label}</span>
+                </div>
+                <p className={`mt-2 font-mono text-2xl font-bold ${b.color}`}>{(b.count || 0).toLocaleString("en-IN")}</p>
+                <p className={`mt-1 text-[0.625rem] leading-snug ${mutedText}`}>{b.desc}</p>
+              </div>
+            ))}
+          </div>
+          {ewExpanded && (
+            <div className="mt-4 space-y-4 border-t border-gray-100 pt-4 dark:border-gray-700/60">
+              {/* FY trends — sanctioned vs expenditure + completed + avg risk */}
+              {earlyWarning.fy_trends?.length > 0 && (
+                <div>
+                  <p className="mb-2 text-[0.6875rem] font-bold uppercase tracking-wider text-gray-400">Financial Year Trends (recorded data)</p>
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[540px] text-left text-xs">
+                      <thead>
+                        <tr className={`border-b ${"border-gray-200 dark:border-gray-700"}`}>
+                          <th className="py-1.5 pr-3 font-bold uppercase tracking-wide text-gray-400">FY</th>
+                          <th className="py-1.5 pr-3 text-right font-bold uppercase tracking-wide text-gray-400">Projects</th>
+                          <th className="py-1.5 pr-3 text-right font-bold uppercase tracking-wide text-gray-400">Sanctioned</th>
+                          <th className="py-1.5 pr-3 text-right font-bold uppercase tracking-wide text-gray-400">Expenditure</th>
+                          <th className="py-1.5 pr-3 text-right font-bold uppercase tracking-wide text-gray-400">Utilization</th>
+                          <th className="py-1.5 pr-3 text-right font-bold uppercase tracking-wide text-gray-400">Completed</th>
+                          <th className="py-1.5 text-right font-bold uppercase tracking-wide text-gray-400">Avg Risk</th>
+                        </tr>
+                      </thead>
+                      <tbody className="font-mono">
+                        {earlyWarning.fy_trends.map((t) => (
+                          <tr key={t.fy} className="border-b border-gray-50 last:border-0 dark:border-gray-800">
+                            <td className="py-1.5 pr-3 font-bold">{t.fy}</td>
+                            <td className="py-1.5 pr-3 text-right">{t.projects.toLocaleString("en-IN")}</td>
+                            <td className="py-1.5 pr-3 text-right">₹{formatCrore(t.sanctioned)} Cr</td>
+                            <td className="py-1.5 pr-3 text-right">₹{formatCrore(t.expenditure)} Cr</td>
+                            <td className={`py-1.5 pr-3 text-right font-bold ${t.sanctioned > 0 && t.expenditure / t.sanctioned > 0.9 ? "text-amber-600 dark:text-amber-400" : "text-blue-600 dark:text-blue-400"}`}>
+                              {t.sanctioned > 0 ? `${((t.expenditure / t.sanctioned) * 100).toFixed(1)}%` : "—"}
+                            </td>
+                            <td className="py-1.5 pr-3 text-right">{t.completed.toLocaleString("en-IN")}</td>
+                            <td className={`py-1.5 text-right font-bold ${t.avg_risk >= 60 ? "text-red-500" : t.avg_risk >= 30 ? "text-amber-500" : "text-green-600"}`}>
+                              {t.avg_risk > 0 ? t.avg_risk : "—"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+              {/* Monthly expenditure sparkline-bars (compact) */}
+              {earlyWarning.monthly_expenditure?.length > 0 && (
+                <div>
+                  <p className="mb-2 text-[0.6875rem] font-bold uppercase tracking-wider text-gray-400">Expenditure trend (monthly, from the payment ledger)</p>
+                  <div className="flex h-16 items-end gap-1">
+                    {(() => {
+                      const months = earlyWarning.monthly_expenditure.slice(-18)
+                      const max = Math.max(...months.map((m) => m.amount), 1)
+                      return months.map((m) => (
+                        <div key={m.month} className="group relative flex-1">
+                          <div
+                            className="w-full rounded-t bg-blue-500/70 transition-all duration-300 hover:bg-blue-600 dark:bg-blue-400/70"
+                            style={{ height: `${Math.max(3, (m.amount / max) * 60)}px` }}
+                            title={`${m.month}: ₹${formatCrore(m.amount)} Cr (${m.transactions.toLocaleString("en-IN")} tx)`}
+                          />
+                        </div>
+                      ))
+                    })()}
+                  </div>
+                  <p className={`mt-1 text-[0.5625rem] ${mutedText}`}>Last {Math.min(18, earlyWarning.monthly_expenditure.length)} months with recorded expenditure · hover for values</p>
+                </div>
+              )}
+              {/* Hot states */}
+              {earlyWarning.hot_states?.length > 0 && (
+                <div>
+                  <p className="mb-2 text-[0.6875rem] font-bold uppercase tracking-wider text-gray-400">States with most flagged projects</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {earlyWarning.hot_states.filter((s) => s.flagged > 0).slice(0, 8).map((s) => (
+                      <button
+                        key={s.state}
+                        onClick={() => onDrillDown && onDrillDown("Risk Center", { state: s.state })}
+                        className="rounded-full border border-gray-200 px-2.5 py-1 text-[0.6875rem] font-semibold transition hover:bg-gray-50 dark:border-gray-600 dark:hover:bg-gray-800"
+                      >
+                        {s.state} <span className="ml-1 font-mono font-bold text-red-500">{s.flagged}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 

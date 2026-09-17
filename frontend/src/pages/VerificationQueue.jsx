@@ -76,7 +76,7 @@ function QueueInner({ onOpenProject }) {
   ]
 
   return (
-    <div className="min-h-full bg-[#f9f9ff] p-4 text-[#151c27] transition-colors duration-200 sm:p-6 dark:bg-[#111827] dark:text-gray-100">
+    <div className="min-h-full bg-[#f9f9ff] p-4 text-[#151c27] transition-colors duration-200 sm:p-6 dark:bg-[#0a0a0c] dark:text-gray-100">
       <div className="mx-auto max-w-[1440px] space-y-4">
         <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
           <div>
@@ -105,7 +105,7 @@ function QueueInner({ onOpenProject }) {
               className={`rounded-full px-3.5 py-1.5 text-[0.8125rem] font-bold transition ${
                 filter === p.key
                   ? "bg-[#031632] text-white dark:bg-blue-600"
-                  : "border border-[#dcdde4] bg-white text-[#44474d] hover:bg-gray-50 dark:border-[#3f4657] dark:bg-[#111827] dark:text-[#9ca3af] dark:hover:bg-[#1f2937]"
+                  : "border border-[#dcdde4] bg-white text-[#44474d] hover:bg-gray-50 dark:border-[#2e2e33] dark:bg-[#0a0a0c] dark:text-[#9ca3af] dark:hover:bg-[#17181c]"
               }`}
             >
               {p.label}
@@ -120,10 +120,10 @@ function QueueInner({ onOpenProject }) {
           </div>
         )}
         {loading && (
-          <div className="rounded-xl border border-[#dcdde4] bg-white p-8 text-center text-sm text-[#44474d] dark:border-[#3f4657] dark:bg-[#111827] dark:text-[#9ca3af]">Loading citizen evidence…</div>
+          <div className="rounded-xl border border-[#dcdde4] bg-white p-8 text-center text-sm text-[#44474d] dark:border-[#2e2e33] dark:bg-[#0a0a0c] dark:text-[#9ca3af]">Loading citizen evidence…</div>
         )}
         {!loading && !error && data && data.items.length === 0 && (
-          <div className="rounded-xl border border-[#dcdde4] bg-white p-10 text-center dark:border-[#3f4657] dark:bg-[#111827]">
+          <div className="rounded-xl border border-[#dcdde4] bg-white p-10 text-center dark:border-[#2e2e33] dark:bg-[#0a0a0c]">
             <div className="text-4xl">📥</div>
             <p className="mt-3 font-semibold text-[#031632] dark:text-[#f3f4f6]">No {filter === "all" ? "" : filter} citizen submissions</p>
             <p className="mt-1 text-sm text-[#44474d] dark:text-[#9ca3af]">Citizen evidence submitted through Ground Verification lands here for review.</p>
@@ -132,7 +132,7 @@ function QueueInner({ onOpenProject }) {
         {!loading && !error && data && data.items.length > 0 && (
           <div className="space-y-3">
             {data.items.map((r) => (
-              <div key={r.report_id} className="rounded-xl border border-[#dcdde4] bg-white p-4 dark:border-[#3f4657] dark:bg-[#111827]">
+              <div key={r.report_id} className="rounded-xl border border-[#dcdde4] bg-white p-4 dark:border-[#2e2e33] dark:bg-[#0a0a0c]">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
@@ -146,7 +146,7 @@ function QueueInner({ onOpenProject }) {
                     <p className="text-[0.8125rem] text-[#44474d] dark:text-[#9ca3af]">
                       {r.project_state || "—"} · official status: {r.project_official_status || "—"}
                     </p>
-                    {r.note && <p className="mt-1 rounded bg-gray-50 p-2 text-[0.8125rem] text-[#44474d] dark:bg-[#1f2937] dark:text-[#9ca3af]">“{r.note}”</p>}
+                    {r.note && <p className="mt-1 rounded bg-gray-50 p-2 text-[0.8125rem] text-[#44474d] dark:bg-[#17181c] dark:text-[#9ca3af]">“{r.note}”</p>}
                     <p className="mt-1.5 text-xs text-[#44474d]/70 dark:text-[#9ca3af]/70">
                       By {r.reporter} · {r.created_at?.replace("T", " ").slice(0, 16)} · GPS: {r.lat != null ? `${r.lat.toFixed(4)}, ${r.lon?.toFixed(4)} (${r.gps_source})` : "not captured"} {r.photo_hash_id ? "· 📷 photo stored" : ""}
                     </p>
@@ -159,7 +159,7 @@ function QueueInner({ onOpenProject }) {
                   <div className="flex shrink-0 flex-col items-end gap-2">
                     <button
                       onClick={() => onOpenProject?.(r.project_id)}
-                      className="rounded-lg border border-[#dcdde4] px-3 py-1.5 text-[0.8125rem] font-bold text-[#031632] transition hover:bg-[#f0f3ff] dark:border-[#3f4657] dark:text-[#f3f4f6] dark:hover:bg-[#1f2937]"
+                      className="rounded-lg border border-[#dcdde4] px-3 py-1.5 text-[0.8125rem] font-bold text-[#031632] transition hover:bg-[#f0f3ff] dark:border-[#2e2e33] dark:text-[#f3f4f6] dark:hover:bg-[#17181c]"
                     >
                       Open project
                     </button>
@@ -193,7 +193,7 @@ function QueueInner({ onOpenProject }) {
                   </div>
                 </div>
                 {reviewPanel?.reportId === r.report_id && (
-                  <div className="mt-3 rounded-lg border border-[#dcdde4] bg-[#f9f9ff] p-3 dark:border-[#3f4657] dark:bg-[#0b1220]">
+                  <div className="mt-3 rounded-lg border border-[#dcdde4] bg-[#f9f9ff] p-3 dark:border-[#2e2e33] dark:bg-[#0d0d10]">
                     <label className="text-xs font-bold uppercase tracking-wide text-[#44474d] dark:text-[#9ca3af]">
                       {reviewPanel.decision === "verified" ? "Verification note (optional)" : "Rejection note (required)"}
                     </label>
@@ -202,7 +202,7 @@ function QueueInner({ onOpenProject }) {
                       onChange={(e) => setNote(e.target.value)}
                       rows={2}
                       placeholder={reviewPanel.decision === "verified" ? "e.g. visited site, evidence consistent…" : "e.g. photo does not match the project location…"}
-                      className="mt-1.5 w-full rounded-lg border border-[#dcdde4] bg-white p-2 text-sm dark:border-[#3f4657] dark:bg-[#111827] dark:text-gray-100"
+                      className="mt-1.5 w-full rounded-lg border border-[#dcdde4] bg-white p-2 text-sm dark:border-[#2e2e33] dark:bg-[#0a0a0c] dark:text-gray-100"
                     />
                     <div className="mt-2 flex gap-2">
                       <button
@@ -212,7 +212,7 @@ function QueueInner({ onOpenProject }) {
                       >
                         Confirm {reviewPanel.decision}
                       </button>
-                      <button onClick={() => setReviewPanel(null)} className="rounded-lg border border-[#dcdde4] px-3 py-1.5 text-xs font-bold dark:border-[#3f4657]">Cancel</button>
+                      <button onClick={() => setReviewPanel(null)} className="rounded-lg border border-[#dcdde4] px-3 py-1.5 text-xs font-bold dark:border-[#2e2e33]">Cancel</button>
                     </div>
                   </div>
                 )}

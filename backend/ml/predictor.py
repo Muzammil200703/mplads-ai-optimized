@@ -30,12 +30,22 @@ np = None
 _shap = None
 
 
-def _ensure_ml_libs():
-    """Import numpy/shap on first use; safe to call repeatedly."""
-    global np, _shap
+def _ensure_np():
+    """Import numpy only (no shap) — the scoring path needs just numpy.
+    shap pulls in numba/llvmlite (~150MB); loading it on every first predict
+    (including batch re-scores) was unnecessary: only the explanation path
+    uses it."""
+    global np
     if np is None:
         import numpy as _np
         np = _np
+
+
+def _ensure_ml_libs():
+    """Import numpy/shap on first use; safe to call repeatedly.
+    Used only by the SHAP explanation path."""
+    global np, _shap
+    _ensure_np()
     if _shap is None:
         import shap as _shap_mod
         _shap = _shap_mod
@@ -335,6 +345,27 @@ def _summarize_reasons(contributions, rule_reasons, risk_level):
     }
 
 
+def _clean_feature_vector(feat: dict) -> list:
+    """features-ordered numeric vector from a feature dict, sanitized the same
+    way the previous pandas path did (inf/-inf/nan → 0, missing → 0).
+    A single 1×N numpy array replaces the pandas DataFrame — pandas pulled
+    ~30MB into the scoring path that never needed a DataFrame."""
+    _ensure_np()
+    vals = []
+    for f in features:
+        v = feat.get(f, 0)
+        if v is None:
+            v = 0
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            v = 0
+        if v != v or v in (float("inf"), float("-inf")):  # nan / inf
+            v = 0
+        vals.append(v)
+    return np.array([vals])
+
+
 def create_project_features(project):
     """Create features for a single project, using peer stats if available."""
     sanctioned = float(getattr(project, "sanctioned_amount", 0) or 0)
@@ -348,41 +379,91 @@ def create_project_features(project):
                "sanctioned_amount": sanctioned, "expenditure": expenditure,
                "completion_percentage": completion}
         feat = _crf(row, peer_stats)
+        return _clean_feature_vector(feat)
 
-        import pandas as pd
-        df = pd.DataFrame([feat])
-        if features:
-            for f in features:
-                if f not in df.columns:
-                    df[f] = 0
-            df = df[features]
-        df = df.replace([float("inf"), float("-inf")], 0).fillna(0)
-        return df
-
-    # Fallback: v1 absolute features
-    import pandas as pd
-    data = {
-        "sanctioned_amount": sanctioned,
-        "expenditure": expenditure,
-        "completion_percentage": completion,
+    # Fallback: v1 absolute features (same formulas as before, numpy-only)
+    _ensure_np()
+    safe_sanctioned = sanctioned if sanctioned else 1
+    safe_completion = completion if completion else 1
+    feat = {
+        "utilization_ratio": expenditure / safe_sanctioned,
+        "unspent_amount": sanctioned - expenditure,
+        "expenditure_per_completion": expenditure / safe_completion,
+        "remaining_completion": 100 - completion,
+        "high_value_project": 1 if sanctioned >= 1000000 else 0,
+        "zero_expenditure": 1 if expenditure == 0 else 0,
+        "zero_completion": 1 if completion == 0 else 0,
     }
-    df = pd.DataFrame([data])
-    df["utilization_ratio"] = df["expenditure"] / df["sanctioned_amount"].replace(0, 1)
-    df["unspent_amount"] = df["sanctioned_amount"] - df["expenditure"]
-    df["expenditure_per_completion"] = df["expenditure"] / df["completion_percentage"].replace(0, 1)
-    df["remaining_completion"] = 100 - df["completion_percentage"]
-    df["high_value_project"] = (df["sanctioned_amount"] >= 1000000).astype(int)
-    df["zero_expenditure"] = (df["expenditure"] == 0).astype(int)
-    df["zero_completion"] = (df["completion_percentage"] == 0).astype(int)
+    return _clean_feature_vector(feat)
 
-    if features:
-        for f in features:
-            if f not in df.columns:
-                df[f] = 0
-        df = df[features]
 
-    df = df.replace([float("inf"), float("-inf")], 0).fillna(0)
-    return df
+# ═══ Point-level rule constants (pure, reusable) ════════════════════
+# Single source of truth for the rule weights. predict_risk() below reads
+# these same literals inline for its production path; the pure scoring
+# function exposes them so simulations and explanations can report exact
+# point contributions without duplicating the formula anywhere.
+RULE_POINTS = [
+    # (rule key, reason text, points, trigger predicate on (s, e, c, status))
+    ("overspend", "Expenditure exceeds sanctioned amount", 40,
+     lambda s, e, c, st: s > 0 and e > s),
+    ("high_spend_low_progress", "High expenditure with low physical completion", 35,
+     lambda s, e, c, st: s > 0 and (e / s) >= 0.80 and c < 50),
+    ("zero_progress_spend", "Disbursements made with 0% physical completion", 30,
+     lambda s, e, c, st: e > 0 and c == 0),
+    ("high_value_delay", "High-value project with severe progress delay", 20,
+     lambda s, e, c, st: s >= 1000000 and c < 25),
+    ("completed_below_90", "Project marked completed but physical progress is below 90%", 25,
+     lambda s, e, c, st: st == "completed" and c < 90),
+    ("high_completion_zero_spend", "High completion recorded with zero expenditure", 20,
+     lambda s, e, c, st: c >= 80 and e == 0),
+    ("very_low_utilization", "Very low fund utilization and low completion", 15,
+     lambda s, e, c, st: s >= 500000 and (e / s) < 0.10 and c < 30),
+]
+ML_ANOMALY_POINTS = 25
+
+
+def score_rules_pure(sanctioned, expenditure, completion, status, ml_anomaly=False):
+    """Pure point-in-time re-computation of the deterministic rule engine.
+
+    Same formulas, thresholds and point weights as predict_risk(); takes
+    plain numbers instead of a Project row so "what-if" simulations can
+    re-score hypothetical values with the EXISTING logic — never a second
+    formula. Returns (risk_score, risk_level, triggered) where triggered is
+    [{key, reason, points}] in rule order.
+    """
+    s = max(0.0, float(sanctioned or 0))
+    e = max(0.0, float(expenditure or 0))
+    c = min(100.0, max(0.0, float(completion or 0)))
+    st = str(status or "").strip().lower()
+
+    triggered = []
+    score = 0
+    for key, reason, points, trigger in RULE_POINTS:
+        try:
+            hit = trigger(s, e, c, st)
+        except Exception:
+            hit = False
+        if hit:
+            triggered.append({"key": key, "reason": reason, "points": points})
+            score += points
+    if ml_anomaly:
+        triggered.append({
+            "key": "ml_anomaly",
+            "reason": "ML anomaly contribution (carried over from the stored result — see note)",
+            "points": ML_ANOMALY_POINTS,
+        })
+        score += ML_ANOMALY_POINTS
+
+    score = min(100, max(0, score))
+    if score >= 60:
+        level = "High"
+    elif score >= 30:
+        level = "Medium"
+    elif score > 0:
+        level = "Low"
+    else:
+        level = "None"
+    return score, level, triggered
 
 
 def predict_risk(project, batch_mode=False):

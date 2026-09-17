@@ -282,7 +282,7 @@ export default function CompareProjects({ fy }) {
   const colWidth = Math.max(260, Math.floor(1000 / Math.max(enriched.length, 1)))
 
   return (
-    <div className="min-h-full bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-gray-100">
+    <div className="min-h-full bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#0a0a0c] dark:text-gray-100">
       <div className="mx-auto max-w-[1440px] space-y-5">
 
         {/* HEADER */}
@@ -297,7 +297,7 @@ export default function CompareProjects({ fy }) {
         </div>
 
         {/* SEARCH */}
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-colors dark:border-gray-700/80 dark:bg-[#1f2937]">
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-colors dark:border-gray-700/80 dark:bg-[#17181c]">
           <div className="flex items-center justify-between">
             <label className="text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-200">
               Search Projects
@@ -321,7 +321,7 @@ export default function CompareProjects({ fy }) {
                 onFocus={() => setSearchFocused(true)}
                 onBlur={() => setTimeout(() => setSearchFocused(false), 200)}
                 placeholder="Search by ID, name, state, constituency, MP..."
-                className="w-full rounded-lg border border-gray-300 bg-white py-2.5 pl-9 pr-3 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white"
+                className="w-full rounded-lg border border-gray-300 bg-white py-2.5 pl-9 pr-3 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#0a0a0c] dark:text-white"
               />
               {searching && (
                 <span className="absolute right-3 top-1/2 -translate-y-1/2">
@@ -333,7 +333,7 @@ export default function CompareProjects({ fy }) {
 
           {showSearchResults && (
             <div className="mt-3 max-h-72 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-700">
-              <div className="bg-gray-50 px-4 py-2 text-[0.625rem] font-bold uppercase tracking-wider text-gray-400 dark:bg-[#172033]">
+              <div className="bg-gray-50 px-4 py-2 text-[0.625rem] font-bold uppercase tracking-wider text-gray-400 dark:bg-[#141418]">
                 {searchTotal.toLocaleString("en-IN")}+ results — showing first {results.length}
               </div>
               {results.map((proj) => {
@@ -343,7 +343,7 @@ export default function CompareProjects({ fy }) {
                   <div
                     key={proj.id}
                     className={`flex items-center justify-between gap-3 border-b border-gray-100 px-4 py-3 transition dark:border-gray-700/40 ${
-                      isSelected ? "bg-blue-50 dark:bg-blue-950/30" : "hover:bg-gray-50 dark:hover:bg-[#172033]"
+                      isSelected ? "bg-blue-50 dark:bg-blue-950/30" : "hover:bg-gray-50 dark:hover:bg-[#141418]"
                     }`}
                   >
                     <div className="min-w-0 flex-1">
@@ -395,7 +395,7 @@ export default function CompareProjects({ fy }) {
                 return (
                   <span
                     key={s.id}
-                    className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-800 shadow-sm dark:border-blue-800 dark:bg-[#1f2937] dark:text-blue-200"
+                    className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-800 shadow-sm dark:border-blue-800 dark:bg-[#17181c] dark:text-blue-200"
                   >
                     <span className="font-mono text-[0.625rem] font-bold text-blue-400">#{s.id}</span>
                     <span className="max-w-[180px] truncate">{p.project_name || "Unnamed"}</span>
@@ -420,7 +420,7 @@ export default function CompareProjects({ fy }) {
 
         {/* EMPTY STATE */}
         {!hasComparison && (
-          <div className="rounded-xl border-2 border-dashed border-gray-200 bg-white/50 p-12 text-center transition-colors dark:border-gray-700 dark:bg-[#1f2937]/50">
+          <div className="rounded-xl border-2 border-dashed border-gray-200 bg-white/50 p-12 text-center transition-colors dark:border-gray-700 dark:bg-[#17181c]/50">
             <div className="text-4xl mb-3">⚖️</div>
             <p className="text-sm font-semibold text-gray-500 dark:text-gray-400">
               {selected.length === 0
@@ -437,7 +437,7 @@ export default function CompareProjects({ fy }) {
         {hasComparison && (
           <div className="space-y-5">
 
-            <div className="rounded-xl border border-gray-200 bg-white shadow-sm transition-colors dark:border-gray-700/80 dark:bg-[#1f2937]">
+            <div className="rounded-xl border border-gray-200 bg-white shadow-sm transition-colors dark:border-gray-700/80 dark:bg-[#17181c]">
               <div className="border-b border-gray-200 px-6 py-4 dark:border-gray-700">
                 <h3 className="text-base font-bold text-[#031632] dark:text-white">
                   Detailed Comparison
@@ -467,7 +467,7 @@ export default function CompareProjects({ fy }) {
                   {/* PROJECT HEADERS — sticky top */}
                   <thead>
                     <tr className="border-b border-gray-200 dark:border-gray-700">
-                      <th className="sticky left-0 z-20 bg-gray-50 p-4 text-left align-top dark:bg-[#172033]">
+                      <th className="sticky left-0 z-20 bg-gray-50 p-4 text-left align-top dark:bg-[#141418]">
                         <span className="text-[0.6875rem] font-bold uppercase tracking-wider text-gray-400">
                           Metric
                         </span>
@@ -524,16 +524,16 @@ export default function CompareProjects({ fy }) {
                           key={row.label}
                           className={`border-b border-gray-100 transition dark:border-gray-700/40 ${
                             isEven
-                              ? "bg-white dark:bg-[#1f2937]"
-                              : "bg-gray-50/80 dark:bg-[#172033]/50"
+                              ? "bg-white dark:bg-[#17181c]"
+                              : "bg-gray-50/80 dark:bg-[#141418]/50"
                           }`}
                         >
                           {/* Sticky metric label */}
                           <td
                             className={`sticky left-0 z-10 p-4 text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 ${
                               isEven
-                                ? "bg-white dark:bg-[#1f2937]"
-                                : "bg-gray-50/80 dark:bg-[#172033]/50"
+                                ? "bg-white dark:bg-[#17181c]"
+                                : "bg-gray-50/80 dark:bg-[#141418]/50"
                             }`}
                           >
                             {row.label}
@@ -630,7 +630,7 @@ export default function CompareProjects({ fy }) {
                                   </span>
                                   <div className="mt-1.5 h-2 w-full rounded-full bg-gray-100 dark:bg-gray-700">
                                     <div
-                                      className={`h-full rounded-full transition-all duration-500 ${barColor}`}
+                                      className={`bar-start h-full rounded-full transition-all duration-500 ${barColor}`}
                                       style={{ width: `${Math.min(100, pct)}%` }}
                                     />
                                   </div>
@@ -716,7 +716,7 @@ export default function CompareProjects({ fy }) {
             {/* ===== CHARTS BELOW TABLE ===== */}
 
             {/* EXPENDITURE VS SANCTIONED */}
-            <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm transition-colors dark:border-gray-700/80 dark:bg-[#1f2937]">
+            <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm transition-colors dark:border-gray-700/80 dark:bg-[#17181c]">
               <h3 className="mb-1 text-base font-bold text-[#031632] dark:text-white">
                 Expenditure vs Sanctioned Amount
               </h3>
@@ -743,7 +743,7 @@ export default function CompareProjects({ fy }) {
                       <div className="relative h-6 w-full overflow-hidden rounded bg-gray-100 dark:bg-gray-700">
                         <div className="absolute inset-y-0 left-0 bg-blue-200/60 dark:bg-blue-800/40" style={{ width: "100%" }} />
                         <div
-                          className={`absolute inset-y-0 left-0 rounded ${overBudget ? "bg-red-500/80" : "bg-blue-500/80"}`}
+                          className={`bar-start absolute inset-y-0 left-0 rounded ${overBudget ? "bg-red-500/80" : "bg-blue-500/80"}`}
                           style={{ width: `${Math.min(100, pct)}%` }}
                         />
                       </div>
@@ -758,7 +758,7 @@ export default function CompareProjects({ fy }) {
             </div>
 
             {/* PHYSICAL PROGRESS */}
-            <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm transition-colors dark:border-gray-700/80 dark:bg-[#1f2937]">
+            <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm transition-colors dark:border-gray-700/80 dark:bg-[#17181c]">
               <h3 className="mb-1 text-base font-bold text-[#031632] dark:text-white">
                 Physical Progress Comparison
               </h3>

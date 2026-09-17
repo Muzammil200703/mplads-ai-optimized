@@ -294,7 +294,11 @@ function AppShell() {
     return (
       <Suspense fallback={<PageSkeleton cards={4} columns={4} />}>
         {pages.map(({ key, el }) => (
-          <div key={key} style={{ display: key === currentPage ? "block" : "none" }}>
+          <div
+            key={key}
+            className="rise-refresh"
+            style={{ display: key === currentPage ? "block" : "none" }}
+          >
             {visitedPages.current.has(key) ? el : null}
           </div>
         ))}
@@ -324,7 +328,7 @@ function AppShell() {
     <div
       className={`h-[100dvh] overflow-hidden ${
         darkMode
-          ? "dark bg-[#111827] text-[#f3f4f6]"
+          ? "dark bg-[#0a0a0c] text-[#f3f4f6]"
           : "bg-[#f9f9ff] text-[#151c27]"
       }`}
     >

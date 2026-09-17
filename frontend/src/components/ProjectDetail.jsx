@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { getProjectDetail, getSimilarProjects, getRiskExplanation, getAnomalyExplanation, getProjectTimeline, getProjectActivity, getInvestigation, saveProject as apiSaveProject, unsaveProject } from "../services/api"
 import { useAuth } from "../context/AuthContext"
 import {
@@ -9,8 +9,13 @@ import {
   WhatIfSimulator,
   PeerBenchmarkPanel,
   AuditCasePanel,
+  PredictiveInsightsPanel,
 } from "./AuditIntelligence"
 import ForensicsPanel from "./ForensicsPanel"
+import ForensicModeModal from "./ForensicModeModal"
+import RecTimelineBlock from "./RecTimelineBlock"
+import ProjectDNASection from "./ProjectDNASection"
+import RiskStressTest from "./RiskStressTest"
 import { parseReasons } from "../utils/reasons"
 
 // ── Timeline helpers ─────────────────────────────────────────
@@ -33,7 +38,7 @@ function TimelineSection({ timeline }) {
   const { events, delay_intelligence: di, meta } = timeline
   if (!events || events.length === 0) {
     return (
-      <div className="rounded-xl border border-gray-200 bg-gray-50/50 p-4 text-center dark:border-gray-700 dark:bg-[#111827]">
+      <div className="rounded-xl border border-gray-200 bg-gray-50/50 p-4 text-center dark:border-gray-700 dark:bg-[#0a0a0c]">
         <p className="text-xs font-semibold text-gray-500">No timeline events could be matched for this project.</p>
         <p className="mt-1 text-[0.625rem] text-gray-400">Lifecycle records for this work are not present in the available MPLADS datasets.</p>
       </div>
@@ -49,7 +54,7 @@ function TimelineSection({ timeline }) {
   return (
     <div className="space-y-4">
       {/* Lifecycle events */}
-      <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-[#111827]">
+      <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-[#0a0a0c]">
         <div className="mb-3 flex items-center justify-between">
           <h4 className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">Project Lifecycle</h4>
           <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[0.5625rem] font-bold text-gray-500 dark:bg-gray-800">{meta?.data_period?.from ? `Data period: ${meta.data_period.from} → ${meta.data_period.to}` : ""}</span>
@@ -60,7 +65,7 @@ function TimelineSection({ timeline }) {
             const st = TIMELINE_STYLES[ev.event_type] || TIMELINE_STYLES.status
             return (
               <div key={i} className="relative pb-4 last:pb-0">
-                <span className={`absolute -left-5 top-1 h-2.5 w-2.5 rounded-full ring-4 ring-white dark:ring-[#111827] ${st.dot}`} />
+                <span className={`absolute -left-5 top-1 h-2.5 w-2.5 rounded-full ring-4 ring-white dark:ring-[#0a0a0c] ${st.dot}`} />
                 <div className="flex flex-wrap items-baseline justify-between gap-x-2">
                   <p className={`text-xs font-bold ${st.label}`}>{ev.title}</p>
                   <p className="font-mono text-[0.625rem] font-semibold text-gray-500">{fmtDate(ev.date)}</p>
@@ -77,7 +82,7 @@ function TimelineSection({ timeline }) {
 
       {/* Delay Intelligence */}
       {di && (
-        <div className="rounded-xl border border-gray-200 bg-gray-50/50 p-4 dark:border-gray-700 dark:bg-[#111827]">
+        <div className="rounded-xl border border-gray-200 bg-gray-50/50 p-4 dark:border-gray-700 dark:bg-[#0a0a0c]">
           <div className="mb-3 flex items-center justify-between">
             <h4 className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">Delay Intelligence</h4>
             <span className={`rounded px-2 py-0.5 text-[0.625rem] font-bold ${statusColor}`}>{di.status}</span>
@@ -166,7 +171,7 @@ function TimelineSection({ timeline }) {
 
       {/* Data source / freshness disclaimer */}
       {meta?.disclaimer && (
-        <div className="rounded-lg border border-gray-200 bg-gray-50 p-2.5 dark:border-gray-700 dark:bg-[#111827]">
+        <div className="rounded-lg border border-gray-200 bg-gray-50 p-2.5 dark:border-gray-700 dark:bg-[#0a0a0c]">
           <p className="text-[0.5625rem] leading-relaxed text-gray-400">
             <span className="font-bold text-gray-500">Historical dataset:</span> {meta.disclaimer}
           </p>
@@ -273,6 +278,7 @@ function SaveProjectButton({ projectId }) {
 }
 
 function ProjectDetail({ projectId, onClose }) {
+  const { user, hasRole, can } = useAuth()
   const [detail, setDetail] = useState(null)
   const [similar, setSimilar] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -285,6 +291,24 @@ function ProjectDetail({ projectId, onClose }) {
   const [loadingExplanation, setLoadingExplanation] = useState(false)
   const [investigation, setInvestigation] = useState(null)
   const [auditSection, setAuditSection] = useState("evidence")
+  // Forensic Mode / Risk Stress Test overlays — render ON TOP of the
+  // existing detail interface without altering any of its structure.
+  const [showForensicMode, setShowForensicMode] = useState(false)
+  const [showStressTest, setShowStressTest] = useState(false)
+  const [stressTab, setStressTab] = useState(false) // Risk & Audit tab hosts the inline stress panel
+  // Closing animation: 150ms fade/dip, then unmount (reduced motion → instant)
+  const [closing, setClosing] = useState(false)
+  const closingRef = useRef(false)
+  const requestClose = () => {
+    if (closingRef.current) return
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      onClose()
+      return
+    }
+    closingRef.current = true
+    setClosing(true)
+    setTimeout(onClose, 150)
+  }
 
   useEffect(() => {
     if (!projectId) return
@@ -326,8 +350,8 @@ function ProjectDetail({ projectId, onClose }) {
 
   if (loading) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-2xs" onClick={onClose}>
-        <div className="rounded-2xl bg-white p-12 text-center shadow-soft-lg dark:bg-[#1f2937]" onClick={(e) => e.stopPropagation()}>
+      <div className={`anim-overlay-in fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-2xs ${closing ? "is-closing" : ""}`} onClick={requestClose}>
+        <div className="anim-card-in detail-loading-shimmer rounded-2xl bg-white p-12 text-center shadow-soft-lg dark:bg-[#17181c]" onClick={(e) => e.stopPropagation()}>
           <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent" />
           <p className="mt-3 text-sm font-medium">Loading project details...</p>
         </div>
@@ -337,8 +361,8 @@ function ProjectDetail({ projectId, onClose }) {
 
   if (!detail) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-2xs" onClick={onClose}>
-        <div className="rounded-2xl bg-white p-8 text-center shadow-soft-lg dark:bg-[#1f2937]" onClick={(e) => e.stopPropagation()}>
+      <div className={`anim-overlay-in fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-2xs ${closing ? "is-closing" : ""}`} onClick={requestClose}>
+        <div className="anim-card-in rounded-2xl bg-white p-8 text-center shadow-soft-lg dark:bg-[#17181c]" onClick={(e) => e.stopPropagation()}>
           <p className="text-sm text-gray-500">Project not found.</p>
           <button onClick={onClose} className="mt-4 rounded-lg bg-[#031632] px-4 py-2 text-xs font-bold text-white">Close</button>
         </div>
@@ -360,8 +384,11 @@ function ProjectDetail({ projectId, onClose }) {
   const recommendations = getAuditRecommendation(parsedReasons)
 
   return (
-    <div className="fixed inset-0 z-[80] bg-black/50 backdrop-blur-2xs transition-opacity" onClick={onClose}>
-      <div className="absolute right-0 top-0 h-full w-full sm:w-[720px] max-w-[95vw] overflow-y-auto border-l border-gray-200 bg-white p-4 sm:p-6 text-gray-900 shadow-soft-lg dark:border-gray-700 dark:bg-[#1f2937] dark:text-white" onClick={(e) => e.stopPropagation()}>
+    <div
+      className={`anim-overlay-in fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto bg-black/50 p-3 backdrop-blur-2xs transition-opacity sm:p-6 ${closing ? "is-closing" : ""}`}
+      onClick={requestClose}
+    >
+      <div className="anim-card-in relative my-auto w-full max-w-3xl rounded-2xl border border-[#dcdde4] bg-white p-5 text-gray-900 shadow-soft-lg sm:p-6 dark:border-[#2e2e33] dark:bg-[#17181c] dark:text-white" onClick={(e) => e.stopPropagation()}>
 
         {/* Header */}
         <div className="flex items-start justify-between">
@@ -375,9 +402,30 @@ function ProjectDetail({ projectId, onClose }) {
               }`}>{proj.status}</span>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {/* Forensic + stress-test actions — hidden entirely for roles
+                without permissions (never rendered disabled). Analysts
+                (rank-based) and audit-capable roles get them. */}
+            {user && (hasRole("analyst") || can("audit:action")) && (
+              <>
+                <button
+                  onClick={() => setShowStressTest(true)}
+                  title="Simulate risk-factor changes — read-only"
+                  className="rounded-lg border border-gray-200 px-2.5 py-1 text-[0.625rem] font-bold text-gray-600 transition hover:border-purple-300 hover:bg-purple-50 dark:border-gray-600 dark:text-gray-300 dark:hover:border-purple-700 dark:hover:bg-purple-950/40"
+                >
+                  🧪 Stress Test
+                </button>
+                <button
+                  onClick={() => setShowForensicMode(true)}
+                  title="Consolidated forensic evidence for this project — read-only"
+                  className="rounded-lg border border-gray-200 px-2.5 py-1 text-[0.625rem] font-bold text-gray-600 transition hover:border-blue-300 hover:bg-blue-50 dark:border-gray-600 dark:text-gray-300 dark:hover:border-blue-700 dark:hover:bg-blue-950/40"
+                >
+                  🔬 Investigate Project
+                </button>
+              </>
+            )}
             <SaveProjectButton projectId={proj.id} />
-            <button onClick={onClose} className="rounded-lg p-1.5 text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700">✕</button>
+            <button onClick={requestClose} className="rounded-lg p-1.5 text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700">✕</button>
           </div>
         </div>
 
@@ -430,6 +478,7 @@ function ProjectDetail({ projectId, onClose }) {
             { id: "audit", label: "Investigate" },
             { id: "timeline", label: "Timeline" },
             ...(similar?.similar_projects?.length > 0 ? [{ id: "similar", label: "Similar" }] : []),
+            { id: "dna", label: "🧬 DNA" },
           ].map((tab) => (
             <button key={tab.id} onClick={() => setActiveTab(tab.id)}
               className={`px-3 py-2 text-xs font-bold transition ${activeTab === tab.id ? "border-b-2 border-blue-600 text-blue-600 dark:text-blue-400" : "text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"}`}>
@@ -438,8 +487,8 @@ function ProjectDetail({ projectId, onClose }) {
           ))}
         </div>
 
-        {/* Tab Content */}
-        <div className="mt-4 space-y-4">
+        {/* Tab Content — keyed so each switch replays the subtle fade/slide-in */}
+        <div key={activeTab} className="anim-panel-in mt-4 space-y-4">
           {activeTab === "overview" && (
             <>
               <InfoGrid items={[
@@ -448,7 +497,17 @@ function ProjectDetail({ projectId, onClose }) {
                 { label: "Category", value: proj.project_type || "Not available" },
                 { label: "Status", value: proj.status || "Not available" },
               ]} />
+              {/* Recommendation & timeline facts — backend rec source of truth */}
+              <div className="rounded-xl border border-gray-200 bg-gray-50/50 p-4 dark:border-gray-700 dark:bg-[#0a0a0c]">
+                <p className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">Recommendation & Timeline</p>
+                <div className="mt-2.5">
+                  <RecTimelineBlock rec={detail.rec} />
+                </div>
+              </div>
               <ProgressCard completion={completion} />
+              {/* Predictive estimates + compliance checklist + payment-data
+                  availability — derived from recorded values only. */}
+              <PredictiveInsightsPanel detail={detail} />
             </>
           )}
 
@@ -461,7 +520,7 @@ function ProjectDetail({ projectId, onClose }) {
                 <MetricCard label="Utilization" value={`${utilization.toFixed(1)}%`} color={utilization > 100 ? "red" : "blue"} />
               </div>
               {/* Utilization Bar */}
-              <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#111827]">
+              <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#0a0a0c]">
                 <div className="flex items-center justify-between text-xs">
                   <span className="font-bold text-gray-500">Fund Utilization</span>
                   <span className="font-mono font-bold">{utilization.toFixed(1)}%</span>
@@ -476,7 +535,7 @@ function ProjectDetail({ projectId, onClose }) {
                 </div>
               </div>
               {/* Expenditure vs Progress */}
-              <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#111827]">
+              <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#0a0a0c]">
                 <h4 className="mb-3 text-xs font-bold uppercase tracking-wider text-gray-400">Expenditure vs Physical Progress</h4>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
@@ -731,6 +790,10 @@ function ProjectDetail({ projectId, onClose }) {
             <ForensicsPanel projectId={projectId} onOpenProject={(id) => { if (id !== projectId) window.dispatchEvent(new CustomEvent("open-project", { detail: { projectId: id } })) }} />
           )}
 
+          {activeTab === "dna" && (
+            <ProjectDNASection projectId={projectId} onOpenProject={(id) => { if (id !== projectId) window.dispatchEvent(new CustomEvent("open-project", { detail: { projectId: id } })) }} />
+          )}
+
           {activeTab === "timeline" && (
             <LazyFetch
               store={[timeline, setTimeline]}
@@ -748,7 +811,7 @@ function ProjectDetail({ projectId, onClose }) {
                 onOpenProject={(id) => { if (id !== projectId) window.dispatchEvent(new CustomEvent("open-project", { detail: { projectId: id } })) }}
               />
 
-              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-[#111827]">
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-[#0a0a0c]">
                 <p className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">Comparison Criteria</p>
                 <p className="mt-1 text-xs">
                   State: <strong>{similar.criteria.state}</strong> | Type: <strong>{similar.criteria.project_type}</strong> | Range: <strong>{similar.criteria.sanctioned_range}</strong>
@@ -757,7 +820,7 @@ function ProjectDetail({ projectId, onClose }) {
               {similar.similar_projects.length > 0 ? (
                 <div className="space-y-2">
                   {similar.similar_projects.map((sp) => (
-                    <div key={sp.id} className="rounded-lg border border-gray-200 bg-gray-50/50 p-3 dark:border-gray-700 dark:bg-[#111827]">
+                    <div key={sp.id} className="rounded-lg border border-gray-200 bg-gray-50/50 p-3 dark:border-gray-700 dark:bg-[#0a0a0c]">
                       <div className="flex items-start justify-between">
                         <div>
                           <span className="font-mono text-[0.625rem] font-bold text-gray-400">#{sp.id}</span>
@@ -784,6 +847,59 @@ function ProjectDetail({ projectId, onClose }) {
               )}
             </>
           )}
+
+          {/* Risk Stress Test — also available inline inside Risk & Audit */}
+          {activeTab === "risk" && (
+            <div className="rounded-xl border border-purple-200 dark:border-purple-900/60">
+              <button
+                onClick={() => setStressTab((v) => !v)}
+                className="flex w-full items-center justify-between px-4 py-2.5 text-left"
+              >
+                <span className="text-[0.6875rem] font-bold uppercase tracking-wider text-purple-700 dark:text-purple-300">🧪 Risk Stress Test</span>
+                <span className="text-[0.625rem] text-gray-400">{stressTab ? "Hide" : "Expand"}</span>
+              </button>
+              {stressTab && (
+                <div className="rise-in border-t border-purple-200 p-4 dark:border-purple-900/60">
+                  <RiskStressTest
+                    projectId={projectId}
+                    baseline={{ riskScore: risk?.risk_score ?? 0, riskLevel: risk?.risk_level, sanctioned, expenditure, completion }}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Forensic Mode / Stress Test overlays — stack above the detail UI */}
+        {showForensicMode && (
+          <ForensicModeModal projectId={projectId} onClose={() => setShowForensicMode(false)} />
+        )}
+        {showStressTest && (
+          <RiskStressTestModal
+            projectId={projectId}
+            onClose={() => setShowStressTest(false)}
+            baseline={{ riskScore: risk?.risk_score ?? 0, riskLevel: risk?.risk_level, sanctioned, expenditure, completion }}
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Modal wrapper so the stress tool can open over the detail drawer
+function RiskStressTestModal({ projectId, onClose, baseline }) {
+  return (
+    <div className="anim-overlay-in fixed inset-0 z-[90] flex items-start justify-center overflow-y-auto bg-black/50 p-3 backdrop-blur-2xs transition-opacity sm:p-6" onClick={onClose}>
+      <div className="anim-card-in my-auto w-full max-w-2xl rounded-2xl border border-[#dcdde4] bg-white p-5 shadow-soft-lg dark:border-[#2e2e33] dark:bg-[#17181c] sm:p-6" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">Risk Stress Test</p>
+            <h3 className="mt-0.5 text-sm font-bold">Interactive What-If Simulation</h3>
+          </div>
+          <button onClick={onClose} className="rounded-lg p-1.5 text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700">✕</button>
+        </div>
+        <div className="mt-4 max-h-[70vh] overflow-y-auto pr-1">
+          <RiskStressTest projectId={projectId} baseline={baseline} />
         </div>
       </div>
     </div>
@@ -845,7 +961,7 @@ function ActivitySection({ activity }) {
 
   if (!hasData) {
     return (
-      <div className="rounded-xl border border-gray-200 bg-gray-50/50 p-4 dark:border-gray-700 dark:bg-[#111827]">
+      <div className="rounded-xl border border-gray-200 bg-gray-50/50 p-4 dark:border-gray-700 dark:bg-[#0a0a0c]">
         <h4 className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">Expenditure Activity</h4>
         <p className="mt-2 text-xs font-semibold text-gray-500">No expenditure activity recorded in the current dataset.</p>
         <p className="mt-1 text-[0.625rem] text-gray-400">The project is not automatically classified as delayed on this basis.</p>
@@ -865,7 +981,7 @@ function ActivitySection({ activity }) {
     : "✓ No significant gap detected"
 
   return (
-    <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-[#111827]">
+    <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-[#0a0a0c]">
       <div className="mb-3 flex items-center justify-between">
         <h4 className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">Expenditure Activity</h4>
         <span className={`rounded px-2 py-0.5 text-[0.625rem] font-bold ${statusChip}`}>{statusLabel}</span>
@@ -970,7 +1086,7 @@ function InfoGrid({ items }) {
   return (
     <div className="grid grid-cols-2 gap-2">
       {items.map((item) => (
-        <div key={item.label} className="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-[#111827]">
+        <div key={item.label} className="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-[#0a0a0c]">
           <p className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">{item.label}</p>
           <p className="mt-0.5 text-sm font-semibold">{item.value}</p>
         </div>
@@ -981,7 +1097,7 @@ function InfoGrid({ items }) {
 
 function MetricCard({ label, value, color }) {
   return (
-    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#111827]">
+    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#0a0a0c]">
       <p className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">{label}</p>
       <p className={`mt-1 font-mono text-lg font-bold text-${color}-600 dark:text-${color}-400`}>{value}</p>
     </div>
@@ -990,7 +1106,7 @@ function MetricCard({ label, value, color }) {
 
 function ProgressCard({ completion }) {
   return (
-    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#111827]">
+    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#0a0a0c]">
       <div className="flex items-center justify-between">
         <span className="text-sm font-bold">Physical Completion</span>
         <span className="font-mono text-lg font-bold text-blue-600 dark:text-blue-400">{completion}%</span>

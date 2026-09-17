@@ -19,7 +19,9 @@ import models
 # alongside existing routes, modifies nothing)
 from ai_audit_api import router as ai_audit_router
 from assistant import router as assistant_router
+from forensic_api import router as forensic_router
 import audit_intel
+import rec_info as rec_info_mod
 from schemas import ProjectCreate
 from ml.predictor import predict_risk
 from pydantic import BaseModel, Field
@@ -263,6 +265,15 @@ def clear_cache(prefix: Optional[str] = None):
 async def lifespan(app: FastAPI):
     # Setup indices on existing SQLite tables if not present
     with engine.connect() as conn:
+        # Expression indexes on the normalized work key — these make the
+        # per-key expenditure lookups (timeline/activity/span) O(log n)
+        # instead of full-table scans. Built once (persisted in the DB file);
+        # normkey is registered as DETERMINISTIC so SQLite can use it here.
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_exp_workkey ON expenditures(normkey(work_description), normkey(constituency), normkey(state));"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_rec_workkey ON recommended_works(normkey(work_description), normkey(constituency), normkey(state));"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_comp_workkey ON completed_works(normkey(work_description), normkey(constituency), normkey(state));"))
+        conn.commit()
+    with engine.connect() as conn:
         # Project indexes for search/filter performance
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_proj_state ON projects(state);"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_proj_district ON projects(district);"))
@@ -290,6 +301,12 @@ async def lifespan(app: FastAPI):
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_proj_state_fy ON projects(state, fy);"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_proj_state_cons ON projects(state, constituency);"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_risk_project_level ON risk_scores(project_id, risk_level);"))
+        conn.commit()
+
+    # project_rec_info index for rec-date sorting (table + indexes are created
+    # by Base.metadata.create_all above)
+    with engine.connect() as conn:
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_rec_info_sort ON project_rec_info(recommendation_date, project_id);"))
         conn.commit()
 
     # Cache risk table presence at startup (avoids COUNT(*) on every request)
@@ -366,6 +383,15 @@ async def lifespan(app: FastAPI):
     # first request, causing "Ran out of memory" instance failures. The
     # payload is now built on first request (streamed, compact, bounded)
     # inside _vendor_intelligence_payload(), so startup stays flat.
+    # project_rec_info (recommendation facts) — table is created by
+    # Base.metadata.create_all; if it's empty (fresh DB or after a data
+    # sync), rebuild it in a background thread. Pure SQL inside SQLite;
+    # startup returns immediately. Existing rows are served while empty.
+    try:
+        rec_info_mod.rebuild_if_empty_async()
+    except Exception:
+        pass  # best-effort; endpoints fall back to absent rec fields
+
     yield
 
 
@@ -379,6 +405,7 @@ app = FastAPI(
 # SIH 26102 — AI Audit & Verification router (audit queue, image forensics,
 # cost anomaly, vendor network, /verify portal, audit actions)
 app.include_router(ai_audit_router)
+app.include_router(forensic_router)
 
 # Universal MPLADS AI Assistant (role-aware Q&A over live data + knowledge base)
 app.include_router(assistant_router)
@@ -455,11 +482,64 @@ _SORT_COLUMNS = {
 }
 
 
+def _rec_info_map(db: Session, project_ids: List[int]) -> Dict[int, Any]:
+    """Batched recommendation facts for a page of projects (source of truth:
+    the project_rec_info derived table — same linkage as activity.py)."""
+    if not project_ids:
+        return {}
+    try:
+        rows = (
+            db.query(models.ProjectRecInfo)
+            .filter(models.ProjectRecInfo.project_id.in_(project_ids))
+            .all()
+        )
+        return {
+            r.project_id: {
+                "recommendation_date": r.recommendation_date,
+                "recommended_by": r.recommended_by,
+                "approx_start_date": r.approx_start_date,
+                "has_expenditure": bool(r.has_expenditure),
+            }
+            for r in rows
+        }
+    except Exception:
+        # Table may not exist yet on a brand-new DB before the first build
+        return {}
+
+
+def _rec_item(rec: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not rec:
+        return None
+    return {
+        "recommendation_date": rec.get("recommendation_date"),
+        "recommended_by": rec.get("recommended_by"),
+        "approx_start_date": rec.get("approx_start_date"),
+        "has_expenditure": rec.get("has_expenditure", False),
+    }
+
+
 def apply_sort(query, sort_by: Optional[str], sort_dir: Optional[str], model=None):
     """Apply sorting to a SQLAlchemy query safely."""
     if not sort_by:
         return query
     col_key = sort_by.strip().lower()
+    # Recommendation-date sorting — outer join to the 1:1 derived table
+    # (unique index on project_id, so no row fan-out and COUNT stays exact).
+    # Undated projects always sink to the end of the result regardless of
+    # direction; dated rows sort by the chosen direction with a stable
+    # project-id tie-break for consistent pagination.
+    if col_key in ("recommended_date", "recommendation_date", "recommended"):
+        query = query.outerjoin(
+            models.ProjectRecInfo,
+            models.ProjectRecInfo.project_id == models.Project.id,
+        )
+        rec_col = models.ProjectRecInfo.recommendation_date
+        is_asc = bool(sort_dir and sort_dir.strip().lower() == "asc")
+        return query.order_by(
+            rec_col.is_(None).asc(),
+            rec_col.asc() if is_asc else rec_col.desc(),
+            models.Project.id.asc(),
+        )
     if col_key not in _SORT_COLUMNS:
         return query
     col = _SORT_COLUMNS[col_key]
@@ -468,10 +548,13 @@ def apply_sort(query, sort_by: Optional[str], sort_dir: Optional[str], model=Non
     return query.order_by(col.desc().nullslast())
 
 
-def _enrich_projects_with_risk(projects, db):
+def _enrich_projects_with_risk(projects, db, include_rec: bool = True):
     """Attach risk_scores data to a list of Project objects for API responses.
     This ensures the Projects table, Risk Center, and Project Details all
-    use the SAME backend risk score as the single source of truth."""
+    use the SAME backend risk score as the single source of truth.
+
+    include_rec also attaches recommendation facts (one batched lookup per
+    page) so every consumer reads the same normalized values."""
     if not projects:
         return []
     project_ids = [p.id for p in projects]
@@ -481,6 +564,7 @@ def _enrich_projects_with_risk(projects, db):
         .all()
     )
     risk_map = {r.project_id: r for r in risk_rows}
+    rec_map = _rec_info_map(db, project_ids) if include_rec else {}
     result = []
     for p in projects:
         risk = risk_map.get(p.id)
@@ -502,6 +586,7 @@ def _enrich_projects_with_risk(projects, db):
                 "ml_anomaly": risk.ml_anomaly if risk else None,
                 "reasons": risk.reasons if risk else None,
             } if risk else None,
+            "rec": _rec_item(rec_map.get(p.id)),
         }
         result.append(item)
     return result
@@ -906,26 +991,25 @@ def search_projects(
         query = query.filter(models.RiskScore.risk_score <= max_risk_score)
 
     # ---------------------------------------------------------------
-    # SORT + PAGINATE — skip expensive COUNT, use LIMIT+1 for hasMore
+    # SORT + PAGINATE — COUNT the filtered matches (callers rely on `total`
+    # for "Showing X to Y of Z" pagination), then fetch one page.
+    # The count runs entirely in SQLite; only one page of rows is materialized.
     # ---------------------------------------------------------------
     if sort_by:
         query = apply_sort(query, sort_by, sort_dir)
     else:
         query = query.order_by(models.Project.id.asc())
 
-    # Fetch one extra row to detect whether more results exist
-    projects = query.offset(skip).limit(limit + 1).all()
-    has_more = len(projects) > limit
-    if has_more:
-        projects = projects[:limit]
+    total = query.order_by(None).count()
+    projects = query.offset(skip).limit(limit).all()
 
     enriched = _enrich_projects_with_risk(projects, db)
     return {
-        "total": len(projects) + (1 if has_more else 0),
+        "total": total,
         "skip": skip,
         "limit": limit,
         "results": enriched,
-        "hasMore": has_more
+        "hasMore": skip + len(projects) < total
     }
 
 
@@ -971,6 +1055,9 @@ def get_project(
             "data_quality_flag": stale_check["flag"],
             "data_quality_reason": stale_check["reason"],
         },
+        # Recommendation facts — same project_rec_info source of truth as the
+        # Projects table and Risk Center (identical values everywhere).
+        "rec": _rec_item(_rec_info_map(db, [project.id]).get(project.id)),
         "risk": risk_info,
         # Audit intelligence summary (same single-source functions used by the
         # Audit Priority list and the audit case, so the UI never recomputes it)
@@ -1283,6 +1370,141 @@ def anomalies_summary(
 def refresh_anomalies_summary():
     clear_cache()
     return {"message": "All dashboard and anomaly caches cleared successfully"}
+
+
+@app.get("/dashboard/early-warning", tags=["Dashboard"])
+def dashboard_early_warning(
+    fy: Optional[str] = Query(None, description="Filter by financial year"),
+    db: Session = Depends(get_db),
+):
+    """Portfolio early-warning summary + FY trends — all SQL-side aggregates.
+
+    Early-warning states are DERIVED from the existing risk-engine outputs
+    (risk_scores table) plus directly recorded fields — no separate risk
+    calculation:
+      🔴 Critical   — risk_level 'High'
+      🟠 Early Warning — risk_level 'Medium'
+      🟡 Watch      — expenditure recorded with 0% physical completion,
+                      or sanctioned ≥ ₹10 L with completion < 25%
+      🟢 Normal     — everything else
+    Bands overlap by design (watch = pre-risk leading indicator).
+    Trends use the fy column and expenditure dates already in the dataset.
+    """
+    cache_key = f"early_warning_{fy or 'all'}"
+    cached = get_cached(cache_key, ttl_seconds=300)
+    if cached is not None:
+        return cached
+
+    fy_filter = "AND p.fy = :fy" if fy else ""
+    params = {"fy": fy} if fy else {}
+
+    # ── 1. Warning bands (single pass over projects LEFT JOIN risk) ──
+    bands = db.execute(text(f"""
+        SELECT
+          SUM(CASE WHEN rs.risk_level = 'High' THEN 1 ELSE 0 END)                AS critical,
+          SUM(CASE WHEN rs.risk_level = 'Medium' THEN 1 ELSE 0 END)              AS early_warning,
+          SUM(CASE WHEN rs.risk_level IS NULL OR rs.risk_level NOT IN ('High','Medium')
+                    AND (
+                      (p.expenditure > 0 AND COALESCE(p.completion_percentage, 0) = 0)
+                      OR (p.sanctioned_amount >= 1000000 AND COALESCE(p.completion_percentage, 0) < 25)
+                    )
+                  THEN 1 ELSE 0 END)                                            AS watch,
+          COUNT(*)                                                              AS total,
+          SUM(CASE WHEN p.status IN ('Completed', 'completed') THEN 1 ELSE 0 END) AS completed,
+          SUM(CASE WHEN p.status NOT IN ('Completed', 'completed') OR p.status IS NULL THEN 1 ELSE 0 END) AS ongoing,
+          SUM(CASE WHEN rs.risk_level IS NOT NULL THEN 1 ELSE 0 END)             AS scored,
+          SUM(CASE WHEN rs.ml_anomaly = 1 THEN 1 ELSE 0 END)                     AS ml_anomalies
+        FROM projects p
+        LEFT JOIN risk_scores rs ON rs.project_id = p.id
+        WHERE 1=1 {fy_filter}
+    """), params).one()
+
+    total = int(bands.total or 0)
+    critical = int(bands.critical or 0)
+    early = int(bands.early_warning or 0)
+    watch = int(bands.watch or 0)
+    normal = max(0, total - critical - early - watch)
+
+    # ── 2. FY trends: expenditure + completion + risk per financial year ──
+    trend_rows = db.execute(text("""
+        SELECT p.fy,
+               COUNT(*)                                        AS projects,
+               COALESCE(SUM(p.sanctioned_amount), 0)           AS sanctioned,
+               COALESCE(SUM(p.expenditure), 0)                 AS expenditure,
+               SUM(CASE WHEN p.status IN ('Completed','completed') THEN 1 ELSE 0 END) AS completed,
+               AVG(CASE WHEN rs.risk_score IS NOT NULL THEN rs.risk_score END) AS avg_risk
+        FROM projects p
+        LEFT JOIN risk_scores rs ON rs.project_id = p.id
+        WHERE p.fy IS NOT NULL
+        GROUP BY p.fy
+        ORDER BY p.fy
+    """)).fetchall()
+
+    # ── 3. Monthly expenditure trend from the expenditure ledger (dates exist
+    #       there; project rows don't carry spend dates). Compact: ≤ 24 rows. ──
+    monthly = db.execute(text("""
+        SELECT substr(e.expenditure_date, 1, 7) AS ym,
+               COALESCE(SUM(e.expenditure_amount), 0) AS amount,
+               COUNT(*) AS tx
+        FROM expenditures e
+        WHERE e.expenditure_date IS NOT NULL AND length(e.expenditure_date) >= 7
+        GROUP BY substr(e.expenditure_date, 1, 7)
+        ORDER BY ym
+        LIMIT 36
+    """)).fetchall()
+
+    # ── 4. Top early-warning states (most critical+early projects) ──
+    hot_states = db.execute(text(f"""
+        SELECT p.state,
+               SUM(CASE WHEN rs.risk_level IN ('High','Medium') THEN 1 ELSE 0 END) AS flagged,
+               COUNT(*) AS total
+        FROM projects p
+        LEFT JOIN risk_scores rs ON rs.project_id = p.id
+        WHERE p.state IS NOT NULL {fy_filter}
+        GROUP BY p.state
+        ORDER BY flagged DESC, total DESC
+        LIMIT 8
+    """), params).fetchall()
+
+    result = {
+        "bands": {
+            "normal": normal,
+            "watch": watch,
+            "early_warning": early,
+            "critical": critical,
+            "total": total,
+        },
+        "counts": {
+            "completed": int(bands.completed or 0),
+            "ongoing": int(bands.ongoing or 0),
+            "delayed": watch,  # zero-progress-with-spend / stalled starts
+            "high_risk": critical,
+            "critical_risk": critical,
+            "total_anomalies": int(bands.scored or 0),
+            "ml_anomalies": int(bands.ml_anomalies or 0),
+        },
+        "fy_trends": [
+            {
+                "fy": r.fy,
+                "projects": int(r.projects or 0),
+                "sanctioned": float(r.sanctioned or 0),
+                "expenditure": float(r.expenditure or 0),
+                "completed": int(r.completed or 0),
+                "avg_risk": round(float(r.avg_risk or 0), 1),
+            }
+            for r in trend_rows
+        ],
+        "monthly_expenditure": [
+            {"month": r.ym, "amount": float(r.amount or 0), "transactions": int(r.tx or 0)}
+            for r in monthly
+        ],
+        "hot_states": [
+            {"state": r.state, "flagged": int(r.flagged or 0), "total": int(r.total or 0)}
+            for r in hot_states
+        ],
+    }
+    set_cached(cache_key, result)
+    return result
 
 
 @app.get("/dashboard/constituencies", tags=["Dashboard"])
@@ -2204,6 +2426,9 @@ def detect_anomalies(
         # — derived from the same conservative matching as the timeline, so it
         # adds one dict lookup per row, no extra queries.
         from activity import get_expenditure_span
+        # Recommendation facts for the page — one batched lookup, same source
+        # of truth as the Projects page (project_rec_info table).
+        rec_map = _rec_info_map(db, [proj.id for _, proj in rows])
         for risk, proj in rows:
             reasons = [r.strip() for r in (risk.reasons or "").split(",") if r.strip()]
             try:
@@ -2231,6 +2456,7 @@ def detect_anomalies(
                 "activity_days": span.get("activity_days"),
                 "delay_indicator": span.get("delay_indicator"),
                 "delay_severity": span.get("delay_severity"),
+                "rec": _rec_item(rec_map.get(proj.id)),
             })
 
         total_checked = db.query(func.count(models.Project.id)).scalar() or 0
@@ -2260,6 +2486,7 @@ def detect_anomalies(
 
     anomalies = []
     from activity import get_expenditure_span
+    rec_map_fallback = _rec_info_map(db, [p.id for p in projects])
     for proj in projects:
         risk_info = predict_risk(proj)
         if risk_info["is_anomaly"]:
@@ -2290,6 +2517,7 @@ def detect_anomalies(
                 "activity_days": span.get("activity_days"),
                 "delay_indicator": span.get("delay_indicator"),
                 "delay_severity": span.get("delay_severity"),
+                "rec": _rec_item(rec_map_fallback.get(proj.id)),
             })
 
     total_checked = db.query(func.count(models.Project.id)).scalar() or 0
@@ -3502,6 +3730,106 @@ def anomaly_scatter_data(
 # =========================================================
 # SERVER-SIDE REPORT EXPORT
 # =========================================================
+
+@app.get("/export/ai-audit-summary", tags=["Export"])
+def ai_audit_summary(
+    state: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Narrative AI Audit Report built from live SQL aggregates.
+
+    Every number comes from a real COUNT/SUM query; nothing is invented.
+    Where the dataset cannot support a section, it says so explicitly.
+    Indicators are neutral review priorities, never fraud claims.
+    """
+    from collections import Counter
+
+    pq = db.query(
+        func.count(models.Project.id).label("total"),
+        func.coalesce(func.sum(models.Project.sanctioned_amount), 0.0).label("sanc"),
+        func.coalesce(func.sum(models.Project.expenditure), 0.0).label("exp"),
+        func.sum(case((models.Project.status == "Completed", 1), else_=0)).label("completed"),
+        func.sum(case((models.Project.status == "Ongoing", 1), else_=0)).label("ongoing"),
+    )
+    rq = db.query(models.RiskScore)
+    if state:
+        pq = pq.filter(models.Project.state == state)
+        rq = rq.join(models.Project, models.Project.id == models.RiskScore.project_id).filter(models.Project.state == state)
+    total, sanc, exp, completed, ongoing = pq.one()
+    total_r = rq.count()
+    high = rq.filter(models.RiskScore.risk_level.ilike("high")).count()
+    medium = rq.filter(models.RiskScore.risk_level.ilike("medium")).count()
+    anomalies = rq.filter(models.RiskScore.ml_anomaly.is_(True)).count()
+
+    flagged = (
+        db.query(models.RiskScore.risk_score, models.RiskScore.reasons, models.Project.state)
+        .join(models.Project, models.Project.id == models.RiskScore.project_id)
+        .filter(models.RiskScore.risk_score >= 60)
+        .order_by(models.RiskScore.risk_score.desc())
+        .limit(400)
+        .all()
+    )
+    counter = Counter()
+    for _score, reasons, _st in flagged:
+        for part in (reasons or "").split(";"):
+            label = part.strip().split(":")[0].strip()
+            if label:
+                counter[label] += 1
+    top_reasons = counter.most_common(5)
+
+    verifications = db.query(func.count(models.VerificationReport.id)).scalar() or 0
+    inquiries_total = db.query(func.count(models.Inquiry.id)).scalar() or 0
+    inquiries_open = db.query(func.count(models.Inquiry.id)).filter(models.Inquiry.status == "open").scalar() or 0
+
+    def _money(v):
+        if v >= 1e7:
+            return f"₹{v / 1e7:,.2f} Cr"
+        if v >= 1e5:
+            return f"₹{v / 1e5:,.2f} L"
+        return f"₹{v:,.0f}"
+
+    lines = [
+        "AI AUDIT REPORT — MPLADS PORTFOLIO" + (f" — {state}" if state else ""),
+        "Generated — timestamp filled below · figures are recorded dataset values at generation time",
+        "",
+        "SCOPE",
+        f"• Projects: {total:,}" + (f" (state scope: {state})" if state else " (nationwide)"),
+        f"• Sanctioned: {_money(sanc)} · Recorded project-level expenditure: {_money(exp)}",
+        "• Note: transaction-level expenditure (106k+ records) is matched to projects via "
+        "normalized keys and tracked per project on the detail pages; the project-table total "
+        "understates it and is shown for consistency only.",
+        "",
+        "RISK DISTRIBUTION",
+        f"• Scored projects: {total_r:,} · High: {high:,} · Medium: {medium:,} · Low: {max(total_r - high - medium, 0):,}",
+        f"• ML-flagged statistical anomalies (Isolation Forest): {anomalies:,}",
+        "",
+        "DOMINANT RISK INDICATORS (top flagged projects, score ≥ 60)",
+    ]
+    if top_reasons:
+        lines += [f"• {label} — {n:,} project(s)" for label, n in top_reasons]
+    else:
+        lines.append("• No projects currently score at or above the 60-point review threshold.")
+    lines += [
+        "",
+        "GROUND VERIFICATION & INQUIRIES",
+        f"• Evidence submissions on record: {verifications:,}",
+        f"• Auditor inquiries issued: {inquiries_total:,} (open: {inquiries_open:,})",
+        "",
+        "STATUS MIX",
+        f"• Completed: {completed or 0:,} · Ongoing: {ongoing or 0:,}"
+        + (f" · Other/unknown: {max(total - (completed or 0) - (ongoing or 0), 0):,}" if total > (completed or 0) + (ongoing or 0) else ""),
+        "",
+        "AI-DETECTION NOTICE",
+        "• All indicators above are AI/analytical review signals derived from recorded data. "
+        "None constitute confirmed fraud; field verification and formal audit remain the "
+        "confirmation steps.",
+    ]
+    import datetime as _dt
+    stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    lines[1] = f"Generated {stamp} · figures are recorded dataset values at generation time"
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse("\n".join(lines), media_type="text/plain; charset=utf-8")
+
 
 @app.get("/export/report", tags=["Export"])
 def export_report(

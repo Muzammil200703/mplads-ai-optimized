@@ -439,3 +439,31 @@ class Inquiry(Base):
         Index("idx_inquiry_status", "status"),
         Index("idx_inquiry_district", "district"),
     )
+
+
+class ProjectRecInfo(Base):
+    """
+    Derived, rebuildable recommendation/timeline facts per project.
+
+    Built by SQL joins from the work-level source tables using the SAME
+    conservative linkage as activity.py (normalized name+constituency+state
+    work key, MP-verified when a recommended work matches). Nothing here is
+    invented: dates come from recommended_works.recommendation_date and the
+    earliest matched expenditure_date; MP comes from recommended_works.
+
+    Rebuild after data syncs via rec_info.rebuild(db).
+    """
+
+    __tablename__ = "project_rec_info"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, index=True, nullable=False)
+    recommendation_date = Column(String)   # ISO YYYY-MM-DD or NULL
+    recommended_by = Column(String)        # MP name from recommended_works
+    approx_start_date = Column(String)     # ISO, earliest MP-verified expenditure
+    has_expenditure = Column(Boolean, default=False)
+
+    __table_args__ = (
+        Index("idx_rec_info_project", "project_id", unique=True),
+        Index("idx_rec_info_rec_date", "recommendation_date"),
+    )

@@ -83,9 +83,9 @@ const StateIntelligence = memo(function StateIntelligence({ onNavigateToProjects
 
   if (loading) {
     return (
-      <div className="min-h-full bg-[#f9f9ff] p-4 sm:p-6 dark:bg-[#111827]">
+      <div className="min-h-full bg-[#f9f9ff] p-4 sm:p-6 dark:bg-[#0a0a0c]">
         <h1 className="text-2xl font-bold text-[#031632] dark:text-white">State Intelligence</h1>
-        <div className="mt-6 rounded-xl border border-gray-200 bg-white p-16 text-center dark:border-gray-700 dark:bg-[#1f2937]">
+        <div className="mt-6 rounded-xl border border-gray-200 bg-white p-16 text-center dark:border-gray-700 dark:bg-[#17181c]">
           <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent" />
           <p className="mt-3 text-sm font-medium">Loading state intelligence...</p>
         </div>
@@ -107,7 +107,7 @@ const StateIntelligence = memo(function StateIntelligence({ onNavigateToProjects
   ]
 
   return (
-    <div className="min-h-full bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-[#f3f4f6]">
+    <div className="min-h-full bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#0a0a0c] dark:text-[#f3f4f6]">
       <div className="mx-auto max-w-[1440px] space-y-4 sm:space-y-6">
         <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
           <div>
@@ -120,7 +120,7 @@ const StateIntelligence = memo(function StateIntelligence({ onNavigateToProjects
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="Search state..."
-            className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 sm:w-64 dark:border-gray-600 dark:bg-[#1f2937] dark:text-white"
+            className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 sm:w-64 dark:border-gray-600 dark:bg-[#17181c] dark:text-white"
           />
         </div>
 
@@ -146,7 +146,7 @@ const StateIntelligence = memo(function StateIntelligence({ onNavigateToProjects
               className={`rounded-lg px-3 py-1.5 text-[0.6875rem] font-bold transition ${
                 sortBy === opt.value
                   ? "bg-[#031632] text-white dark:bg-blue-600"
-                  : "border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:bg-[#1f2937] dark:text-gray-300"
+                  : "border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:bg-[#17181c] dark:text-gray-300"
               }`}
             >
               {opt.label}
@@ -156,7 +156,7 @@ const StateIntelligence = memo(function StateIntelligence({ onNavigateToProjects
         </div>
 
         {/* BENCHMARKING SECTION */}
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#17181c]">
           <h3 className="mb-3 text-sm font-bold uppercase tracking-wider text-gray-400">State / Constituency Benchmarking</h3>
           <div className="flex flex-wrap items-end gap-3">
             <div className="flex-1 min-w-[150px]">
@@ -164,7 +164,7 @@ const StateIntelligence = memo(function StateIntelligence({ onNavigateToProjects
               <select
                 value={benchState}
                 onChange={(e) => { setBenchState(e.target.value); setBenchData(null) }}
-                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-600 dark:bg-[#111827] dark:text-white"
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-600 dark:bg-[#0a0a0c] dark:text-white"
               >
                 <option value="">Select State</option>
                 {states.map((s) => <option key={s.state} value={s.state}>{s.state}</option>)}
@@ -176,7 +176,7 @@ const StateIntelligence = memo(function StateIntelligence({ onNavigateToProjects
                 value={benchConstituency}
                 onChange={(e) => setBenchConstituency(e.target.value)}
                 disabled={!benchState}
-                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm disabled:opacity-50 dark:border-gray-600 dark:bg-[#111827] dark:text-white"
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm disabled:opacity-50 dark:border-gray-600 dark:bg-[#0a0a0c] dark:text-white"
               >
                 <option value="">All Constituencies</option>
                 {benchConstituencies.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -195,11 +195,11 @@ const StateIntelligence = memo(function StateIntelligence({ onNavigateToProjects
           {benchData && benchData.comparisons?.length > 0 && (
             <div className="mt-4 space-y-4">
               {benchData.comparisons.map((comp, ci) => (
-                <div key={ci} className="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#111827]">
+                <div key={ci} className="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#0a0a0c]">
                   <h4 className="mb-3 text-xs font-bold text-gray-700 dark:text-gray-300">{comp.label}</h4>
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                     {comp.metrics.map((m, mi) => (
-                      <div key={mi} className="rounded-lg bg-white p-3 dark:bg-[#1f2937]">
+                      <div key={mi} className="rounded-lg bg-white p-3 dark:bg-[#17181c]">
                         <p className="text-[0.625rem] font-bold uppercase text-gray-400">{m.metric}</p>
                         <p className="font-mono text-lg font-bold">{m.selected}{m.unit}</p>
                         <p className="text-[0.625rem] text-gray-400">Benchmark: {m.benchmark}{m.unit}</p>
@@ -227,12 +227,12 @@ const StateIntelligence = memo(function StateIntelligence({ onNavigateToProjects
         </div>
 
         {/* Table */}
-        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
+        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-[#17181c]">
           {/* DESKTOP TABLE */}
           <div className="hidden lg:block overflow-x-auto">
             <table className="w-full min-w-[1100px]">
               <thead>
-                <tr className="border-b border-gray-200 bg-gray-50 text-left text-xs font-bold uppercase tracking-wider text-gray-700 dark:border-gray-700 dark:bg-[#172033] dark:text-gray-300">
+                <tr className="border-b border-gray-200 bg-gray-50 text-left text-xs font-bold uppercase tracking-wider text-gray-700 dark:border-gray-700 dark:bg-[#141418] dark:text-gray-300">
                   {columns.map((col) => (
                     <th
                       key={col.key}
@@ -305,7 +305,7 @@ const StateIntelligence = memo(function StateIntelligence({ onNavigateToProjects
         </div>
 
         {filteredStates.length === 0 && !loading && (
-          <div className="rounded-xl border border-gray-200 bg-white p-8 text-center dark:border-gray-700 dark:bg-[#1f2937]">
+          <div className="rounded-xl border border-gray-200 bg-white p-8 text-center dark:border-gray-700 dark:bg-[#17181c]">
             <p className="text-sm text-gray-500">No states match the search term.</p>
           </div>
         )}

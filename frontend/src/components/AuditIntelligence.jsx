@@ -9,6 +9,7 @@ import {
   startInvestigation,
   updateInvestigation,
   updateEvidenceItem,
+  verifyProjectLookup,
 } from "../services/api"
 import { formatMoney } from "../utils/format"
 import { parseReasons } from "../utils/reasons"
@@ -44,7 +45,7 @@ const STATUS_STYLE = {
 
 function Card({ children, className = "" }) {
   return (
-    <div className={`rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-[#111827] ${className}`}>
+    <div className={`rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-[#0a0a0c] ${className}`}>
       {children}
     </div>
   )
@@ -65,7 +66,7 @@ function Chip({ children, className = "" }) {
 
 function Spinner({ label }) {
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-[#111827]">
+    <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-[#0a0a0c]">
       <div className="h-4 w-4 animate-spin rounded-full border-2 border-blue-600 border-r-transparent" />
       <span className="text-[0.9375rem] text-gray-400">{label}</span>
     </div>
@@ -99,7 +100,7 @@ export function DigitalAuditCard({ detail, onStartInvestigation, investigation }
     : "text-green-600 dark:text-green-400"
 
   return (
-    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#111827]">
+    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#0a0a0c]">
       {/* RISK */}
       <div className="flex items-start justify-between gap-3">
         <div>
@@ -201,7 +202,7 @@ export function DigitalAuditCard({ detail, onStartInvestigation, investigation }
       {/* Exposure + review level */}
       <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
         {exposure && (
-          <div className="rounded-lg border border-gray-200 bg-white p-2.5 dark:border-gray-700 dark:bg-[#1f2937]">
+          <div className="rounded-lg border border-gray-200 bg-white p-2.5 dark:border-gray-700 dark:bg-[#17181c]">
             <p className="text-[0.8125rem] font-bold uppercase tracking-wider text-gray-400">Funds under review</p>
             <p className="font-mono text-sm font-bold">{exposure.funds_under_review_display}</p>
             {overspend && exposure.overspend_display && (
@@ -212,7 +213,7 @@ export function DigitalAuditCard({ detail, onStartInvestigation, investigation }
           </div>
         )}
         {audit?.review_level && (
-          <div className="rounded-lg border border-gray-200 bg-white p-2.5 dark:border-gray-700 dark:bg-[#1f2937]">
+          <div className="rounded-lg border border-gray-200 bg-white p-2.5 dark:border-gray-700 dark:bg-[#17181c]">
             <p className="text-[0.8125rem] font-bold uppercase tracking-wider text-gray-400">Suggested review level</p>
             <p className="text-[1rem] font-semibold text-gray-800 dark:text-gray-200">{audit.review_level.level}</p>
             <p className="mt-0.5 text-[0.8125rem] text-gray-400">{audit.review_level.basis}</p>
@@ -528,7 +529,7 @@ export function InvestigationWorkspace({ projectId, onWorkspaceChange }) {
           onChange={(e) => { setNote(e.target.value); setSavedNote(false) }}
           rows={3}
           placeholder="Record the verification steps taken (stored with this investigation only)."
-          className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-[1rem] text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white"
+          className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-[1rem] text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#0a0a0c] dark:text-white"
         />
         <div className="mt-2 flex items-center gap-2">
           <button
@@ -554,6 +555,189 @@ export function InvestigationWorkspace({ projectId, onWorkspaceChange }) {
 }
 
 /* ═══════════════ 4. Anomaly explorer ═══════════════ */
+
+/* ═══════════════ Predictive insights + compliance checklist ═══════════════
+   Derived ONLY from the project's recorded values and the existing risk
+   engine outputs. Every estimate is labelled as an analytical indication,
+   never a confirmed fact. Compliance checks map 1:1 to available fields. */
+
+const _COMPLIANCE = {
+  passed: { icon: "✓", cls: "bg-green-100 text-green-700 dark:bg-green-950/60 dark:text-green-300" },
+  review: { icon: "⚠", cls: "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300" },
+  failed: { icon: "✕", cls: "bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300" },
+  unavailable: { icon: "—", cls: "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400" },
+}
+
+export function PredictiveInsightsPanel({ detail }) {
+  const proj = detail?.project
+  const risk = detail?.risk
+  const projectId = proj?.id
+  // Ground-evidence count is fetched lazily so the checklist "Ground
+  // verification" row reflects the real review queue for this project.
+  const [evidenceCount, setEvidenceCount] = useState(null)
+  useEffect(() => {
+    let alive = true
+    if (!projectId) return
+    verifyProjectLookup(projectId)
+      .then((d) => alive && setEvidenceCount(d?.recent_reports?.length ?? 0))
+      .catch(() => alive && setEvidenceCount(null))
+    return () => { alive = false }
+  }, [projectId])
+  const sanctioned = Number(proj.sanctioned_amount || 0)
+  const expenditure = Number(proj.expenditure || 0)
+  const completion = Number(proj.completion_percentage || 0)
+  const utilization = sanctioned > 0 ? (expenditure / sanctioned) * 100 : 0
+  const status = (proj.status || "").toLowerCase()
+
+  // ── Compliance checklist (1:1 with available fields) ──
+  const checks = [
+    {
+      label: "Financial consistency",
+      state: sanctioned > 0 && expenditure > sanctioned ? "failed"
+        : sanctioned > 0 ? "passed" : "unavailable",
+      why: sanctioned > 0 && expenditure > sanctioned
+        ? `Expenditure exceeds sanction by ₹${formatMoney(expenditure - sanctioned)}`
+        : sanctioned > 0 ? "Expenditure within sanctioned amount" : "Sanctioned amount not recorded",
+    },
+    {
+      label: "Progress consistency",
+      state: expenditure > 0 && completion === 0 ? "failed"
+        : utilization >= 80 && completion < 50 ? "review"
+        : status === "completed" && completion < 90 ? "review"
+        : "passed",
+      why: expenditure > 0 && completion === 0
+        ? `${formatMoney(expenditure)} recorded with 0% physical progress`
+        : status === "completed" && completion < 90
+          ? `Marked completed but progress is ${completion}%`
+          : "Expenditure and progress are broadly consistent",
+    },
+    {
+      label: "Status consistency",
+      state: status === "completed" && completion < 90 ? "review"
+        : status ? "passed" : "unavailable",
+      why: status === "completed" && completion < 90
+        ? "Completed status conflicts with sub-90% physical progress"
+        : status ? "Status aligns with recorded progress" : "Status not recorded",
+    },
+    {
+      label: "Location fields",
+      state: proj.state && (proj.district || proj.constituency) ? "passed"
+        : proj.state ? "review" : "unavailable",
+      why: proj.state && (proj.district || proj.constituency)
+        ? `State + ${proj.district ? "district" : "constituency"} recorded`
+        : proj.state ? "State recorded but district/constituency missing" : "No location recorded",
+    },
+    {
+      label: "Ground verification",
+      state: evidenceCount > 0 ? "passed" : evidenceCount === null ? "unavailable" : "review",
+      why: evidenceCount > 0
+        ? `${evidenceCount} ground evidence report(s) on record`
+        : evidenceCount === null
+          ? "Evidence status could not be loaded"
+          : "No field evidence submitted yet — request ground verification",
+    },
+  ]
+  const passed = checks.filter((c) => c.state === "passed").length
+  const review = checks.filter((c) => c.state === "review").length
+  const failed = checks.filter((c) => c.state === "failed").length
+
+  // ── Predictive estimates (analytical only) ──
+  const predictions = []
+  if (expenditure > 0 && completion < 50) {
+    const severity = utilization >= 80 ? "High" : "Medium"
+    predictions.push({
+      icon: "⏱", label: "Delay risk",
+      level: severity,
+      text: `${severity} — ${formatMoney(expenditure)} already spent with only ${completion}% physical progress. Funds are flowing faster than recorded work.`,
+    })
+  }
+  if (sanctioned > 0 && expenditure > sanctioned) {
+    predictions.push({
+      icon: "📈", label: "Cost escalation risk",
+      level: "High",
+      text: `Expenditure is ${(utilization).toFixed(0)}% of sanction. If the pattern continues, further cost escalation beyond the sanctioned amount is likely without a revised approval.`,
+    })
+  }
+  if (utilization > 0 && Math.abs(utilization - completion) > 25 && completion < 90) {
+    predictions.push({
+      icon: "⚖", label: "Progress / expenditure mismatch risk",
+      level: Math.abs(utilization - completion) > 50 ? "High" : "Medium",
+      text: `Financial utilization (${utilization.toFixed(0)}%) and physical progress (${completion}%) diverge by ${Math.abs(utilization - completion).toFixed(0)} points — one of the two records may be outdated.`,
+    })
+  }
+  if (status === "completed" && completion < 90) {
+    predictions.push({
+      icon: "🏁", label: "Status-accuracy risk",
+      level: "Medium",
+      text: `Work is marked completed at ${completion}% physical progress — the completion claim may need re-validation on the ground.`,
+    })
+  }
+  if (predictions.length === 0) {
+    predictions.push({ icon: "🟢", label: "No early-warning indicators", level: "Low", text: "Current recorded values show no predictive risk pattern on available fields." })
+  }
+
+  const levelCls = (l) => l === "High"
+    ? "bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300"
+    : l === "Medium"
+      ? "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300"
+      : "bg-green-100 text-green-700 dark:bg-green-950/60 dark:text-green-300"
+
+  return (
+    <div className="space-y-3">
+      {/* Compliance checklist */}
+      <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#0a0a0c]">
+        <div className="mb-3 flex items-center justify-between">
+          <h4 className="text-xs font-bold uppercase tracking-wider text-gray-400">Compliance Checklist</h4>
+          <span className="font-mono text-[0.6875rem] font-bold">
+            <span className="text-green-600">{passed} ✓</span> · <span className="text-amber-600">{review} ⚠</span> · <span className="text-red-500">{failed} ✕</span>
+          </span>
+        </div>
+        <div className="space-y-1.5">
+          {checks.map((c) => {
+            const st = _COMPLIANCE[c.state]
+            return (
+              <div key={c.label} className="flex items-start gap-2.5 rounded-lg bg-white px-3 py-2 dark:bg-[#17181c]">
+                <span className={`mt-0.5 flex h-4.5 w-4.5 flex-none items-center justify-center rounded text-[0.625rem] font-bold ${st.cls}`}>{st.icon}</span>
+                <div className="min-w-0">
+                  <p className="text-xs font-bold">{c.label}</p>
+                  <p className="text-[0.6875rem] text-gray-500 dark:text-gray-400">{c.why}</p>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Predictive / early-warning estimates */}
+      <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#0a0a0c]">
+        <h4 className="mb-1 text-xs font-bold uppercase tracking-wider text-gray-400">Predictive Insights</h4>
+        <p className="mb-3 text-[0.625rem] text-gray-400 dark:text-gray-500">
+          🤖 AI/analytical estimates derived from this project's recorded values — indications for review, not confirmed facts.
+        </p>
+        <div className="space-y-1.5">
+          {predictions.map((p) => (
+            <div key={p.label} className="rounded-lg bg-white px-3 py-2.5 dark:bg-[#17181c]">
+              <div className="flex items-center gap-2">
+                <span className="text-sm">{p.icon}</span>
+                <p className="text-xs font-bold">{p.label}</p>
+                <span className={`ml-auto rounded px-1.5 py-0.5 text-[0.5625rem] font-bold ${levelCls(p.level)}`}>{p.level}</span>
+              </div>
+              <p className="mt-1 pl-6 text-[0.6875rem] leading-snug text-gray-500 dark:text-gray-400">{p.text}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Payment-level data availability — honest dataset boundary */}
+      <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50/60 p-3 dark:border-gray-600 dark:bg-gray-900/40">
+        <p className="text-xs font-bold text-gray-500 dark:text-gray-400">💳 Payment-level data</p>
+        <p className="mt-0.5 text-[0.6875rem] text-gray-400">
+          Payment-level data unavailable in source dataset. Aggregated expenditure and payment-status summaries come from the monthly activity record.
+        </p>
+      </div>
+    </div>
+  )
+}
 
 export function AnomalyExplorerPanel({ projectId }) {
   const [explorer, setExplorer] = useState(null)
@@ -600,7 +784,7 @@ export function AnomalyExplorerPanel({ projectId }) {
           }`}>{d.finding}</p>
 
           {/* Observed */}
-          <div className="mt-2 rounded-lg bg-gray-50 p-2 dark:bg-[#0f1524]">
+          <div className="mt-2 rounded-lg bg-gray-50 p-2 dark:bg-[#101014]">
             <p className="text-[0.8125rem] font-bold uppercase tracking-wider text-gray-400">What we observed</p>
             <div className="mt-1 grid grid-cols-1 gap-1 sm:grid-cols-2">
               {d.observed.map((o, i) => (
@@ -699,7 +883,7 @@ export function WhatIfSimulator({ detail }) {
         type="number"
         value={form[key]}
         onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
-        className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 font-mono text-[1rem] text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white"
+        className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 font-mono text-[1rem] text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#0a0a0c] dark:text-white"
       />
     </div>
   )
@@ -874,14 +1058,14 @@ export function PeerBenchmarkPanel({ projectId, onOpenProject }) {
           <div>
             <label className="block text-[0.8125rem] font-bold uppercase tracking-wider text-gray-400">Scope</label>
             <select value={scope} onChange={(e) => setScope(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-[0.875rem] text-gray-900 outline-none focus:border-blue-500 dark:border-gray-600 dark:bg-[#1f2937] dark:text-white">
+              className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-[0.875rem] text-gray-900 outline-none focus:border-blue-500 dark:border-gray-600 dark:bg-[#17181c] dark:text-white">
               {SCOPE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
           </div>
           <div>
             <label className="block text-[0.8125rem] font-bold uppercase tracking-wider text-gray-400">Category</label>
             <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-[0.875rem] text-gray-900 outline-none focus:border-blue-500 dark:border-gray-600 dark:bg-[#1f2937] dark:text-white">
+              className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-[0.875rem] text-gray-900 outline-none focus:border-blue-500 dark:border-gray-600 dark:bg-[#17181c] dark:text-white">
               <option value="">Same category</option>
               <option value="all">All categories</option>
             </select>
@@ -889,7 +1073,7 @@ export function PeerBenchmarkPanel({ projectId, onOpenProject }) {
           <div>
             <label className="block text-[0.8125rem] font-bold uppercase tracking-wider text-gray-400">Value band</label>
             <select value={band} onChange={(e) => setBand(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-[0.875rem] text-gray-900 outline-none focus:border-blue-500 dark:border-gray-600 dark:bg-[#1f2937] dark:text-white">
+              className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-[0.875rem] text-gray-900 outline-none focus:border-blue-500 dark:border-gray-600 dark:bg-[#17181c] dark:text-white">
               <option value="narrow">Narrow (0.7–1.4×)</option>
               <option value="default">Similar (0.3–3×)</option>
               <option value="all">Any value</option>
@@ -898,7 +1082,7 @@ export function PeerBenchmarkPanel({ projectId, onOpenProject }) {
           <div>
             <label className="block text-[0.8125rem] font-bold uppercase tracking-wider text-gray-400">Status</label>
             <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-[0.875rem] text-gray-900 outline-none focus:border-blue-500 dark:border-gray-600 dark:bg-[#1f2937] dark:text-white">
+              className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-[0.875rem] text-gray-900 outline-none focus:border-blue-500 dark:border-gray-600 dark:bg-[#17181c] dark:text-white">
               <option value="">All statuses</option>
               <option value="Ongoing">Ongoing</option>
               <option value="Completed">Completed</option>
@@ -939,7 +1123,7 @@ export function PeerBenchmarkPanel({ projectId, onOpenProject }) {
             {data.interpretations?.length > 0 && (
               <div className="mt-3 space-y-1.5">
                 {data.interpretations.map((t, i) => (
-                  <p key={i} className="rounded-lg bg-gray-50 p-2 text-[0.9375rem] leading-relaxed text-gray-600 dark:bg-[#0f1524] dark:text-gray-300">{t}</p>
+                  <p key={i} className="rounded-lg bg-gray-50 p-2 text-[0.9375rem] leading-relaxed text-gray-600 dark:bg-[#101014] dark:text-gray-300">{t}</p>
                 ))}
               </div>
             )}
@@ -955,7 +1139,7 @@ export function PeerBenchmarkPanel({ projectId, onOpenProject }) {
                   <button
                     key={p.id}
                     onClick={() => onOpenProject && onOpenProject(p.id)}
-                    className="w-full rounded-lg border border-gray-200 p-2 text-left transition hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-[#1f2937]"
+                    className="w-full rounded-lg border border-gray-200 p-2 text-left transition hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-[#17181c]"
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
@@ -1091,7 +1275,7 @@ export function AuditCasePanel({ projectId }) {
                 ["Reported progress", `${data.financials.completion_percentage}%`],
                 ["Utilization", data.financials.utilization_pct !== null ? `${data.financials.utilization_pct}%` : "N/A"],
               ].map(([k, v]) => (
-                <div key={k} className="rounded-lg bg-gray-50 p-2 dark:bg-[#0f1524]">
+                <div key={k} className="rounded-lg bg-gray-50 p-2 dark:bg-[#101014]">
                   <p className="text-[0.8125rem] font-bold uppercase tracking-wider text-gray-400">{k}</p>
                   <p className="text-[1rem] font-semibold text-gray-800 dark:text-gray-200">{v}</p>
                 </div>
@@ -1151,7 +1335,7 @@ export function AuditCasePanel({ projectId }) {
               Report / escalate
             </SectionTitle>
             <p className="text-[1rem] font-semibold text-gray-800 dark:text-gray-200">{data.escalation_draft.subject}</p>
-            <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-gray-50 p-2.5 font-sans text-[0.875rem] leading-relaxed text-gray-600 dark:bg-[#0f1524] dark:text-gray-300">
+            <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-gray-50 p-2.5 font-sans text-[0.875rem] leading-relaxed text-gray-600 dark:bg-[#101014] dark:text-gray-300">
 {data.escalation_draft.body}
             </pre>
             <div className="mt-2 flex flex-wrap gap-2">
@@ -1183,7 +1367,7 @@ export function AuditCasePanel({ projectId }) {
           </Card>
 
           {data.disclaimers?.length > 0 && (
-            <Card className="bg-gray-50 dark:bg-[#0f1524]">
+            <Card className="bg-gray-50 dark:bg-[#101014]">
               <ul className="space-y-1">
                 {data.disclaimers.map((d, i) => (
                   <li key={i} className="text-[0.8125rem] leading-relaxed text-gray-400">• {d}</li>

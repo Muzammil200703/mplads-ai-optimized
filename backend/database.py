@@ -9,6 +9,13 @@ DB_PATH = os.environ.get(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "mplads.db")
 )
 
+
+def normkey(value) -> str:
+    """SQL/Python shared normalization key: lower-case, collapse every run
+    of non-alphanumerics to a single space, trim. Registered as the SQLite
+    UDF `normkey` on every connection and importable for direct use."""
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
 DATABASE_URL = f"sqlite:///{DB_PATH}"
 
 engine = create_engine(
@@ -41,18 +48,12 @@ def register_sqlite_udfs(dbapi_connection, connection_record):
     """SQL-side normalization UDFs — shared with the vendor-intelligence
     aggregation (main.py) so GROUP BY / JOIN keys are computed inside
     SQLite instead of streaming every row through Python."""
-
-    def _normkey(value):
-        # Same rule as main._vendor_key: lower-case, collapse every run of
-        # non-alphanumerics to a single space, trim.
-        return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
-
     try:
-        dbapi_connection.create_function("normkey", 1, _normkey, deterministic=True)
+        dbapi_connection.create_function("normkey", 1, normkey, deterministic=True)
     except Exception:
         # Older sqlite3 builds without the deterministic flag.
         try:
-            dbapi_connection.create_function("normkey", 1, _normkey)
+            dbapi_connection.create_function("normkey", 1, normkey)
         except Exception:
             pass
 

@@ -18,13 +18,16 @@ nothing is cached beyond FastAPI's existing bounded cache; no pandas.
 """
 
 import re
+import threading
+import time
+import uuid
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_
+from sqlalchemy import exists, func, or_, text
 from sqlalchemy.orm import Session
 
 import auth
@@ -96,6 +99,13 @@ KNOWLEDGE = [
     (r"what\s+does\s+(high|medium|low)\s+risk\s+mean|high\s+risk\s+mean", "risk_levels_meaning"),
     (r"what\s+is\s+audit\s+priority", "priority_tiers"),
     (r"what\s+is\s+(a\s+)?project\?*$|^what\s+is\s+a\s+project", "what_is_project"),
+    (r"what\s+is\s+(the\s+)?risk\s+center|risk\s+center", "risk_center"),
+    (r"why\s+is\s+(this\s+|my\s+)?(project\s+|it\s+)?p[1-4]\b", "priority_tiers"),
+    (r"how\s+(do|can)\s+i\s+compare|compare\s+(two|projects)", "compare_help"),
+    (r"how\s+(do|can)\s+i\s+check\s+a\s+vendor|check\s+vendors?|vendor\s+.{0,10}search", "vendor_intelligence"),
+    (r"how\s+(do|can)\s+i\s+(see|find|view)\s+high.risk|see\s+risky", "search_help"),
+    (r"how\s+(do|can)\s+i\s+respond\s+to\s+an?\s+inquiry", "respond_inquiry"),
+    (r"how\s+(do|can)\s+i\s+use\s+vendor\s+network", "vendor_network"),
 ]
 
 KNOWLEDGE_ANSWERS = {
@@ -241,6 +251,22 @@ KNOWLEDGE_ANSWERS = {
         "Levels come from the 0–100 risk score. A high level flags a project for review — it is not "
         "proof of wrongdoing."
     ),
+    "risk_center": (
+        "The **Risk Center** ranks projects by their 0–100 risk score with the contributing factors "
+        "(fund utilization, progress mismatch, delays), plus first/latest expenditure dates and the "
+        "estimated 'Delayed By' duration. A high score is a review priority, not a finding."
+    ),
+    "compare_help": (
+        "To compare projects: open **Compare Projects**, pick two projects, and you'll see sanctioned "
+        "amounts, expenditure, physical progress and risk factors side by side. You can also ask me "
+        "about a specific project by ID (e.g. \u201ctell me about project 80649\u201d) and I'll pull its record."
+    ),
+    "respond_inquiry": (
+        "Responding to an inquiry: open **My District** — auditor inquiries for your assigned area are "
+        "listed there with the project, the auditor's question and a deadline. Write your official "
+        "response and submit; the issuing auditor is notified and reviews it. Every response is "
+        "timestamped with your identity and role."
+    ),
 }
 
 
@@ -251,6 +277,7 @@ KNOWLEDGE_ANSWERS = {
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=500)
     page: Optional[str] = Field(None, max_length=60)
+    session_id: Optional[str] = Field(None, max_length=64)
 
 
 class ActionOut(BaseModel):
@@ -263,6 +290,46 @@ class AskResponse(BaseModel):
     answer: str
     source: str            # "knowledge" | "data" | "help"
     actions: List[ActionOut] = []
+    project_id: Optional[int] = None   # project discussed — client keeps it for follow-ups
+
+
+# ── Conversational session memory ────────────────────────────────────
+# Remembers the last project each conversation discussed so pronoun
+# follow-ups ("why is it risky?", "open it") resolve without re-typing the
+# ID. Bounded: TTL expiry + hard cap, values are one small dict each.
+
+_SESSION_LAST_PROJECT: Dict[str, Dict] = {}
+_SESSION_LOCK = threading.Lock()
+_SESSION_TTL = 3600.0     # seconds
+_SESSION_MAX = 500        # hard cap on remembered sessions
+
+
+def _session_get_project(session_id: Optional[str]) -> Optional[int]:
+    if not session_id:
+        return None
+    now = time.time()
+    with _SESSION_LOCK:
+        entry = _SESSION_LAST_PROJECT.get(session_id)
+        if not entry or now - entry["ts"] > _SESSION_TTL:
+            _SESSION_LAST_PROJECT.pop(session_id, None)
+            return None
+        entry["ts"] = now
+        return entry["project_id"]
+
+
+def _session_set_project(session_id: Optional[str], project_id: Optional[int]) -> None:
+    if not session_id or not project_id:
+        return
+    now = time.time()
+    with _SESSION_LOCK:
+        # Opportunistic TTL sweep keeps the dict bounded without a job.
+        if len(_SESSION_LAST_PROJECT) >= _SESSION_MAX:
+            expired = [k for k, v in _SESSION_LAST_PROJECT.items() if now - v["ts"] > _SESSION_TTL]
+            for k in expired:
+                _SESSION_LAST_PROJECT.pop(k, None)
+        while len(_SESSION_LAST_PROJECT) >= _SESSION_MAX:
+            _SESSION_LAST_PROJECT.pop(next(iter(_SESSION_LAST_PROJECT)))
+        _SESSION_LAST_PROJECT[session_id] = {"project_id": int(project_id), "ts": now}
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -291,11 +358,23 @@ def _extract_state(question: str) -> Optional[str]:
 
 
 def _extract_project_id(question: str) -> Optional[int]:
-    m = re.search(r"#?\b(?:project\s*)?(?:id\s*)?(\d{3,7})\b", question, re.I)
-    if m:
-        return int(m.group(1))
-    m = re.search(r"(?:this|current)\s+project", question, re.I)
-    return None  # context resolution handled by the caller (page context)
+    """Conservative project-ID extraction. Only treats a number as a project
+    reference when the phrasing anchors it: a project/proj/work prefix, an
+    action verb (show/open/take me to…), a risk/status/details mention, a #
+    prefix, or a standalone number message. Prevents false positives like the
+    "2024" in \u201chow many projects completed in 2024?\u201d."""
+    patterns = (
+        r"#(\d{1,10})\b",
+        r"\b(?:project|proj|work)\s*(?:no\.?|number|id)?\s*#?(\d{1,10})\b",
+        r"\b(?:show|open|take\s+me\s+to|go\s*to|goto|jump\s+to|find|tell\s+me\s+about)\s+(?:of\s+|for\s+)?#?(\d{1,10})\b",
+        r"\b(?:why\s+is|risk|status|details?)\s+(?:of\s+|for\s+)?#?(\d{1,10})\b",
+        r"^\s*#?(\d{1,10})\s*\??$",
+    )
+    for pat in patterns:
+        m = re.search(pat, question, re.I)
+        if m:
+            return int(m.group(1))
+    return None  # "this project" context resolution handled by the caller
 
 
 def _fmt_project_line(p, risk=None) -> str:
@@ -314,6 +393,315 @@ def _fmt_project_line(p, risk=None) -> str:
 # Data intents — each returns (answer, actions) or None. Every query is
 # role-gated and LIMIT-ed.
 # ═══════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════════
+# Navigation — "take me to X" / "open X". Targets are the app's REAL page
+# keys; guards mirror the sidebar's own visibility rules so the assistant
+# never offers a page the user's role cannot open.
+# ═══════════════════════════════════════════════════════════════════
+
+NAV_PAGES = [  # (pattern, page key, guard) — specific patterns first
+    (r"ground\s+(truth\s+)?verif|verification\s+portal", "Ground Truth Verification", "verification:submit_or_guest"),
+    (r"my\s+verifications?", "My Verifications", "verification:read_own"),
+    (r"my\s+district", "My District", "inquiry:respond"),
+    (r"evidence\s+queue|verification\s+queue", "Evidence Queue", "verification:review"),
+    (r"\binquiries?\b", "Inquiries", "inquiry:review"),
+    (r"saved\s+projects?", "Saved Projects", "analyst"),
+    (r"my\s+investigations?", "My Investigations", "analyst"),
+    (r"my\s+audit\s+cases?", "My Audit Cases", "analyst"),
+    (r"admin(istration)?\s*(page|panel|area)?|^\badmin\b$", "Administration", "users:manage"),
+    (r"vendor\s+intelligence", "Vendor Intelligence", "public_or_analyst"),
+    (r"vendor\s+network", "Vendor Network", "public_or_analyst"),
+    (r"ai\s+audit(\s+(command\s+)?center)?|audit\s+(command\s+)?center", "AI Audit Center", "public_or_analyst"),
+    (r"audit\s+priority", "Audit Priority", "public_or_analyst"),
+    (r"risk\s+center", "Risk Center", None),
+    (r"state\s+intelligence", "State Intelligence", None),
+    (r"compare\s+(projects?|two\s+projects?)", "Compare Projects", None),
+    (r"\breports?\b", "Reports", None),
+    (r"\bprojects?\b\s*(page|list|tab|explorer)?", "Projects", None),
+    (r"\boverview\b|\bhome\b\s*(page|screen)?", "Overview", None),
+    (r"\bsettings?\b", "Settings", None),
+    (r"\bfaq\b", "FAQ", None),
+]
+
+_NAV_TRIGGER = re.compile(
+    r"\btake\s+me\b|\bbring\s+me\b|\bgo\s*to\b|\bgoto\b|\bjump\s+to\b|\bnavigate\b|\bopen\b"
+    r"|\bshow\s+me\b|\bswitch\s+to\b|\bhead\s+to\b|\bwhere\s+(is|are|can\s+i)", re.I,
+)
+
+
+def _nav_guard_error(page: str, guard: Optional[str], user) -> Optional[str]:
+    """None when the user may open the page, else an honest explanation."""
+    caps = auth.user_capabilities(user) if user else set()
+    if guard is None:
+        return None
+    if guard == "analyst":
+        if user and auth.has_role_rank(user, "analyst"):
+            return None
+        return f"The **{page}** workspace is available to analyst-tier accounts (analysts, auditors and administrators)."
+    if guard == "public_or_analyst":
+        if user is None or auth.has_role_rank(user, "analyst"):
+            return None
+        return f"The **{page}** section is available to analysts, auditors and administrators."
+    if guard == "verification:submit_or_guest":
+        if user is None or "verification:submit" in caps:
+            return None
+        if "inquiry:respond" in caps:
+            return ("Ground Verification submissions are made by citizens, field verifiers and auditors. "
+                    "Your role's workspace is **My District**, where auditor inquiries await your official response.")
+        return "Submitting ground evidence needs a citizen, field verifier, auditor or administrator account."
+    if guard in caps:
+        return None
+    return (f"The **{page}** section needs the \u201c{guard.replace(':', ' ').strip()}\u201d permission, "
+            "which your account doesn't hold.")
+
+
+def _intent_navigate(q: str, ql: str, ctx_project_id: Optional[int], user, db: Session):
+    """"Take me to X" / "open X" / "where is X" — returns a navigation action,
+    or None when the question isn't navigation (so data intents still run).
+    Project-number navigation is handled by the project lookup intent."""
+    # Pronoun navigation follow-up: "open it" / "take me to this project"
+    if re.match(r"^(open|show|go\s*to|goto|take\s+me\s+to|jump\s+to)\s+(it|this\s+(project|one)?|that\s+(project|one)?)\b", ql):
+        if ctx_project_id:
+            p = db.query(models.Project).filter(models.Project.id == ctx_project_id).first()
+            if p:
+                return (f"Opening **#{p.id} {p.project_name}** — its details open over the Projects list.",
+                        [ActionOut(label="Open Project Details", action="open_project", target=str(p.id))],
+                        p.id)
+        return ("Which project? Give me the ID (e.g. \u201copen project 80649\u201d) or open one from the "
+                "Projects page first.",
+                [ActionOut(label="Browse projects", action="navigate", target="Projects")])
+
+    if not _NAV_TRIGGER.search(ql):
+        return None
+    # A numbered reference ("open project 80649") belongs to project lookup.
+    if _extract_project_id(q) is not None:
+        return None
+    # Risk/anomaly phrasings are data questions even with "show me".
+    if re.search(r"high\s+risk|riskiest|anomal|unusual|suspicious", ql):
+        return None
+    for pat, page, guard in NAV_PAGES:
+        if re.search(pat, ql):
+            err = _nav_guard_error(page, guard, user)
+            if err:
+                return (err, [])
+            blurb = PAGE_HELP.get(page, "")
+            text_out = f"**{page}**" + (f" — {blurb}" if blurb else "")
+            return text_out, [ActionOut(label=f"Open {page}", action="navigate", target=page)]
+    return None
+
+
+def _project_profile_answer(p, risk) -> Tuple[str, List[ActionOut]]:
+    """Full project profile composed ONLY from the real record + risk row."""
+    reasons = [r.strip() for r in (risk.reasons or "").split(",") if r.strip()] if risk else []
+    util = (p.expenditure / p.sanctioned_amount * 100) if p.sanctioned_amount else 0
+    lines = [
+        "**PROJECT**",
+        f"Project ID: #{p.id}",
+        f"Name: {p.project_name}",
+        f"Location: {p.state}" + (f", {p.constituency}" if p.constituency else ""),
+        f"Sanctioned: {_fmt_money(p.sanctioned_amount)} · Expenditure: {_fmt_money(p.expenditure)} ({util:.0f}% utilization)",
+        f"Physical completion: {p.completion_percentage if p.completion_percentage is not None else '—'}% · Status: {p.status or '—'}",
+        "",
+        f"**Risk Score:** {risk.risk_score if risk else 'not scored'} ({risk.risk_level if risk else 'n/a'})",
+    ]
+    if reasons:
+        lines.append("")
+        lines.append("**KEY FINDINGS**")
+        lines += [f"• {r}" for r in reasons[:6]]
+    if risk and getattr(risk, "ml_anomaly", False):
+        lines.append("• Flagged as a statistical anomaly by the ML model vs. similar projects")
+    lines.append("")
+    lines.append("**RECOMMENDED NEXT STEP**")
+    lines.append("• Open the project's AI Forensics tab for the full evidence picture" if reasons
+                 else "• No risk indicators recorded — routine monitoring is enough for now")
+    actions = [ActionOut(label="Open Project Details", action="open_project", target=str(p.id))]
+    if reasons:
+        actions.append(ActionOut(label="View Audit Details", action="navigate", target="AI Audit Center"))
+    return "\n".join(lines), actions
+
+
+def _intent_project_lookup(
+    q: str, ql: str, ctx_project_id: Optional[int], user, db: Session
+):
+    """Every question anchored to a specific project ID — lookup, navigation
+    (\u201copen project 80649\u201d, \u201cshow 80649\u201d), and detail asks — plus pronoun
+    follow-ups (\u201cwhy is it risky?\u201d) resolved against the selected-project
+    context. Returns None when no project reference is present."""
+    # Any explicit project-anchored number must be answered (found OR
+    # not-found), never silently dropped to the fallback.
+    pid = _extract_project_id(q)
+    if pid is None and not re.match(r"^(open|show|go\s*to|goto|take\s+me\s+to|jump\s+to|display|find)\b", ql) \
+            and not (ctx_project_id and re.search(r"\b(its?|this\s+project|this\s+one|that\s+project|that\s+one)\b", ql)):
+        return None
+    if re.search(r"compar|versus|\bvs\.?\b", ql) and len(re.findall(r"\b\d{1,10}\b", q)) >= 2:
+        return ("To compare two specific projects, open **Compare Projects** and pick them — "
+                "you'll get sanctioned amounts, expenditure, progress and risk side by side.",
+                [ActionOut(label="Open Compare Projects", action="navigate", target="Compare Projects")])
+
+    nav_ish = bool(re.match(r"^(open|show|go\s*to|goto|take\s+me\s+to|jump\s+to|display|find)\b", ql))
+
+    # Pronoun/possessive follow-up with a selected project: "why is it risky?",
+    # "tell me about this project", "what is its status?"
+    if pid is None and ctx_project_id is not None:
+        pronoun = re.search(r"\b(its?|this\s+project|this\s+one|that\s+project|that\s+one)\b", ql)
+        asks = re.search(r"open|show|risk|anomal|about|tell|status|explain|check|verif", ql)
+        if pronoun and asks and not re.search(r"page|section|website|site|workflow", ql):
+            pid = ctx_project_id
+
+    if pid is None:
+        return None
+
+    p = db.query(models.Project).filter(models.Project.id == pid).first()
+    if not p:
+        return (f"❓ I couldn't find a project with ID {pid}. Please check the Project ID and try "
+                "again — IDs are the numeric identifiers shown as #12345 on project cards.", [])
+    risk = db.query(models.RiskScore).filter(models.RiskScore.project_id == pid).first()
+
+    # Pure navigation ask → compact found-card + action.
+    if nav_ish and not re.search(r"why|risk|anomal|status|about|tell|explain|sanction|verif|detail", ql):
+        loc = p.state + (f", {p.constituency}" if p.constituency else "")
+        line = f"**Project found:** **#{p.id} {p.project_name}**\n{loc} · sanctioned {_fmt_money(p.sanctioned_amount)}"
+        if p.completion_percentage is not None:
+            line += f" · {p.completion_percentage:.0f}% complete"
+        if risk:
+            line += f" · risk {risk.risk_score} ({risk.risk_level})"
+        return line, [ActionOut(label="Open Project Details", action="open_project", target=str(p.id))], p.id
+
+    answer, actions = _project_profile_answer(p, risk)
+    return answer, actions, p.id
+
+
+def _intent_risk_methodology(ql: str, user, ctx_project_id: Optional[int], db: Session):
+    """Explains the ACTUAL scoring rules from ml/predictor.py — real point
+    weights and thresholds, no invented percentages."""
+    if not re.search(
+        r"how\s+(is|does).{0,30}risk.{0,20}(calculat|comput|determin|work|scored|built|made)"
+        r"|how.{0,8}risk.{0,8}score.{0,15}(calculat|work)"
+        r"|what\s+factors?.{0,25}(affect|contribute|go\s+into|drive|make).{0,15}risk"
+        r"|risk\s+(score|index|methodology).{0,25}(calculat|comput|work|factors|methodology)"
+        r"|what\s+makes?.{0,12}(a\s+)?(project|something).{0,10}(suspicious|risky)",
+        ql,
+    ):
+        return None
+    answer = (
+        "The 0–100 **risk score** combines fixed rule checks on each project's own recorded data "
+        "with an ML anomaly signal. Points add up when a check triggers:\n\n"
+        "**Rule checks**\n"
+        "• Expenditure exceeds the sanctioned amount — **+40**\n"
+        "• 80%+ of sanctioned funds spent while physical completion is below 50% — **+35**\n"
+        "• Any expenditure recorded with 0% physical completion — **+30**\n"
+        "• Marked Completed while physical progress is below 90% — **+25**\n"
+        "• Sanctioned ≥ ₹10 lakh with completion below 25% — **+20**\n"
+        "• Completion reported ≥ 80% but zero expenditure recorded — **+20**\n"
+        "• Sanctioned ≥ ₹5 lakh with under 10% utilization and completion below 30% — **+15**\n\n"
+        "**ML anomaly** — flagged by an Isolation Forest model vs. similar projects — **+25**\n\n"
+        "The total is capped at 100. **Levels:** High ≥ 60 · Medium ≥ 30 · Low above 0 · None = 0.\n\n"
+        "A high score is a review-priority signal — **not** proof of wrongdoing."
+    )
+    if ctx_project_id:
+        risk = db.query(models.RiskScore).filter(models.RiskScore.project_id == ctx_project_id).first()
+        if risk:
+            answer += f"\n\nThis project (#{ctx_project_id}) currently scores **{risk.risk_score} ({risk.risk_level})**."
+    return answer, [
+        ActionOut(label="Open Risk Center", action="navigate", target="Risk Center"),
+        ActionOut(label="Audit Priority", action="navigate", target="Audit Priority"),
+    ]
+
+
+def _intent_vendor(q: str, ql: str, user, db: Session):
+    """Vendor analytics — specific-vendor lookup and concentration ranking.
+    Analyst-tier data (guests get the public demo, lateral roles don't)."""
+    if not re.search(r"\bvendors?\b", ql):
+        return None
+    allowed = user is None or auth.has_role_rank(user, "analyst")
+
+    # ── concentration / top vendors (pure SQL aggregate, tiny result) ──
+    if re.search(r"concentration|which\s+vendors?.{0,30}(most|top|highest|largest|many)|top\s+vendors?"
+                 r"|vendor\s+(spend|spending|totals?)", ql):
+        if not allowed:
+            return ("Vendor analytics are available to analysts, auditors and administrators. "
+                    "I can still help with MPLADS basics, project lookups and Ground Verification.", [])
+        rows = db.execute(text("""
+            SELECT trim(vendor) AS name, COUNT(*) AS tx,
+                   COALESCE(SUM(expenditure_amount), 0) AS total,
+                   COUNT(DISTINCT work_description) AS works
+            FROM expenditures
+            WHERE vendor IS NOT NULL AND trim(vendor) <> ''
+            GROUP BY normkey(vendor)
+            ORDER BY works DESC, total DESC
+            LIMIT 8
+        """)).fetchall()
+        if not rows:
+            return "I don't have vendor expenditure data to answer that.", []
+        lines = "\n".join(
+            f"• **{r.name}** — {r.works:,} distinct works · {r.tx:,} transactions · {_fmt_money(r.total)}"
+            for r in rows
+        )
+        return (f"**Vendors serving the most distinct works** (potential concentration — "
+                f"investigative leads, not proof):\n{lines}", [
+                    ActionOut(label="Open Vendor Network", action="navigate", target="Vendor Network"),
+                    ActionOut(label="Open Vendor Intelligence", action="navigate", target="Vendor Intelligence"),
+                ])
+
+    # ── specific vendor lookup ──
+    m = re.search(r"vendor[s]?\s+(?:named\s+|called\s+)?([A-Za-z][\w&\.\'\- ]{1,60}?)(?:\s+in\s+|\s+from\s+|\?|$)", q or "", re.I)
+    if not m:
+        return None
+    candidate = m.group(1).strip(" ?.,!")
+    stop = {"in", "from", "at", "for", "and", "the", "a", "an", "of", "on", "with", "by"}
+    words = [w for w in candidate.split() if w.lower() not in stop]
+    candidate = " ".join(words).strip()
+    if len(candidate) < 3:
+        return ("Which vendor? Give me the vendor's name (e.g. \u201ctell me about vendor DARSH BUILDCON\u201d).", [])
+    if not allowed:
+        return (f"Vendor profiles like \u201c{candidate}\u201d are available to analysts, auditors and "
+                "administrators. I can still help with MPLADS basics, project lookups and Ground Verification.", [])
+    row = db.execute(text("""
+        SELECT trim(vendor) AS name, COUNT(*) AS tx,
+               COALESCE(SUM(expenditure_amount), 0) AS total,
+               COUNT(DISTINCT work_description) AS works
+        FROM expenditures
+        WHERE normkey(vendor) = normkey(:name)
+        GROUP BY trim(vendor)
+    """), {"name": candidate}).first()
+    alternates = []
+    if row is None:
+        like = f"%{candidate}%"
+        rows = db.execute(text("""
+            SELECT trim(vendor) AS name, COUNT(*) AS tx,
+                   COALESCE(SUM(expenditure_amount), 0) AS total,
+                   COUNT(DISTINCT work_description) AS works
+            FROM expenditures
+            WHERE vendor LIKE :like
+            GROUP BY normkey(vendor)
+            ORDER BY total DESC
+            LIMIT 5
+        """), {"like": like}).fetchall()
+        if not rows:
+            return (f"I couldn't find a vendor named \u201c{candidate}\u201d in the expenditure records.", [])
+        row, alternates = rows[0], [r.name for r in rows[1:]]
+    states = [r[0] for r in db.execute(text("""
+        SELECT DISTINCT trim(state) FROM expenditures
+        WHERE normkey(vendor) = normkey(:name) AND state IS NOT NULL AND trim(state) <> ''
+        LIMIT 5
+    """), {"name": row.name}).fetchall()]
+    lines = [
+        f"**VENDOR — {row.name}**",
+        f"• Total paid: {_fmt_money(row.total)} across {row.tx:,} transactions",
+        f"• Distinct works (expenditure items): {row.works:,}",
+    ]
+    if states:
+        lines.append(f"• States: {', '.join(states)}")
+    if alternates:
+        lines.append(f"• Similar names also found: {', '.join(alternates[:3])}")
+    lines.append("")
+    lines.append("Vendor signals are investigative leads — they don't prove wrongdoing.")
+    return "\n".join(lines), [
+        ActionOut(label="Open Vendor Intelligence", action="navigate", target="Vendor Intelligence"),
+        ActionOut(label="Open Vendor Network", action="navigate", target="Vendor Network"),
+    ]
+
 
 def _intent_portfolio_stats(q: str, user, db: Session):
     ql = q.lower()
@@ -382,7 +770,7 @@ def _intent_high_risk(ql: str, user, db: Session):
     # Only treat as a data request when the user wants actual projects/lists.
     if re.search(r"what (does|do|is|are).{0,16}(high|risk).{0,8}(risk )?mean|risk level.{0,10}mean", ql):
         return None
-    if not re.search(r"high risk|highest.?risk|risky projects|riskiest", ql):
+    if not re.search(r"high[- ]risk|highest.?risk|risky projects|riskiest", ql):
         return None
     # Risk rankings are internal analysis — citizens/guests get the concept,
     # not the list.
@@ -394,20 +782,26 @@ def _intent_high_risk(ql: str, user, db: Session):
             "on the Projects page or strengthen the record through Ground Verification.",
             [ActionOut(label="Open Ground Verification", action="navigate", target="Ground Truth Verification")],
         )
-    rows = (
+    state = _extract_state(ql)
+    q = (
         db.query(models.Project, models.RiskScore)
         .join(models.RiskScore, models.RiskScore.project_id == models.Project.id)
         .filter(models.RiskScore.risk_level.ilike("high"))
-        .order_by(models.RiskScore.risk_score.desc())
-        .limit(6)
-        .all()
     )
+    if state:
+        q = q.filter(models.Project.state == state)
+    rows = q.order_by(models.RiskScore.risk_score.desc()).limit(6).all()
     if not rows:
-        return "No high-risk projects are currently flagged in the risk data.", []
+        scope = f" in {state.title()}" if state else ""
+        return f"No high-risk projects are currently flagged in the risk data{scope}.", []
     lines = "\n".join(_fmt_project_line(p, r) for p, r in rows)
-    count = db.query(func.count(models.RiskScore.id)).filter(models.RiskScore.risk_level.ilike("high")).scalar() or 0
+    count_q = db.query(func.count(models.RiskScore.id)).filter(models.RiskScore.risk_level.ilike("high"))
+    if state:
+        count_q = count_q.join(models.Project, models.Project.id == models.RiskScore.project_id).filter(models.Project.state == state)
+    count = count_q.scalar() or 0
+    scope = f" in {state.title()}" if state else ""
     answer = (
-        f"{count:,} projects are flagged **high risk**. Top 6 by score:\n{lines}\n\n"
+        f"{count:,} projects{scope} are flagged **high risk**. Top 6 by score:\n{lines}\n\n"
         "A high score is a review priority, not proof of wrongdoing."
     )
     return answer, [
@@ -417,6 +811,10 @@ def _intent_high_risk(ql: str, user, db: Session):
 
 
 def _intent_project_detail(q: str, ql: str, ctx_project_id: Optional[int], user, db: Session):
+    """Context/attribute questions about a project ("why is this risky?",
+    "what is the sanctioned amount?" with a project open). ID-anchored asks
+    are handled by _intent_project_lookup; this catches the residue. Returns
+    (answer, actions, discussed_project_id) — a 3-tuple."""
     # Attribute questions only resolve against a *selected* project context
     # ("what is the sanctioned amount?" while a project is open) — without a
     # selected project there is nothing to answer about.
@@ -431,6 +829,7 @@ def _intent_project_detail(q: str, ql: str, ctx_project_id: Optional[int], user,
             "its sanctioned amount, expenditure, status or anomalies — I'll use that "
             "project's actual record.",
             [ActionOut(label="Browse projects", action="navigate", target="Projects")],
+            None,
         )
     if not re.search(
         r"why is (this )?(project|it)|risk(y)?\s*(of|for)?\s*project|explain.{0,20}risk|about project|"
@@ -442,37 +841,14 @@ def _intent_project_detail(q: str, ql: str, ctx_project_id: Optional[int], user,
     pid = _extract_project_id(q) or ctx_project_id
     if not pid:
         return ("Which project? Give me the numeric ID (e.g. \u201cwhy is project 80649 risky?\u201d) "
-                "or open the project first and ask again.", [])
+                "or open the project first and ask again.", [], None)
     p = db.query(models.Project).filter(models.Project.id == pid).first()
     if not p:
-        return f"I don't have project #{pid} in the dataset.", []
+        return (f"❓ I couldn't find a project with ID {pid}. Please check the Project ID and try "
+                "again.", [], None)
     risk = db.query(models.RiskScore).filter(models.RiskScore.project_id == pid).first()
-    reasons = [r.strip() for r in (risk.reasons or "").split(",") if r.strip()] if risk else []
-    util = (p.expenditure / p.sanctioned_amount * 100) if p.sanctioned_amount else 0
-    lines = [
-        f"**PROJECT**",
-        f"Project ID: #{p.id}",
-        f"Name: {p.project_name}",
-        f"Location: {p.state}" + (f", {p.constituency}" if p.constituency else ""),
-        f"Sanctioned: {_fmt_money(p.sanctioned_amount)} · Expenditure: {_fmt_money(p.expenditure)} ({util:.0f}% utilization)",
-        f"Physical completion: {p.completion_percentage if p.completion_percentage is not None else '—'}% · Status: {p.status or '—'}",
-        "",
-        f"**Risk Score:** {risk.risk_score if risk else 'not scored'} ({risk.risk_level if risk else 'n/a'})",
-    ]
-    if reasons:
-        lines.append("")
-        lines.append("**KEY FINDINGS**")
-        lines += [f"• {r}" for r in reasons[:6]]
-    if risk and getattr(risk, "ml_anomaly", False):
-        lines.append("• Flagged as a statistical anomaly by the ML model vs. similar projects")
-    lines.append("")
-    lines.append("**RECOMMENDED NEXT STEP**")
-    lines.append("• Open the project's AI Forensics tab for the full evidence picture" if reasons
-                 else "• No risk indicators recorded — routine monitoring is enough for now")
-    actions = [ActionOut(label="Open project", action="open_project", target=str(p.id))]
-    if reasons:
-        actions.append(ActionOut(label="View Audit Details", action="navigate", target="AI Audit Center"))
-    return "\n".join(lines), actions
+    answer, actions = _project_profile_answer(p, risk)
+    return answer, actions, pid
 
 
 def _intent_investigate_next(ql: str, user, db: Session):
@@ -584,6 +960,66 @@ def _intent_my_role_data(ql: str, user, db: Session):
         return ("Inquiries are exchanged between auditors and district authorities. "
                 "Ask me about anything else — projects, evidence, or MPLADS basics.", [])
     return None
+
+
+def _intent_analytical_screening(ql: str, user, db: Session):
+    """Analytical screening questions: cost deviation, progress/expenditure
+    mismatch, delayed, and ground-verification needs — all answered from a
+    single SQL-side query per filter so the 512MB RAM budget is respected.
+    Neutral terminology throughout: potential anomalies, never accusations."""
+    is_cost = bool(re.search(r"cost (deviation|deviations|overrun|outlier)|unusual cost", ql))
+    is_mismatch = bool(re.search(r"progress.{0,25}expenditure.{0,15}mismatch|expenditure.{0,25}progress.{0,15}mismatch|financial.{0,20}physical.{0,15}mismatch|money.{0,20}progress.{0,15}mismatch", ql))
+    is_delayed = bool(re.search(r"\bdelayed\b|\bdelays\b|delayed projects|behind schedule", ql))
+    is_verify = bool(re.search(r"(require|need|needs|which projects?).{0,20}(ground|field) verification|projects? (that )?need.{0,15}verification|requiring verification", ql))
+    if not (is_cost or is_mismatch or is_delayed or is_verify):
+        return None
+    if user is None or not auth.has_role_rank(user, "analyst"):
+        return ("Analytical screening is available to analysts, auditors and administrators. "
+                "I can still help with project lookups, Ground Verification and general MPLADS questions.", [])
+
+    # Optional state narrowing — "high cost deviation in Uttar Pradesh"
+    state = _extract_state(ql)
+    q = (
+        db.query(models.Project, models.RiskScore)
+        .join(models.RiskScore, models.RiskScore.project_id == models.Project.id)
+        .filter(models.Project.sanctioned_amount > 0)
+    )
+    label = ""
+    if is_cost:
+        q = q.filter(models.Project.expenditure > models.Project.sanctioned_amount * 1.1)
+        label = "expenditure exceeds the sanctioned amount by more than 10% (potential cost deviation)"
+    elif is_mismatch:
+        q = q.filter(
+            models.Project.expenditure > 0,
+            models.Project.completion_percentage < 25,
+            models.Project.expenditure >= models.Project.sanctioned_amount * 0.5,
+        )
+        label = ("expenditure is at least 50% of the sanctioned amount while recorded "
+                 "physical completion is below 25% (potential progress/expenditure mismatch)")
+    elif is_delayed:
+        q = q.filter(models.Project.status == "Not Started", models.Project.expenditure > 0)
+        label = "recorded status is 'Not Started' while expenditure has already been booked (potential execution delay)"
+    else:  # verification needs
+        q = q.filter(
+            models.RiskScore.risk_score >= 50,
+            models.RiskScore.risk_level != "HIGH",
+            ~exists().where(models.VerificationReport.project_id == models.Project.id),
+            ~exists().where(models.Inquiry.project_id == models.Project.id),
+        )
+        label = ("risk score 50–99 (MEDIUM band) with no ground-verification evidence and no "
+                 "open inquiry — candidates for field verification")
+    if state:
+        q = q.filter(models.Project.state == state)
+    rows = q.order_by(models.RiskScore.risk_score.desc()).limit(6).all()
+    count = q.order_by(None).count()
+    if count == 0:
+        scope = f" in {state.title()}" if state else ""
+        return f"No projects currently match that screen{scope}.", []
+    lines = "\n".join(_fmt_project_line(p, r) for p, r in rows)
+    scope = f" in {state.title()}" if state else " across all states"
+    answer = (f"{count:,} projects{scope} have {label}. Top {len(rows)} by risk score:\n\n{lines}\n\n"
+              "These are AI/analytical indicators for review prioritisation — not confirmed findings.")
+    return answer, [ActionOut(label="Open Risk Center", action="navigate", target="Risk Center")]
 
 
 def _intent_anomalies(ql: str, user, db: Session):
@@ -714,7 +1150,8 @@ SUGGESTIONS = {
 # Main router
 # ═══════════════════════════════════════════════════════════════════
 
-def _answer(question: str, page: Optional[str], user, db: Session) -> Tuple[str, str, List[ActionOut]]:
+def _answer(question: str, page: Optional[str], user, db: Session,
+            session_id: Optional[str] = None) -> Tuple[str, str, List[ActionOut], Optional[int]]:
     ql = question.lower().strip()
     ctx_project_id = None
     if page and page.startswith("project:"):
@@ -722,6 +1159,10 @@ def _answer(question: str, page: Optional[str], user, db: Session) -> Tuple[str,
             ctx_project_id = int(page.split(":", 1)[1])
         except ValueError:
             ctx_project_id = None
+    # Conversational memory: the project discussed earlier in this session —
+    # used when the user refers to "it" without the page context carrying one.
+    if ctx_project_id is None:
+        ctx_project_id = _session_get_project(session_id)
     real_page = page if page and not page.startswith("project:") else None
 
     # 0. Page-context questions FIRST — "how does this work" while sitting on
@@ -732,22 +1173,39 @@ def _answer(question: str, page: Optional[str], user, db: Session) -> Tuple[str,
         ql,
     ))
     if asks_page_context and real_page and real_page in PAGE_HELP:
-        return PAGE_HELP[real_page], "help", []
+        return PAGE_HELP[real_page], "help", [], None
 
-    # 1. Data intents first (they may fall through with None)
-    for fn in (
-        lambda: _intent_project_detail(q=question, ql=ql, ctx_project_id=ctx_project_id, user=user, db=db),
-        lambda: _intent_my_role_data(ql, user, db),
-        lambda: _intent_investigate_next(ql, user, db),
-        lambda: _intent_high_risk(ql, user, db),
-        lambda: _intent_anomalies(ql, user, db),
-        lambda: _intent_portfolio_stats(question, user, db),
-        lambda: _intent_state_top(ql, user, db),
-    ):
+    # 1. Data intents first (they may fall through with None). Order matters:
+    #    navigation, then ID-anchored lookups, then role/data analytics.
+    discussed_pid: Optional[int] = None
+    results = [
+        (lambda: _intent_navigate(question, ql, ctx_project_id, user, db), "data"),
+        (lambda: _intent_project_lookup(question, ql, ctx_project_id, user, db), "data"),
+        # List/screening intents BEFORE _intent_project_detail: plural data
+        # requests ("show high-risk projects", "progress/expenditure mismatch")
+        # must not be swallowed by the project-context attribute regex.
+        (lambda: _intent_high_risk(ql, user, db), "data"),
+        (lambda: _intent_analytical_screening(ql, user, db), "data"),
+        (lambda: _intent_anomalies(ql, user, db), "data"),
+        (lambda: _intent_project_detail(q=question, ql=ql, ctx_project_id=ctx_project_id, user=user, db=db), "data"),
+        (lambda: _intent_risk_methodology(ql, user, ctx_project_id, db), "data"),
+        (lambda: _intent_my_role_data(ql, user, db), "data"),
+        (lambda: _intent_investigate_next(ql, user, db), "data"),
+        (lambda: _intent_vendor(question, ql, user, db), "data"),
+        (lambda: _intent_portfolio_stats(question, user, db), "data"),
+        (lambda: _intent_state_top(ql, user, db), "data"),
+    ]
+    for fn, source in results:
         result = fn()
-        if result is not None:
+        if result is None:
+            continue
+        if len(result) == 3:
+            answer, actions, discussed_pid = result
+        else:
             answer, actions = result
-            return answer, "data", actions
+        if discussed_pid:
+            _session_set_project(session_id, discussed_pid)
+        return answer, source, actions, discussed_pid
 
     # 2. Knowledge base — answers gain a contextual action chip pointing at
     #    the screen matching the topic asked about.
@@ -767,15 +1225,18 @@ def _answer(question: str, page: Optional[str], user, db: Session) -> Tuple[str,
                 "ai_audit": ("Open AI Audit Center", "AI Audit Center"),
                 "priority_tiers": ("Open Audit Priority", "Audit Priority"),
                 "status_meanings": ("Browse projects", "Projects"),
+                "risk_center": ("Open Risk Center", "Risk Center"),
+                "compare_help": ("Open Compare Projects", "Compare Projects"),
+                "respond_inquiry": ("Open My District", "My District"),
             }.get(key)
             if nav:
                 actions.append(ActionOut(label=nav[0], action="navigate", target=nav[1]))
-            return answer, "knowledge", actions
+            return answer, "knowledge", actions, None
 
     # 3. Generic "how does this work / what is this" without a matching page
     #    (unknown or project-context page) — route to the Projects explainer.
     if asks_page_context:
-        return PAGE_HELP["Projects"], "help", []
+        return PAGE_HELP["Projects"], "help", [], None
 
     # 3b. Page-scoped how-to questions on a known page — "what should an
     #     auditor check?" on AI Audit Center. Only generic phrasings, so
@@ -785,7 +1246,7 @@ def _answer(question: str, page: Optional[str], user, db: Session) -> Tuple[str,
         r"how do i use this|what can i do here",
         ql,
     ):
-        return PAGE_HELP[real_page], "help", []
+        return PAGE_HELP[real_page], "help", [], None
 
     # 4. Fallback — honest "can't answer" with pointers
     role_note = ""
@@ -800,6 +1261,7 @@ def _answer(question: str, page: Optional[str], user, db: Session) -> Tuple[str,
         + role_note,
         "help",
         [],
+        None,
     )
 
 
@@ -810,9 +1272,15 @@ def ask(
     db: Session = Depends(get_db),
 ):
     """Ask the MPLADS assistant. Role enforcement is server-side: every data
-    intent re-checks auth.has_role_rank / capabilities before answering."""
-    answer, source, actions = _answer(payload.question, payload.page, user, db)
-    return AskResponse(answer=answer, source=source, actions=actions)
+    intent re-checks auth.has_role_rank / capabilities before answering.
+    Returns project_id so clients can keep conversation context for
+    follow-ups like "why is it risky?" → "open it"."""
+    session_id = payload.session_id or str(uuid.uuid4())
+    answer, source, actions, discussed_pid = _answer(
+        payload.question, payload.page, user, db, session_id=session_id
+    )
+    return AskResponse(answer=answer, source=source, actions=actions,
+                       project_id=discussed_pid)
 
 
 @router.get("/suggestions")
@@ -822,7 +1290,9 @@ def suggestions(page: Optional[str] = None):
     the client keeps the list compact."""
     if not page or page not in PAGE_SUGGESTIONS:
         return SUGGESTIONS
-    return {"general": PAGE_SUGGESTIONS[page] + SUGGESTIONS["general"][:2]}
+    # Dedupe while preserving order — page chips often overlap role defaults.
+    blended = list(dict.fromkeys(PAGE_SUGGESTIONS[page] + SUGGESTIONS["general"][:2]))
+    return {"general": blended}
 
 
 @router.get("/context-help")
@@ -832,4 +1302,5 @@ def context_help(page: str):
     text = PAGE_HELP.get(page)
     if not text:
         raise HTTPException(status_code=404, detail="Unknown page")
+    return {"page": page, "help": text}
     return {"page": page, "help": text}

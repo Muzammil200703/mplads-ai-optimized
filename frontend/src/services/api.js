@@ -282,6 +282,15 @@ export async function refreshAnomaliesSummary() {
   return request("/dashboard/anomalies-summary/refresh", { method: "POST" })
 }
 
+export async function getEarlyWarning(params = {}) {
+  const cacheKey = `early_warning_${buildQuery(params)}`
+  const cached = cacheGet(cacheKey, 120000) // 2 min cache
+  if (cached !== undefined) return cached
+  const data = await request(`/dashboard/early-warning${buildQuery(params)}`)
+  if (data) cacheSet(cacheKey, data)
+  return data
+}
+
 export async function getProjects(params = {}) {
   return cachedGet(`data_projects_${buildQuery(params)}`, 30000, () =>
     request(`/projects${buildQuery(params)}`))
@@ -450,6 +459,30 @@ export async function getAuditPrioritySummary(params = {}) {
 export async function getSimilarProjects(projectId, limit = 5) {
   return cachedGet(`data_sim_${projectId}_${limit}`, 300000, () =>
     request(`/projects/${projectId}/similar?limit=${limit}`))
+}
+
+/* ── Forensic tools (Project Forensic Mode · DNA/Twins · Stress Test) ──
+   Backed by backend/forensic_api.py. 300s cache matches the similar-
+   projects cache; stress-test bypasses the cache so each simulation
+   reflects the live inputs, though the current-snapshot shape is
+   deterministic for a given project. */
+
+export async function getForensicBundle(projectId) {
+  return cachedGet(`forensic_${projectId}`, 300000, () =>
+    request(`/forensic-tools/${projectId}`))
+}
+
+export async function getProjectDNA(projectId) {
+  return cachedGet(`dna_${projectId}`, 300000, () =>
+    request(`/forensic-tools/dna/${projectId}`))
+}
+
+export async function getProjectStressTest(projectId, payload) {
+  return request(`/forensic-tools/stress-test/${projectId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {}),
+  })
 }
 
 export async function getAnomalyAnalytics(params = {}) {
@@ -680,10 +713,10 @@ export async function closeInquiry(inquiryId) {
 
 // ═══════════════ MPLADS AI ASSISTANT ═══════════════
 
-export async function askAssistant(question, page) {
+export async function askAssistant(question, page, sessionId) {
   return request("/assistant/ask", {
     method: "POST",
-    body: JSON.stringify({ question, page: page || null }),
+    body: JSON.stringify({ question, page: page || null, session_id: sessionId || null }),
   })
 }
 

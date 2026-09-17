@@ -41,7 +41,7 @@ function MyVerificationsInner({ onOpenProject }) {
   useEffect(() => { load() }, [load])
 
   return (
-    <div className="min-h-full bg-[#f9f9ff] p-4 text-[#151c27] transition-colors duration-200 sm:p-6 dark:bg-[#111827] dark:text-gray-100">
+    <div className="min-h-full bg-[#f9f9ff] p-4 text-[#151c27] transition-colors duration-200 sm:p-6 dark:bg-[#0a0a0c] dark:text-gray-100">
       <div className="mx-auto max-w-[1440px] space-y-4">          <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
           <div>
             <h2 className="text-2xl font-bold text-[#031632] dark:text-[#f3f4f6]">My Evidence Submissions</h2>
@@ -50,13 +50,13 @@ function MyVerificationsInner({ onOpenProject }) {
               your submission never changes the official project record.
             </p>
           </div>
-          <span className="rounded-lg bg-white px-3 py-1.5 text-sm font-bold text-[#031632] shadow-sm dark:bg-[#111827] dark:text-[#f3f4f6]">
+          <span className="rounded-lg bg-white px-3 py-1.5 text-sm font-bold text-[#031632] shadow-sm dark:bg-[#0a0a0c] dark:text-[#f3f4f6]">
             {items ? `${items.length} reports` : "…"}
           </span>
         </div>
 
         {loading && (
-          <div className="rounded-xl border border-[#dcdde4] bg-white p-8 text-center text-sm text-[#44474d] dark:border-[#3f4657] dark:bg-[#111827] dark:text-[#9ca3af]">
+          <div className="rounded-xl border border-[#dcdde4] bg-white p-8 text-center text-sm text-[#44474d] dark:border-[#2e2e33] dark:bg-[#0a0a0c] dark:text-[#9ca3af]">
             Loading your submissions…
           </div>
         )}
@@ -67,7 +67,7 @@ function MyVerificationsInner({ onOpenProject }) {
           </div>
         )}
         {!loading && !error && items && items.length === 0 && (
-          <div className="rounded-xl border border-[#dcdde4] bg-white p-10 text-center dark:border-[#3f4657] dark:bg-[#111827]">
+          <div className="rounded-xl border border-[#dcdde4] bg-white p-10 text-center dark:border-[#2e2e33] dark:bg-[#0a0a0c]">
             <div className="text-4xl">✅</div>
             <p className="mt-3 font-semibold text-[#031632] dark:text-[#f3f4f6]">No verifications submitted yet</p>
             <p className="mt-1 text-sm text-[#44474d] dark:text-[#9ca3af]">
@@ -78,7 +78,7 @@ function MyVerificationsInner({ onOpenProject }) {
         {!loading && !error && items && items.length > 0 && (
           <div className="space-y-2.5">
             {items.map((r) => (
-              <div key={r.report_id} className="rounded-xl border border-[#dcdde4] bg-white p-4 dark:border-[#3f4657] dark:bg-[#111827]">
+              <div key={r.report_id} className="rounded-xl border border-[#dcdde4] bg-white p-4 dark:border-[#2e2e33] dark:bg-[#0a0a0c]">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
@@ -90,7 +90,7 @@ function MyVerificationsInner({ onOpenProject }) {
                       <span className="rounded bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-600 dark:bg-gray-700 dark:text-gray-300">
                         GPS: {r.lat != null ? `${r.lat.toFixed(4)}, ${r.lon?.toFixed(4)} (${r.gps_source})` : "not captured"}
                       </span>
-                      {r.photo_hash_id && <span className="rounded bg-[#f0f3ff] px-2 py-0.5 text-xs font-semibold text-[#031632] dark:bg-[#1f2937] dark:text-[#f3f4f6]">📷 photo stored</span>}
+                      {r.photo_hash_id && <span className="rounded bg-[#f0f3ff] px-2 py-0.5 text-xs font-semibold text-[#031632] dark:bg-[#17181c] dark:text-[#f3f4f6]">📷 photo stored</span>}
                       {r.inquiry_id && <span className="rounded bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-700 dark:bg-violet-950 dark:text-violet-300">responds to inquiry #{r.inquiry_id}</span>}
                     </div>
                     <p className="mt-1.5 truncate text-[0.9375rem] font-semibold text-[#031632] dark:text-[#f3f4f6]">
@@ -107,7 +107,7 @@ function MyVerificationsInner({ onOpenProject }) {
                   {onOpenProject && (
                     <button
                       onClick={() => onOpenProject(r.project_id)}
-                      className="shrink-0 rounded-lg border border-[#dcdde4] px-3 py-1.5 text-[0.8125rem] font-bold text-[#031632] transition hover:bg-[#f0f3ff] dark:border-[#3f4657] dark:text-[#f3f4f6] dark:hover:bg-[#1f2937]"
+                      className="shrink-0 rounded-lg border border-[#dcdde4] px-3 py-1.5 text-[0.8125rem] font-bold text-[#031632] transition hover:bg-[#f0f3ff] dark:border-[#2e2e33] dark:text-[#f3f4f6] dark:hover:bg-[#17181c]"
                     >
                       Open project
                     </button>

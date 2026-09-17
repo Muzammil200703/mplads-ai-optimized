@@ -47,7 +47,7 @@ function StatusSelect({ value, options, onChange, busy }) {
       value={value}
       disabled={busy}
       onChange={(e) => onChange(e.target.value)}
-      className="rounded-lg border border-[#dcdde4] bg-white px-2 py-1.5 text-[0.8125rem] font-semibold text-[#151c27] outline-none focus:border-[#031632] disabled:opacity-50 dark:border-[#3f4657] dark:bg-[#1f2937] dark:text-[#f3f4f6]"
+      className="rounded-lg border border-[#dcdde4] bg-white px-2 py-1.5 text-[0.8125rem] font-semibold text-[#151c27] outline-none focus:border-[#031632] disabled:opacity-50 dark:border-[#2e2e33] dark:bg-[#17181c] dark:text-[#f3f4f6]"
     >
       {options.map((s) => <option key={s} value={s}>{s}</option>)}
     </select>
@@ -67,7 +67,7 @@ function OpenProjectButton({ projectId, onOpenProject }) {
 
 function EmptyState({ icon, title, hint }) {
   return (
-    <div className="rounded-xl border border-dashed border-[#dcdde4] bg-white/50 px-4 py-12 text-center sm:px-6 dark:border-[#3f4657] dark:bg-[#111827]/50">
+    <div className="rounded-xl border border-dashed border-[#dcdde4] bg-white/50 px-4 py-12 text-center sm:px-6 dark:border-[#2e2e33] dark:bg-[#0a0a0c]/50">
       <p className="text-3xl">{icon}</p>
       <p className="mt-2 font-semibold text-[#031632] dark:text-[#f3f4f6]">{title}</p>
       <p className="mt-1 text-sm text-[#44474d] dark:text-[#9ca3af]">{hint}</p>
@@ -77,7 +77,7 @@ function EmptyState({ icon, title, hint }) {
 
 function LoadingState({ label }) {
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-[#dcdde4] bg-white px-4 py-6 dark:border-[#3f4657] dark:bg-[#111827]">
+    <div className="flex items-center gap-3 rounded-xl border border-[#dcdde4] bg-white px-4 py-6 dark:border-[#2e2e33] dark:bg-[#0a0a0c]">
       <div className="h-5 w-5 animate-spin rounded-full border-2 border-blue-600 border-r-transparent" />
       <span className="text-sm text-[#44474d] dark:text-[#9ca3af]">{label}</span>
     </div>
@@ -149,12 +149,12 @@ function SavedProjectsInner({ onOpenProject }) {
   }
 
   return (
-    <div className="min-h-full bg-[#f9f9ff] p-4 text-[#151c27] transition-colors duration-200 sm:p-6 dark:bg-[#111827] dark:text-gray-100">
+    <div className="min-h-full bg-[#f9f9ff] p-4 text-[#151c27] transition-colors duration-200 sm:p-6 dark:bg-[#0a0a0c] dark:text-gray-100">
       <div className="mx-auto max-w-[1440px] space-y-4">
       <PageHeader
         title="Saved Projects"
         subtitle="Projects you bookmarked for your investigation workflow."
-        right={<span className="rounded-lg bg-white px-3 py-1.5 text-sm font-bold text-[#031632] shadow-sm dark:bg-[#111827] dark:text-[#f3f4f6]">{items ? `${items.length} saved` : "…"}</span>}
+        right={<span className="rounded-lg bg-white px-3 py-1.5 text-sm font-bold text-[#031632] shadow-sm dark:bg-[#0a0a0c] dark:text-[#f3f4f6]">{items ? `${items.length} saved` : "…"}</span>}
       />
       {loading && <LoadingState label="Loading saved projects…" />}
       {error && <ErrorState message={error} onRetry={load} />}
@@ -164,7 +164,7 @@ function SavedProjectsInner({ onOpenProject }) {
       {!loading && !error && items && items.length > 0 && (
         <div className="space-y-2.5">
           {items.map((p) => (
-            <div key={p.project_id} className="rounded-xl border border-[#dcdde4] bg-white p-4 dark:border-[#3f4657] dark:bg-[#111827]">
+            <div key={p.project_id} className="rounded-xl border border-[#dcdde4] bg-white p-4 dark:border-[#2e2e33] dark:bg-[#0a0a0c]">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
@@ -186,7 +186,7 @@ function SavedProjectsInner({ onOpenProject }) {
                   <button
                     onClick={() => remove(p.project_id)}
                     disabled={busyId === p.project_id}
-                    className="rounded-lg border border-[#dcdde4] px-3 py-1.5 text-[0.8125rem] font-bold text-red-600 transition hover:bg-red-50 disabled:opacity-50 dark:border-[#3f4657] dark:text-red-400 dark:hover:bg-red-950/30"
+                    className="rounded-lg border border-[#dcdde4] px-3 py-1.5 text-[0.8125rem] font-bold text-red-600 transition hover:bg-red-50 disabled:opacity-50 dark:border-[#2e2e33] dark:text-red-400 dark:hover:bg-red-950/30"
                   >
                     {busyId === p.project_id ? "Removing…" : "Remove"}
                   </button>
@@ -237,12 +237,12 @@ function MyInvestigationsInner({ onOpenProject }) {
   }
 
   return (
-    <div className="min-h-full bg-[#f9f9ff] p-4 text-[#151c27] transition-colors duration-200 sm:p-6 dark:bg-[#111827] dark:text-gray-100">
+    <div className="min-h-full bg-[#f9f9ff] p-4 text-[#151c27] transition-colors duration-200 sm:p-6 dark:bg-[#0a0a0c] dark:text-gray-100">
       <div className="mx-auto max-w-[1440px] space-y-4">
       <PageHeader
         title="My Investigations"
         subtitle="Your investigation history. Evidence checklists live inside each project's drawer."
-        right={<span className="rounded-lg bg-white px-3 py-1.5 text-sm font-bold text-[#031632] shadow-sm dark:bg-[#111827] dark:text-[#f3f4f6]">{items ? `${items.length} total` : "…"}</span>}
+        right={<span className="rounded-lg bg-white px-3 py-1.5 text-sm font-bold text-[#031632] shadow-sm dark:bg-[#0a0a0c] dark:text-[#f3f4f6]">{items ? `${items.length} total` : "…"}</span>}
       />
       {loading && <LoadingState label="Loading investigations…" />}
       {error && <ErrorState message={error} onRetry={load} />}
@@ -252,7 +252,7 @@ function MyInvestigationsInner({ onOpenProject }) {
       {!loading && !error && items && items.length > 0 && (
         <div className="space-y-2.5">
           {items.map((inv) => (
-            <div key={inv.investigation_id} className="rounded-xl border border-[#dcdde4] bg-white p-4 dark:border-[#3f4657] dark:bg-[#111827]">
+            <div key={inv.investigation_id} className="rounded-xl border border-[#dcdde4] bg-white p-4 dark:border-[#2e2e33] dark:bg-[#0a0a0c]">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
@@ -332,12 +332,12 @@ function MyAuditCasesInner({ onOpenProject }) {
   }
 
   return (
-    <div className="min-h-full bg-[#f9f9ff] p-4 text-[#151c27] transition-colors duration-200 sm:p-6 dark:bg-[#111827] dark:text-gray-100">
+    <div className="min-h-full bg-[#f9f9ff] p-4 text-[#151c27] transition-colors duration-200 sm:p-6 dark:bg-[#0a0a0c] dark:text-gray-100">
       <div className="mx-auto max-w-[1440px] space-y-4">
       <PageHeader
         title="My Audit Cases"
         subtitle="Cases you saved from the case generator. Case content is always regenerated from live project data."
-        right={<span className="rounded-lg bg-white px-3 py-1.5 text-sm font-bold text-[#031632] shadow-sm dark:bg-[#111827] dark:text-[#f3f4f6]">{items ? `${items.length} cases` : "…"}</span>}
+        right={<span className="rounded-lg bg-white px-3 py-1.5 text-sm font-bold text-[#031632] shadow-sm dark:bg-[#0a0a0c] dark:text-[#f3f4f6]">{items ? `${items.length} cases` : "…"}</span>}
       />
       {loading && <LoadingState label="Loading audit cases…" />}
       {error && <ErrorState message={error} onRetry={load} />}
@@ -347,11 +347,11 @@ function MyAuditCasesInner({ onOpenProject }) {
       {!loading && !error && items && items.length > 0 && (
         <div className="space-y-2.5">
           {items.map((c) => (
-            <div key={c.case_row_id} className="rounded-xl border border-[#dcdde4] bg-white p-4 dark:border-[#3f4657] dark:bg-[#111827]">
+            <div key={c.case_row_id} className="rounded-xl border border-[#dcdde4] bg-white p-4 dark:border-[#2e2e33] dark:bg-[#0a0a0c]">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="rounded bg-[#f0f3ff] px-2 py-0.5 font-mono text-xs font-bold text-[#031632] dark:bg-[#1f2937] dark:text-[#f3f4f6]">{c.case_id}</span>
+                    <span className="rounded bg-[#f0f3ff] px-2 py-0.5 font-mono text-xs font-bold text-[#031632] dark:bg-[#17181c] dark:text-[#f3f4f6]">{c.case_id}</span>
                     {c.priority_tier && (
                       <span className={`rounded px-2 py-0.5 text-xs font-bold ${TIER_BADGE[c.priority_tier] || TIER_BADGE.P4}`}>
                         {c.priority_tier} — {c.priority_label}
@@ -475,31 +475,31 @@ function AdminInner() {
       {error && <ErrorState message={error} onRetry={load} />}
 
       {showCreate && (
-        <form onSubmit={createUser} className="mb-6 rounded-xl border border-[#dcdde4] bg-white p-4 dark:border-[#3f4657] dark:bg-[#111827]">
+        <form onSubmit={createUser} className="mb-6 rounded-xl border border-[#dcdde4] bg-white p-4 dark:border-[#2e2e33] dark:bg-[#0a0a0c]">
           <h3 className="mb-3 text-lg font-bold text-[#031632] dark:text-[#f3f4f6]">Provision a new account</h3>
           {createMsg && (
             <p className={`mb-3 rounded-lg p-2 text-sm ${createMsg.ok ? "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300" : "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"}`}>{createMsg.text}</p>
           )}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <label className="text-sm font-semibold text-[#031632] dark:text-[#f3f4f6]">Name
-              <input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="mt-1 w-full rounded-lg border border-[#dcdde4] bg-white px-3 py-2 text-sm dark:border-[#3f4657] dark:bg-[#1f2937] dark:text-gray-100" />
+              <input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="mt-1 w-full rounded-lg border border-[#dcdde4] bg-white px-3 py-2 text-sm dark:border-[#2e2e33] dark:bg-[#17181c] dark:text-gray-100" />
             </label>
             <label className="text-sm font-semibold text-[#031632] dark:text-[#f3f4f6]">Email
-              <input required type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="mt-1 w-full rounded-lg border border-[#dcdde4] bg-white px-3 py-2 text-sm dark:border-[#3f4657] dark:bg-[#1f2937] dark:text-gray-100" />
+              <input required type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="mt-1 w-full rounded-lg border border-[#dcdde4] bg-white px-3 py-2 text-sm dark:border-[#2e2e33] dark:bg-[#17181c] dark:text-gray-100" />
             </label>
             <label className="text-sm font-semibold text-[#031632] dark:text-[#f3f4f6]">Temporary password
-              <input required minLength={8} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} className="mt-1 w-full rounded-lg border border-[#dcdde4] bg-white px-3 py-2 text-sm dark:border-[#3f4657] dark:bg-[#1f2937] dark:text-gray-100" />
+              <input required minLength={8} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} className="mt-1 w-full rounded-lg border border-[#dcdde4] bg-white px-3 py-2 text-sm dark:border-[#2e2e33] dark:bg-[#17181c] dark:text-gray-100" />
             </label>
             <label className="text-sm font-semibold text-[#031632] dark:text-[#f3f4f6]">Role
-              <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} className="mt-1 w-full rounded-lg border border-[#dcdde4] bg-white px-3 py-2 text-sm dark:border-[#3f4657] dark:bg-[#1f2937] dark:text-gray-100">
+              <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} className="mt-1 w-full rounded-lg border border-[#dcdde4] bg-white px-3 py-2 text-sm dark:border-[#2e2e33] dark:bg-[#17181c] dark:text-gray-100">
                 {ALL_ROLES.filter((r) => r !== "public").map((r) => <option key={r} value={r}>{ROLE_LABEL[r]} ({r})</option>)}
               </select>
             </label>
             <label className="text-sm font-semibold text-[#031632] dark:text-[#f3f4f6]">Assigned district (optional)
-              <input value={form.assigned_district} onChange={(e) => setForm({ ...form, assigned_district: e.target.value })} placeholder="e.g. Port Blair" className="mt-1 w-full rounded-lg border border-[#dcdde4] bg-white px-3 py-2 text-sm dark:border-[#3f4657] dark:bg-[#1f2937] dark:text-gray-100" />
+              <input value={form.assigned_district} onChange={(e) => setForm({ ...form, assigned_district: e.target.value })} placeholder="e.g. Port Blair" className="mt-1 w-full rounded-lg border border-[#dcdde4] bg-white px-3 py-2 text-sm dark:border-[#2e2e33] dark:bg-[#17181c] dark:text-gray-100" />
             </label>
             <label className="text-sm font-semibold text-[#031632] dark:text-[#f3f4f6]">Assigned state (optional)
-              <input value={form.assigned_state} onChange={(e) => setForm({ ...form, assigned_state: e.target.value })} placeholder="e.g. Andaman and Nicobar Islands" className="mt-1 w-full rounded-lg border border-[#dcdde4] bg-white px-3 py-2 text-sm dark:border-[#3f4657] dark:bg-[#1f2937] dark:text-gray-100" />
+              <input value={form.assigned_state} onChange={(e) => setForm({ ...form, assigned_state: e.target.value })} placeholder="e.g. Andaman and Nicobar Islands" className="mt-1 w-full rounded-lg border border-[#dcdde4] bg-white px-3 py-2 text-sm dark:border-[#2e2e33] dark:bg-[#17181c] dark:text-gray-100" />
             </label>
           </div>
           <div className="mt-3 flex items-center gap-3">
@@ -510,11 +510,11 @@ function AdminInner() {
       )}
 
       {!loading && users && (
-        <div className="mb-6 rounded-xl border border-[#dcdde4] bg-white p-4 dark:border-[#3f4657] dark:bg-[#111827]">
+        <div className="mb-6 rounded-xl border border-[#dcdde4] bg-white p-4 dark:border-[#2e2e33] dark:bg-[#0a0a0c]">
           <h3 className="mb-3 text-lg font-bold text-[#031632] dark:text-[#f3f4f6]">Users ({users.length})</h3>
           <div className="space-y-2">
             {users.map((u) => (
-              <div key={u.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#dcdde4] px-3 py-2.5 dark:border-[#3f4657]">
+              <div key={u.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#dcdde4] px-3 py-2.5 dark:border-[#2e2e33]">
                 <div className="min-w-0">
                   <p className="truncate text-[0.9375rem] font-semibold text-[#031632] dark:text-[#f3f4f6]">{u.name} {!u.is_active && <span className="ml-1 rounded bg-red-100 px-1.5 py-0.5 text-xs font-bold text-red-700 dark:bg-red-950 dark:text-red-300">disabled</span>}</p>
                   <p className="truncate text-[0.8125rem] text-[#44474d] dark:text-[#9ca3af]">
@@ -528,26 +528,26 @@ function AdminInner() {
                     defaultValue={u.assigned_district || ""}
                     placeholder="district"
                     onBlur={(e) => { const v = e.target.value.trim(); if (v !== (u.assigned_district || "")) saveAssignment(u.id, { assigned_district: v }) }}
-                    className="w-28 rounded-lg border border-[#dcdde4] bg-white px-2 py-1.5 text-[0.8125rem] dark:border-[#3f4657] dark:bg-[#1f2937] dark:text-gray-100"
+                    className="w-28 rounded-lg border border-[#dcdde4] bg-white px-2 py-1.5 text-[0.8125rem] dark:border-[#2e2e33] dark:bg-[#17181c] dark:text-gray-100"
                   />
                   <input
                     defaultValue={u.assigned_state || ""}
                     placeholder="state"
                     onBlur={(e) => { const v = e.target.value.trim(); if (v !== (u.assigned_state || "")) saveAssignment(u.id, { assigned_state: v }) }}
-                    className="w-32 rounded-lg border border-[#dcdde4] bg-white px-2 py-1.5 text-[0.8125rem] dark:border-[#3f4657] dark:bg-[#1f2937] dark:text-gray-100"
+                    className="w-32 rounded-lg border border-[#dcdde4] bg-white px-2 py-1.5 text-[0.8125rem] dark:border-[#2e2e33] dark:bg-[#17181c] dark:text-gray-100"
                   />
                   <select
                     value={u.role}
                     disabled={busyId === u.id}
                     onChange={(e) => changeRole(u.id, e.target.value)}
-                    className="rounded-lg border border-[#dcdde4] bg-white px-2 py-1.5 text-[0.8125rem] font-semibold dark:border-[#3f4657] dark:bg-[#1f2937] dark:text-[#f3f4f6]"
+                    className="rounded-lg border border-[#dcdde4] bg-white px-2 py-1.5 text-[0.8125rem] font-semibold dark:border-[#2e2e33] dark:bg-[#17181c] dark:text-[#f3f4f6]"
                   >
                     {ALL_ROLES.map((r) => <option key={r} value={r}>{ROLE_LABEL[r]} ({r})</option>)}
                   </select>
                   <button
                     onClick={() => toggleActive(u)}
                     disabled={busyId === u.id}
-                    className="rounded-lg border border-[#dcdde4] px-3 py-1.5 text-[0.8125rem] font-bold text-[#151c27] transition hover:bg-gray-50 disabled:opacity-50 dark:border-[#3f4657] dark:text-[#f3f4f6] dark:hover:bg-[#1f2937]"
+                    className="rounded-lg border border-[#dcdde4] px-3 py-1.5 text-[0.8125rem] font-bold text-[#151c27] transition hover:bg-gray-50 disabled:opacity-50 dark:border-[#2e2e33] dark:text-[#f3f4f6] dark:hover:bg-[#17181c]"
                   >
                     {u.is_active ? "Deactivate" : "Activate"}
                   </button>
@@ -559,14 +559,14 @@ function AdminInner() {
       )}
 
       {!loading && invs && (
-        <div className="rounded-xl border border-[#dcdde4] bg-white p-4 dark:border-[#3f4657] dark:bg-[#111827]">
+        <div className="rounded-xl border border-[#dcdde4] bg-white p-4 dark:border-[#2e2e33] dark:bg-[#0a0a0c]">
           <h3 className="mb-3 text-lg font-bold text-[#031632] dark:text-[#f3f4f6]">System-wide investigations ({invs.length})</h3>
           {invs.length === 0 ? (
             <p className="text-sm text-[#44474d] dark:text-[#9ca3af]">No user investigations recorded yet.</p>
           ) : (
             <div className="space-y-2">
               {invs.map((i) => (
-                <div key={i.investigation_id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[#dcdde4] px-3 py-2.5 dark:border-[#3f4657]">
+                <div key={i.investigation_id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[#dcdde4] px-3 py-2.5 dark:border-[#2e2e33]">
                   <div className="min-w-0">
                     <p className="truncate text-[0.875rem] font-semibold text-[#031632] dark:text-[#f3f4f6]">#{i.project_id} {i.project_name}</p>
                     <p className="text-[0.8125rem] text-[#44474d] dark:text-[#9ca3af]">{i.user_name} ({i.user_email}) · {i.investigation_status} · {i.priority_tier || "—"} · updated {i.updated_at?.replace("T", " ").slice(0, 16)}</p>

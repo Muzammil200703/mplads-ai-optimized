@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, memo } from "react"
 import { getAnomalies, getAnomaliesSummary, getStates, getConstituencies, getProjectDetail, getAnomalyAnalytics, getRiskExplanation } from "../services/api"
 import { TableRowsSkeleton, CardsSkeleton, MobileCardsSkeleton } from "../components/Skeletons"
 import { formatMoney, formatNumber } from "../utils/format"
+import RecTimelineBlock from "../components/RecTimelineBlock"
 
 /* ──────────── Expenditure-span display helpers (recorded activity only —
    NOT official start/delay dates; see tooltip below) ──────────── */
@@ -64,7 +65,7 @@ const DonutChart = memo(function DonutChart({ high, medium, low, none }) {
           className="h-44 w-44 rounded-full sm:h-52 sm:w-52"
           style={{ background: grad }}
         />
-        <div className="absolute inset-0 flex flex-col items-center justify-center rounded-full bg-white dark:bg-[#1f2937]" style={{ margin: "22%" }}>
+        <div className="absolute inset-0 flex flex-col items-center justify-center rounded-full bg-white dark:bg-[#17181c]" style={{ margin: "22%" }}>
           <span className="font-mono text-2xl font-bold text-gray-900 dark:text-white">{total.toLocaleString("en-IN")}</span>
           <span className="text-xs text-gray-500">Projects</span>
         </div>
@@ -106,7 +107,7 @@ const FYearChart = memo(function FYearChart({ items }) {
             </div>
             <div className="h-7 w-full overflow-hidden rounded-md bg-gray-100 dark:bg-gray-700/60">
               <div
-                className="h-full rounded-md bg-emerald-500 transition-all duration-300"
+                className="bar-fill h-full rounded-md bg-emerald-500 transition-all duration-300"
                 style={{ width: `${Math.max(2, pct)}%` }}
               />
             </div>
@@ -136,7 +137,7 @@ const HBarChart = memo(function HBarChart({ items, maxCount, barColor = "bg-blue
             <div className="min-w-0 flex-1">
               <div className="h-8 overflow-hidden rounded bg-gray-100 dark:bg-gray-700/60">
                 <div
-                  className={`h-full rounded ${barColor} transition-all duration-300 group-hover:opacity-80`}
+                  className={`bar-fill h-full rounded ${barColor} transition-all duration-300 group-hover:opacity-80`}
                   style={{ width: `${Math.max(2, width)}%` }}
                 />
               </div>
@@ -189,6 +190,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
   // Detail panel
   const [selectedAnomaly, setSelectedAnomaly] = useState(null)
   const [detailRisk, setDetailRisk] = useState(null)
+  const [detailRec, setDetailRec] = useState(null)
   const [riskExplanation, setRiskExplanation] = useState(null)
   const [loadingDetail, setLoadingDetail] = useState(false)
 
@@ -271,6 +273,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
   const handleOpenDetail = async (anomaly) => {
     setSelectedAnomaly(anomaly)
     setDetailRisk(null)
+    setDetailRec(null)
     setRiskExplanation(null)
     setLoadingDetail(true)
     try {
@@ -278,7 +281,10 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
         getProjectDetail(anomaly.project_id),
         getRiskExplanation(anomaly.project_id),
       ])
-      if (detail) setDetailRisk(detail.risk)
+      if (detail) {
+        setDetailRisk(detail.risk)
+        setDetailRec(detail.rec)
+      }
       if (explanation) setRiskExplanation(explanation)
     } catch (err) { console.error("Detail error:", err) }
     finally { setLoadingDetail(false) }
@@ -288,7 +294,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
   const rd = analytics?.risk_distribution || { high: 0, medium: 0, low: 0, none: 0 }
 
   return (
-    <div className="min-h-full bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#111827] dark:text-[#f3f4f6]">
+    <div className="min-h-full bg-[#f9f9ff] p-4 sm:p-6 text-[#151c27] transition-colors duration-200 dark:bg-[#0a0a0c] dark:text-[#f3f4f6]">
       <div className="mx-auto max-w-[1440px] space-y-4 sm:space-y-6">
 
         {/* HEADER */}
@@ -310,7 +316,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
             { label: "Medium Risk", value: summary.medium_risk, icon: "🟡", text: "text-amber-600 dark:text-amber-400" },
             { label: "Total Anomalies", value: summary.total_anomalies, icon: "📊", text: "text-purple-600 dark:text-purple-400" },
           ].map((card) => (
-            <div key={card.label} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
+            <div key={card.label} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-[#17181c]">
               <div className="flex items-center justify-between">
                 <p className="text-[0.6875rem] font-bold uppercase tracking-wider text-gray-400">{card.label}</p>
                 <span className="text-lg">{card.icon}</span>
@@ -324,13 +330,13 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
         {analytics && (
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {/* Risk Distribution Donut */}
-            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
+            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#17181c]">
               <h3 className="mb-4 text-sm font-bold uppercase tracking-wider text-gray-400">Risk Distribution</h3>
               <DonutChart high={rd.high} medium={rd.medium} low={rd.low} none={rd.none} />
             </div>
 
             {/* Anomaly Type Distribution */}
-            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
+            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#17181c]">
               <h3 className="mb-4 text-sm font-bold uppercase tracking-wider text-gray-400">Anomaly Type Distribution</h3>
               <HBarChart
                 items={analytics.anomaly_types.map((at) => ({ label: at.type, count: at.count, pct: at.percentage }))}
@@ -344,7 +350,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
         {analytics && (
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {/* Top States */}
-            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
+            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#17181c]">
               <h3 className="mb-4 text-sm font-bold uppercase tracking-wider text-gray-400">Top States by Anomaly Count</h3>
               <HBarChart
                 items={analytics.state_distribution.map((sd, idx) => ({ label: sd.state, count: sd.count, rank: idx + 1 }))}
@@ -357,7 +363,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
             </div>
 
             {/* FY Distribution — compact vertical bar chart */}
-            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
+            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#17181c]">
               <h3 className="mb-1 text-sm font-bold text-gray-600 dark:text-gray-300">Anomalies by Financial Year</h3>
               <p className="mb-4 text-[0.6875rem] text-gray-400 dark:text-gray-500">Number of flagged projects per FY period</p>
               {analytics.fy_distribution && analytics.fy_distribution.length > 0 ? (
@@ -371,7 +377,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
 
         {/* PROJECTS BY RISK LEVEL */}
         {analytics && (
-          <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
+          <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#17181c]">
             <div className="mb-4">
               <h3 className="text-sm font-bold uppercase tracking-wider text-gray-400">Projects by Risk Level</h3>
               <p className="mt-0.5 text-xs text-gray-400">Distribution of monitored projects across AI-assessed risk levels.</p>
@@ -403,7 +409,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                         </div>
                         <div className="h-8 overflow-hidden rounded-md bg-gray-100 dark:bg-gray-700/60">
                           <div
-                            className={`h-full rounded-md ${cat.color} transition-all duration-500 group-hover:opacity-80`}
+                            className={`bar-fill h-full rounded-md ${cat.color} transition-all duration-500 group-hover:opacity-80`}
                             style={{ width: `${Math.max(1, barWidth)}%` }}
                           />
                         </div>
@@ -421,7 +427,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
         )}
 
         {/* FILTERS */}
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-[#17181c]">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-5">
             <div>
               <label className="block text-[0.625rem] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Search</label>
@@ -430,13 +436,13 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                 onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1) }}
                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); setCurrentPage(1); fetchAnomalies() } }}
                 placeholder="Project name or ID..."
-                className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white"
+                className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#0a0a0c] dark:text-white"
               />
             </div>
             <div>
               <label className="block text-[0.625rem] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Severity</label>
               <select value={filterSeverity} onChange={(e) => { setFilterSeverity(e.target.value); setCurrentPage(1) }}
-                className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
+                className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#0a0a0c] dark:text-white">
                 <option value="">All Severity</option>
                 <option value="High">High Risk</option>
                 <option value="Medium">Medium Risk</option>
@@ -447,7 +453,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
             <div>
               <label className="block text-[0.625rem] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">State</label>
               <select value={filterState} onChange={(e) => { setFilterState(e.target.value); setCurrentPage(1) }}
-                className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
+                className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#0a0a0c] dark:text-white">
                 <option value="">All States</option>
                 {states.map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
@@ -456,14 +462,14 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
               <label className="block text-[0.625rem] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Constituency</label>
               <select value={filterConstituency} disabled={!filterState}
                 onChange={(e) => { setFilterConstituency(e.target.value); setCurrentPage(1) }}
-                className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 dark:border-gray-600 dark:bg-[#111827] dark:text-white">
+                className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 dark:border-gray-600 dark:bg-[#0a0a0c] dark:text-white">
                 <option value="">{filterState ? "All Constituencies" : "Select State"}</option>
                 {constituencies.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
             <div className="flex items-end">
               <button onClick={handleReset}
-                className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-xs font-bold text-gray-700 transition hover:bg-gray-50 dark:border-gray-600 dark:bg-[#111827] dark:text-gray-200">
+                className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-xs font-bold text-gray-700 transition hover:bg-gray-50 dark:border-gray-600 dark:bg-[#0a0a0c] dark:text-gray-200">
                 Reset Filters
               </button>
             </div>
@@ -492,14 +498,14 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                 else { setSortBy(opt.value); setSortDir(opt.value === "project_name" || opt.value === "id" ? "asc" : "desc") }
                 setCurrentPage(1)
               }}
-              className={`rounded-lg px-3 py-1.5 text-[0.6875rem] font-bold transition ${sortBy === opt.value ? "bg-[#031632] text-white dark:bg-blue-600" : "border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:bg-[#1f2937] dark:text-gray-300"}`}>
+              className={`rounded-lg px-3 py-1.5 text-[0.6875rem] font-bold transition ${sortBy === opt.value ? "bg-[#031632] text-white dark:bg-blue-600" : "border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:bg-[#17181c] dark:text-gray-300"}`}>
               {opt.label}{sortBy === opt.value && <span className="ml-1">{sortDir === "asc" ? "↑" : "↓"}</span>}
             </button>
           ))}
         </div>
 
         {/* ANOMALY TABLE */}
-        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-[#1f2937]">
+        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-[#17181c]">
           {loading ? (
             <>
               <TableRowsSkeleton rows={8} cols={5} className="hidden lg:block" />
@@ -513,7 +519,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
               <div className="hidden lg:block overflow-x-auto">
                 <table className="w-full min-w-[1020px]">
                   <thead>
-                    <tr className="border-b-2 border-gray-200 bg-gray-50 text-left text-[0.625rem] font-bold uppercase tracking-widest text-gray-500 dark:border-gray-700 dark:bg-[#172033] dark:text-gray-400">
+                    <tr className="border-b-2 border-gray-200 bg-gray-50 text-left text-[0.625rem] font-bold uppercase tracking-widest text-gray-500 dark:border-gray-700 dark:bg-[#141418] dark:text-gray-400">
                       <th className="px-4 py-3">Project</th>
                       <th className="px-4 py-3">State / Constituency</th>
                       <th className="px-4 py-3" title={DELAY_TOOLTIP}>Delayed By ⓘ</th>
@@ -607,7 +613,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
               </div>
 
               {/* PAGINATION */}
-              <div className="flex flex-wrap items-center justify-between gap-4 border-t border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#172033]">
+              <div className="flex flex-wrap items-center justify-between gap-4 border-t border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#141418]">
                 <span className="text-xs text-gray-600 dark:text-gray-400">
                   Showing {totalCount === 0 ? 0 : (currentPage - 1) * rowsPerPage + 1} to{" "}
                   {Math.min(currentPage * rowsPerPage, totalCount)} of{" "}
@@ -615,10 +621,10 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                 </span>
                 <div className="flex items-center gap-2">
                   <button disabled={currentPage === 1} onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                    className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 disabled:opacity-40 dark:border-gray-600 dark:bg-[#1f2937] dark:text-gray-200">← Prev</button>
+                    className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 disabled:opacity-40 dark:border-gray-600 dark:bg-[#17181c] dark:text-gray-200">← Prev</button>
                   <span className="font-mono text-xs font-bold">{currentPage} / {totalPages}</span>
                   <button disabled={currentPage >= totalPages} onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                    className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 disabled:opacity-40 dark:border-gray-600 dark:bg-[#1f2937] dark:text-gray-200">Next →</button>
+                    className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 disabled:opacity-40 dark:border-gray-600 dark:bg-[#17181c] dark:text-gray-200">Next →</button>
                 </div>
               </div>
             </>
@@ -671,7 +677,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
 
         return (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 sm:p-4 backdrop-blur-2xs" onClick={() => setSelectedAnomaly(null)}>
-          <div onClick={(e) => e.stopPropagation()} className="flex max-h-[92vh] sm:max-h-[88vh] w-full sm:max-w-3xl flex-col rounded-t-2xl sm:rounded-2xl border border-gray-200 bg-white shadow-soft-lg dark:border-gray-700 dark:bg-[#1f2937]">
+          <div onClick={(e) => e.stopPropagation()} className="flex max-h-[92vh] sm:max-h-[88vh] w-full sm:max-w-3xl flex-col rounded-t-2xl sm:rounded-2xl border border-gray-200 bg-white shadow-soft-lg dark:border-gray-700 dark:bg-[#17181c]">
 
             {/* ── HEADER ── */}
             <div className="flex items-start justify-between border-b border-gray-200 p-5 dark:border-gray-700">
@@ -716,7 +722,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
               ) : (
                 <>
                   {/* ── RISK SCORE GAUGE ── */}
-                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-5 dark:border-gray-700 dark:bg-[#111827]">
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-5 dark:border-gray-700 dark:bg-[#0a0a0c]">
                     <div className="flex items-start justify-between gap-4">
                       <div>
                         <p className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">Risk Score</p>
@@ -739,13 +745,22 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                     {/* Gauge bar */}
                     <div className="mt-4">
                       <div className="h-3 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
-                        <div className={`h-full rounded-full transition-all duration-500 ${
+                        <div className={`bar-start h-full rounded-full transition-all duration-500 ${
                           s.risk_score >= 60 ? "bg-red-500" : s.risk_score >= 30 ? "bg-amber-500" : s.risk_score > 0 ? "bg-blue-500" : "bg-gray-300"
                         }`} style={{ width: `${Math.max(2, s.risk_score)}%` }} />
                       </div>
                       <div className="flex justify-between mt-1 text-[0.5625rem] text-gray-400">
                         <span>0</span><span>25</span><span>50</span><span>75</span><span>100</span>
                       </div>
+                    </div>
+                  </div>
+
+                  {/* ── RECOMMENDATION & TIMELINE ── same backend rec source
+                      of truth as the Projects page — identical values. */}
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#0a0a0c]">
+                    <p className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">Recommendation & Timeline</p>
+                    <div className="mt-2.5">
+                      <RecTimelineBlock rec={detailRec || selectedAnomaly?.rec} />
                     </div>
                   </div>
 
@@ -776,7 +791,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                   </div>
 
                   {/* ── FINANCIAL OVERVIEW ── */}
-                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#111827]">
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#0a0a0c]">
                     <h4 className="mb-3 text-xs font-bold uppercase tracking-wider text-gray-400">Financial Overview</h4>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                       <div>
@@ -808,7 +823,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                     {sanctioned > 0 && (
                       <div className="mt-3">
                         <div className="h-2 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
-                          <div className={`h-full rounded-full ${utilization > 100 ? "bg-red-500" : "bg-blue-600"}`} style={{ width: `${Math.min(100, utilization)}%` }} />
+                          <div className={`bar-fill h-full rounded-full ${utilization > 100 ? "bg-red-500" : "bg-blue-600"}`} style={{ width: `${Math.min(100, utilization)}%` }} />
                         </div>
                       </div>
                     )}
@@ -816,7 +831,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
 
                   {/* ── RECORDED EXPENDITURE ACTIVITY (delay estimate) ── */}
                   {s.activity_days !== null && s.activity_days !== undefined && (
-                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#111827]">
+                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#0a0a0c]">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <h4 className="text-xs font-bold uppercase tracking-wider text-gray-400" title={DELAY_TOOLTIP}>Recorded Expenditure Activity ⓘ</h4>
                         {s.delay_indicator && (
@@ -847,7 +862,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
 
                   {/* ── RISK DETECTION BREAKDOWN ── */}
                   {riskSignals.length > 0 && (
-                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#111827]">
+                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#0a0a0c]">
                       <h4 className="mb-3 text-xs font-bold uppercase tracking-wider text-gray-400">Risk Detection Breakdown</h4>
                       <div className="overflow-x-auto">
                         <table className="w-full text-xs">
@@ -890,7 +905,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                         }).map((reason, i) => {
                           const sev = reasonSeverity(reason)
                           return (
-                            <div key={i} className="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-[#1f2937]">
+                            <div key={i} className="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-[#17181c]">
                               <div className="flex items-center gap-2 mb-1.5">
                                 <span className={`rounded border px-1.5 py-0.5 text-[0.5625rem] font-bold ${severityColor(sev)}`}>{sev}</span>
                                 <span className="text-xs font-bold text-gray-800 dark:text-gray-200">{reason}</span>

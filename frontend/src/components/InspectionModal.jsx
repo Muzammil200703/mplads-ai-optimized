@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { useEffect, useRef, useState } from "react"
 import ForensicsPanel from "./ForensicsPanel"
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -11,8 +11,24 @@ import ForensicsPanel from "./ForensicsPanel"
    ═══════════════════════════════════════════════════════════════════ */
 
 export function ModalShell({ title, onClose, children }) {
+  // Closing animation: flip to .is-closing (fade + slight dip), then unmount
+  // after 150ms. Reduced motion unmounts immediately. The ref guard makes
+  // requestClose safe against double-invocation (Escape + backdrop click).
+  const [closing, setClosing] = useState(false)
+  const closingRef = useRef(false)
+  const requestClose = () => {
+    if (closingRef.current) return
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      onClose()
+      return
+    }
+    closingRef.current = true
+    setClosing(true)
+    setTimeout(onClose, 150)
+  }
+
   useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose() }
+    const onKey = (e) => { if (e.key === "Escape") requestClose() }
     window.addEventListener("keydown", onKey)
     // Lock background scroll while open (matches drawer/modal behaviour
     // elsewhere in the app); always restored on close.
@@ -26,14 +42,14 @@ export function ModalShell({ title, onClose, children }) {
 
   return (
     <div
-      className="fixed inset-0 z-[75] flex items-start justify-center overflow-y-auto bg-black/50 p-3 backdrop-blur-2xs sm:p-6"
-      onClick={onClose}
+      className={`anim-overlay-in fixed inset-0 z-[75] flex items-start justify-center overflow-y-auto bg-black/50 p-3 backdrop-blur-2xs sm:p-6 ${closing ? "is-closing" : ""}`}
+      onClick={requestClose}
       role="dialog"
       aria-modal="true"
       aria-label={title}
     >
       <div
-        className="w-full max-w-2xl rounded-2xl border border-[#dcdde4] bg-white shadow-soft-lg dark:border-[#3f4657] dark:bg-gray-900"
+        className="anim-card-in w-full max-w-2xl rounded-2xl border border-[#dcdde4] bg-white shadow-soft-lg dark:border-[#2e2e33] dark:bg-gray-900"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-gray-200 px-5 py-3 dark:border-gray-700">

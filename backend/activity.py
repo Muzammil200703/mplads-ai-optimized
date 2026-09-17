@@ -53,6 +53,7 @@ from datetime import date
 from typing import Dict, List, Optional, Tuple
 
 from database import SessionLocal
+from sqlalchemy import text
 import models
 
 # ── Documented thresholds ───────────────────────────────────────
@@ -62,17 +63,18 @@ GAP_INFO_MIN = 30                # days — below this: normal
 MAX_MONTHLY_POINTS = 36          # cap chart points (3 years)
 MAX_TRANSACTIONS_RETURNED = 50   # cap individual transaction list
 
-# ── Shared in-process index cache (single owner; timeline delegates) ──
+# ── Shared in-process cache (single owner; timeline delegates) ──
 _lock = threading.Lock()
 _ready = False
 
-# key -> list of (mp, amount, date, status, id) tuples for that work.
-# Key strings live only in the dict (one per distinct work), not per row.
-_exp_rows: Dict[str, list] = {}
-# key -> (mp, amount, date, id) of the FIRST recommended work for that key
-_rec_first: Dict[str, tuple] = {}
-# key -> (date, amount, id) of the completed work for that key (first wins)
-_comp_by_key: Dict[str, tuple] = {}
+# No resident per-key dicts: recommended/completed lookups are fetched per
+# key on demand (_rec_cached/_comp_cached, small bounded caches) and the
+# full expenditure rows per key via _exp_rows_for_key (bounded LRU).
+# The earlier design held 102k rec + 38k comp entries resident (~55 MB);
+_ROWS_CACHE_MAX = 64
+_rows_cache: Dict[str, list] = {}
+_rows_cache_order: List[str] = []
+_rows_lock = threading.Lock()
 
 
 def _norm(s) -> str:
@@ -105,110 +107,132 @@ def _days_between(d1: str, d2: str) -> Optional[int]:
 
 
 def _build_index():
-    """Build the shared compact work index once (streamed, SQL-grouped).
+    """Mark the module ready. All per-key data is now fetched on demand.
 
-    SQLite groups rows by the normalized key in SQL, so this process only
-    ever holds one key string per distinct work plus compact tuple rows.
+    Previously this streamed ALL recommended_works (102k) and
+    completed_works (38k) rows into resident dicts (~55MB) plus a 106k-row
+    expenditure aggregate scan. None of it was necessary: every consumer
+    works on ONE project key at a time, and the per-key fetches below are
+    index-backed (idx_exp_workkey / idx_rec_workkey / idx_comp_workkey),
+    answering in microseconds. This function now only exists so callers
+    that warm the index explicitly keep working.
     """
-    global _ready, _exp_rows, _rec_first, _comp_by_key
+    global _ready
     with _lock:
-        if _ready:
-            return
-        db = SessionLocal()
-        try:
-            # ── Expenditures: SQL GROUP BY on the normalized key ──
-            # Streamed via yield_per so the full result never materializes.
-            exp_q = (
-                db.query(
-                    models.Expenditure.work_description,
-                    models.Expenditure.constituency,
-                    models.Expenditure.state,
-                    models.Expenditure.mp_name,
-                    models.Expenditure.expenditure_amount,
-                    models.Expenditure.expenditure_date,
-                    models.Expenditure.payment_status,
-                    models.Expenditure.id,
-                )
-                .filter(
-                    models.Expenditure.work_description.isnot(None),
-                    models.Expenditure.work_description != "",
-                    models.Expenditure.constituency.isnot(None),
-                    models.Expenditure.constituency != "",
-                    models.Expenditure.state.isnot(None),
-                    models.Expenditure.state != "",
-                    models.Expenditure.expenditure_date.isnot(None),
-                )
-                .yield_per(50)
-            )
-            exp_rows: Dict[str, list] = {}
-            for desc, con, st, mp, amt, dt, status, eid in exp_q:
-                d = _iso_date(dt)
-                if not d:
-                    continue  # rows without a valid date cannot participate
-                key = f"{_norm(desc)}\u241f{_norm(con)}\u241f{_norm(st)}"
-                exp_rows.setdefault(key, []).append(
-                    (_norm(mp), amt, d, status, eid)
-                )
+        _ready = True
 
-            # ── Recommended works: first (earliest id) per key ──
-            rec_first: Dict[str, tuple] = {}
-            rec_q = (
-                db.query(
-                    models.RecommendedWork.work_description,
-                    models.RecommendedWork.constituency,
-                    models.RecommendedWork.state,
-                    models.RecommendedWork.mp_name,
-                    models.RecommendedWork.recommended_amount,
-                    models.RecommendedWork.recommendation_date,
-                    models.RecommendedWork.id,
-                )
-                .filter(
-                    models.RecommendedWork.work_description.isnot(None),
-                    models.RecommendedWork.work_description != "",
-                    models.RecommendedWork.constituency.isnot(None),
-                    models.RecommendedWork.constituency != "",
-                    models.RecommendedWork.state.isnot(None),
-                    models.RecommendedWork.state != "",
-                )
-                .yield_per(50)
-            )
-            for desc, con, st, mp, amt, dt, rid in rec_q:
-                key = f"{_norm(desc)}\u241f{_norm(con)}\u241f{_norm(st)}"
-                if key not in rec_first:
-                    # (mp, amount, date, id) — id kept for source attribution
-                    rec_first[key] = (_norm(mp), amt, _iso_date(dt), rid)
 
-            # ── Completed works: first per key ──
-            comp_by_key: Dict[str, tuple] = {}
-            comp_q = (
-                db.query(
-                    models.CompletedWork.work_description,
-                    models.CompletedWork.constituency,
-                    models.CompletedWork.state,
-                    models.CompletedWork.final_amount,
-                    models.CompletedWork.completed_date,
-                    models.CompletedWork.id,
-                )
-                .filter(
-                    models.CompletedWork.work_description.isnot(None),
-                    models.CompletedWork.work_description != "",
-                    models.CompletedWork.constituency.isnot(None),
-                    models.CompletedWork.constituency != "",
-                    models.CompletedWork.state.isnot(None),
-                    models.CompletedWork.state != "",
-                )
-                .yield_per(50)
-            )
-            for desc, con, st, amt, dt, cid in comp_q:
-                key = f"{_norm(desc)}\u241f{_norm(con)}\u241f{_norm(st)}"
-                if key not in comp_by_key:
-                    # (date, amount, id) — id kept for source attribution
-                    comp_by_key[key] = (_iso_date(dt), amt, cid)
+def _rec_for_key(key: str) -> Optional[tuple]:
+    """(mp, amount, date, id) of the FIRST (earliest-id) recommended work
+    for this key, fetched on demand — same tuple as before."""
+    if not key:
+        return None
+    desc, con, st = (key.split("\u241f") + ["", ""])[:3]
+    if not desc:
+        return None
+    db = SessionLocal()
+    try:
+        row = db.execute(text("""
+            SELECT normkey(mp_name), recommended_amount,
+                   recommendation_date, id
+            FROM recommended_works
+            WHERE normkey(work_description) = :desc
+              AND normkey(constituency) = :con
+              AND normkey(state) = :st
+            ORDER BY id ASC LIMIT 1
+        """), {"desc": desc, "con": con, "st": st}).fetchone()
+    finally:
+        db.close()
+    if not row:
+        return None
+    return (row[0], row[1], _iso_date(row[2]), row[3])
 
-            _exp_rows, _rec_first, _comp_by_key = exp_rows, rec_first, comp_by_key
-            _ready = True
-        finally:
-            db.close()
+
+def _comp_for_key(key: str) -> Optional[tuple]:
+    """(date, amount, id) of the first completed work for this key."""
+    if not key:
+        return None
+    desc, con, st = (key.split("\u241f") + ["", ""])[:3]
+    if not desc:
+        return None
+    db = SessionLocal()
+    try:
+        row = db.execute(text("""
+            SELECT completed_date, final_amount, id
+            FROM completed_works
+            WHERE normkey(work_description) = :desc
+              AND normkey(constituency) = :con
+              AND normkey(state) = :st
+            ORDER BY id ASC LIMIT 1
+        """), {"desc": desc, "con": con, "st": st}).fetchone()
+    finally:
+        db.close()
+    if not row:
+        return None
+    return (_iso_date(row[0]), row[1], row[2])
+
+
+_REC_CACHE: Dict[str, Optional[tuple]] = {}
+_COMP_CACHE: Dict[str, Optional[tuple]] = {}
+
+
+def _rec_cached(key: str) -> Optional[tuple]:
+    if key not in _REC_CACHE:
+        if len(_REC_CACHE) > 4096:
+            _REC_CACHE.clear()
+        _REC_CACHE[key] = _rec_for_key(key)
+    return _REC_CACHE[key]
+
+
+def _comp_cached(key: str) -> Optional[tuple]:
+    if key not in _COMP_CACHE:
+        if len(_COMP_CACHE) > 4096:
+            _COMP_CACHE.clear()
+        _COMP_CACHE[key] = _comp_for_key(key)
+    return _COMP_CACHE[key]
+
+
+def _exp_rows_for_key(key: str) -> list:
+    """Full expenditure row list for ONE work key: [(mp, amount, date, status, id)].
+
+    Fetched from SQL on demand (this key only) and memoized in a small
+    bounded LRU. Results are identical to the previous resident-index lookups
+    — same filters, same MP verification inputs, same tuple layout.
+    """
+    with _rows_lock:
+        if key in _rows_cache:
+            return _rows_cache[key]
+    desc, con, st = (key.split("\u241f") + ["", ""])[:3]
+    if not desc:
+        return []
+    db = SessionLocal()
+    try:
+        rows_q = db.execute(text("""
+            SELECT normkey(mp_name) AS mp,
+                   expenditure_amount AS amt,
+                   expenditure_date AS dt,
+                   payment_status AS status,
+                   id AS eid
+            FROM expenditures
+            WHERE normkey(work_description) = :desc
+              AND normkey(constituency) = :con
+              AND normkey(state) = :st
+              AND expenditure_date IS NOT NULL
+        """), {"desc": desc, "con": con, "st": st}).fetchall()
+        rows = []
+        for mp, amt, dt, status, eid in rows_q:
+            d = _iso_date(dt)
+            if d:
+                rows.append((mp, amt, d, status, eid))
+    finally:
+        db.close()
+    with _rows_lock:
+        if len(_rows_cache) >= _ROWS_CACHE_MAX and key not in _rows_cache:
+            oldest = _rows_cache_order.pop(0)
+            _rows_cache.pop(oldest, None)
+        _rows_cache[key] = rows
+        _rows_cache_order.append(key)
+    return rows
 
 
 def _project_key(project) -> str:
@@ -231,11 +255,10 @@ def _verified_rows(project) -> Tuple[Optional[str], list]:
     Returns (sanctioned_mp_or_None, rows). When a recommended work matches
     the key, only expenditures whose MP equals that work's MP are kept.
     """
-    _build_index()
     key = _project_key(project)
-    rec = _rec_first.get(key)
+    rec = _rec_cached(key)
     sanctioned_mp = rec[0] if rec else None
-    rows = _exp_rows.get(key, [])
+    rows = _exp_rows_for_key(key)
     if sanctioned_mp:
         rows = [r for r in rows if r[0] == sanctioned_mp]
     return sanctioned_mp, rows
@@ -244,26 +267,45 @@ def _verified_rows(project) -> Tuple[Optional[str], list]:
 # ═════════════ Shared accessors (timeline.py delegates here) ═════════════
 
 def shared_indexes():
-    """Return (rec_first, comp_by_key, exp_rows) after ensuring built.
+    """Return (rec_lookup, comp_lookup, exp_rows_lookup) for timeline.py.
 
-    timeline.py uses this instead of keeping its own duplicate copy of the
-    same datasets in memory.
+    All three are dict-like facades over on-demand, bounded per-key fetches —
+    same observable behavior as the previous resident dicts.
     """
-    _build_index()
-    return _rec_first, _comp_by_key, _exp_rows
+    class _RecLookup:
+        def get(self, key, default=None):
+            rec = _rec_cached(key) if key else None
+            return rec if rec else default
+        def __contains__(self, key):
+            return bool(_rec_cached(key)) if key else False
+
+    class _CompLookup:
+        def get(self, key, default=None):
+            comp = _comp_cached(key) if key else None
+            return comp if comp else default
+        def __contains__(self, key):
+            return bool(_comp_cached(key)) if key else False
+
+    class _RowsLookup:
+        """Dict-like facade over the on-demand per-key row fetch."""
+        def get(self, key, default=None):
+            rows = _exp_rows_for_key(key) if key else default
+            return rows if rows else default
+        def __contains__(self, key):
+            return bool(_exp_rows_for_key(key)) if key else False
+
+    return _RecLookup(), _CompLookup(), _RowsLookup()
 
 
 def first_recommended_mp(project) -> Optional[str]:
     """Normalized MP name of the first recommended work for this project key."""
-    _build_index()
-    rec = _rec_first.get(_project_key(project))
+    rec = _rec_cached(_project_key(project))
     return rec[0] if rec else None
 
 
 def completed_for_key(project) -> Optional[tuple]:
     """(completed_date, final_amount) of the completed work for this key, if any."""
-    _build_index()
-    return _comp_by_key.get(_project_key(project))
+    return _comp_cached(_project_key(project))
 
 
 def expenditure_count_for_key(project) -> int:
@@ -271,8 +313,13 @@ def expenditure_count_for_key(project) -> int:
 
     Used by endpoints that only need a count — avoids loading the rows.
     """
-    _build_index()
-    return len(_exp_rows.get(_project_key(project), []))
+    key = _project_key(project)
+    rec = _rec_cached(key)
+    if rec and rec[0]:
+        # MP-verified consumers count only rows whose MP matches the
+        # recommended work's MP — mirror that here.
+        return sum(1 for r in _exp_rows_for_key(key) if r[0] == rec[0])
+    return len(_exp_rows_for_key(key))
 
 
 # ═══════════════════ Feature payloads ═══════════════════════════════════
@@ -332,7 +379,7 @@ def get_expenditure_activity(project) -> dict:
     Build the full expenditure-activity payload for one project (model instance).
     """
     sanctioned_mp, rows = _verified_rows(project)
-    key_matched = bool(_exp_rows.get(_project_key(project)))
+    key_matched = bool(_exp_rows_for_key(_project_key(project)))
 
     # Sort chronologically (tuple: mp, amount, date, status, id)
     verified = sorted(rows, key=lambda r: (r[2], r[4] or 0))
