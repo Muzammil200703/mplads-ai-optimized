@@ -173,8 +173,29 @@ def _delay_intelligence(project, events: List[dict]) -> dict:
     fabricated. Possible factors are null — no recorded reason field exists
     at project level in the source data.
     """
+def _delay_intelligence(project, events: List[dict], db=None) -> dict:
+    """
+    Compute OBSERVED indicators only. Formal delay_days is not calculable
+    (no expected-completion date exists in any source dataset) and is never
+    fabricated. Possible factors are null — no recorded reason field exists
+    at project level in the source data.
+    """
     sanctioned = float(project.sanctioned_amount or 0)
-    expenditure = float(project.expenditure or 0)
+    # Authoritative spend: linked payment-ledger total when available
+    # (project_rec_info); the catalog column is a zeroed legacy stamp.
+    expenditure = 0.0
+    try:
+        from models import ProjectRecInfo
+        _own_db = db is None
+        _db = SessionLocal() if _own_db else db
+        try:
+            _row = _db.query(ProjectRecInfo).filter(ProjectRecInfo.project_id == project.id).first()
+            expenditure = float(_row.linked_expenditure or 0.0) if _row is not None else 0.0
+        finally:
+            if _own_db:
+                _db.close()
+    except Exception:
+        expenditure = float(project.expenditure or 0)
     completion = float(project.completion_percentage or 0)
     status = str(project.status or "")
 
@@ -375,7 +396,7 @@ def get_project_timeline(project_id: int) -> Optional[dict]:
             events = _build_events(project)
             _persist_events(db, project_id, events)
 
-        delay = _delay_intelligence(project, events)
+        delay = _delay_intelligence(project, events, db=db)
 
         dates = [e["date"] for e in events if e["date"]]
         matched = {

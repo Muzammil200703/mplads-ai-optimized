@@ -203,7 +203,16 @@ def _sync_user_investigation_record(db: Session, user: models.User, project: mod
     )
     risk_row = db.query(models.RiskScore).filter(models.RiskScore.project_id == project.id).first()
     risk_score = risk_row.risk_score if risk_row else 0
-    tier = audit_intel.priority_breakdown(project, risk_score, risk_level=(risk_row.risk_level if risk_row else None))
+    _rec_row = (
+        db.query(models.ProjectRecInfo)
+        .filter(models.ProjectRecInfo.project_id == project.id)
+        .first()
+    )
+    _linked_exp = float(_rec_row.linked_expenditure or 0.0) if _rec_row is not None else 0.0
+    tier = audit_intel.priority_breakdown(
+        project, risk_score, risk_level=(risk_row.risk_level if risk_row else None),
+        linked_expenditure=_linked_exp,
+    )
 
     # Recommendations come straight from the recorded risk reasons.
     reasons = [r.strip() for r in (risk_row.reasons or "").split(",") if r.strip()] if risk_row else []
@@ -704,6 +713,14 @@ def district_projects(
         .limit(max(1, min(limit, 500)))
         .all()
     )
+    # Linked payment-ledger spend for the page (authoritative per-project
+    # expenditure; the catalog column is a zeroed legacy stamp).
+    _rec_rows = {
+        r.project_id: float(r.linked_expenditure or 0.0)
+        for r in db.query(models.ProjectRecInfo)
+        .filter(models.ProjectRecInfo.project_id.in_([p.id for p, _ in rows]))
+        .all()
+    } if rows else {}
     items = [{
         "project_id": p.id,
         "project_name": p.project_name,
@@ -712,7 +729,7 @@ def district_projects(
         "constituency": p.constituency,
         "status": p.status,
         "sanctioned_amount": p.sanctioned_amount,
-        "expenditure": p.expenditure,
+        "expenditure": _rec_rows.get(p.id, 0.0),
         "completion_percentage": p.completion_percentage,
         "risk_score": (r.risk_score if r else None),
         "risk_level": (r.risk_level if r else None),
@@ -771,8 +788,17 @@ def district_summary(
     proj = db.query(
         func.count(models.Project.id).label("n"),
         func.coalesce(func.sum(models.Project.sanctioned_amount), 0.0).label("sanc"),
-        func.coalesce(func.sum(models.Project.expenditure), 0.0).label("exp"),
     ).filter(filt).one()
+    # Authoritative expenditure: payment ledger scoped by the ledger's own
+    # state column (labels match the catalog 1:1). District-scoped ledger
+    # totals are unavailable — the ledger's IDA strings don't match the
+    # catalog's district values in this dataset.
+    import metrics as _metrics
+    led = (
+        _metrics.ledger_totals_scoped(db, state=current.assigned_state)
+        if current.assigned_state
+        else _metrics.ledger_totals(db)
+    )
     filt_risk = filt
     high_risk = (
         db.query(func.count(models.Project.id))
@@ -799,7 +825,8 @@ def district_summary(
         "scope": scope,
         "projects": proj.n,
         "total_sanctioned": float(proj.sanc or 0),
-        "total_expenditure": float(proj.exp or 0),
+        "total_expenditure": float(led["total_expenditure"]),
         "high_risk": high_risk,
         "open_inquiries": open_inq,
+        "expenditure_scope": "state" if current.assigned_state else "full_ledger",
     }

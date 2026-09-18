@@ -491,16 +491,29 @@ def _intent_navigate(q: str, ql: str, ctx_project_id: Optional[int], user, db: S
     return None
 
 
-def _project_profile_answer(p, risk) -> Tuple[str, List[ActionOut]]:
-    """Full project profile composed ONLY from the real record + risk row."""
+def _linked_expenditure(db, project) -> float:
+    """Authoritative per-project spend from the payment ledger
+    (project_rec_info.linked_expenditure). The catalog column is a zeroed
+    legacy stamp."""
+    from models import ProjectRecInfo
+    row = db.query(ProjectRecInfo).filter(ProjectRecInfo.project_id == project.id).first()
+    return float(row.linked_expenditure or 0.0) if row is not None else 0.0
+
+
+def _project_profile_answer(p, risk, linked_expenditure: float = None) -> Tuple[str, List[ActionOut]]:
+    """Full project profile composed ONLY from the real record + risk row.
+
+    Expenditure shown is the authoritative linked payment-ledger total
+    (project_rec_info); the catalog column is a zeroed legacy stamp."""
     reasons = [r.strip() for r in (risk.reasons or "").split(",") if r.strip()] if risk else []
-    util = (p.expenditure / p.sanctioned_amount * 100) if p.sanctioned_amount else 0
+    exp = float(linked_expenditure or 0.0)
+    util = (exp / p.sanctioned_amount * 100) if p.sanctioned_amount else 0
     lines = [
         "**PROJECT**",
         f"Project ID: #{p.id}",
         f"Name: {p.project_name}",
         f"Location: {p.state}" + (f", {p.constituency}" if p.constituency else ""),
-        f"Sanctioned: {_fmt_money(p.sanctioned_amount)} · Expenditure: {_fmt_money(p.expenditure)} ({util:.0f}% utilization)",
+        f"Sanctioned: {_fmt_money(p.sanctioned_amount)} · Expenditure: {_fmt_money(exp)} ({util:.0f}% utilization)",
         f"Physical completion: {p.completion_percentage if p.completion_percentage is not None else '—'}% · Status: {p.status or '—'}",
         "",
         f"**Risk Score:** {risk.risk_score if risk else 'not scored'} ({risk.risk_level if risk else 'n/a'})",
@@ -568,7 +581,7 @@ def _intent_project_lookup(
             line += f" · risk {risk.risk_score} ({risk.risk_level})"
         return line, [ActionOut(label="Open Project Details", action="open_project", target=str(p.id))], p.id
 
-    answer, actions = _project_profile_answer(p, risk)
+    answer, actions = _project_profile_answer(p, risk, linked_expenditure=_linked_expenditure(db, p))
     return answer, actions, p.id
 
 
@@ -720,20 +733,28 @@ def _intent_portfolio_stats(q: str, user, db: Session):
         label = match
     else:
         label = "the whole portfolio"
-    stats = base.with_entities(
+    # Authoritative aggregates (metrics_svc): catalog sanctioned/counts +
+    # ledger expenditure/completions. For a state scope the ledgers are
+    # filtered by their own state column (labels match the catalog 1:1).
+    import metrics as _metrics
+    if state:
+        led = _metrics.ledger_totals_scoped(db, state=match)
+    else:
+        led = _metrics.ledger_totals(db)
+    n, sanc = base.with_entities(
         func.count(models.Project.id),
         func.coalesce(func.sum(models.Project.sanctioned_amount), 0),
-        func.coalesce(func.sum(models.Project.expenditure), 0),
-        func.sum(case_completed()),
     ).one()
-    n, sanc, exp, completed = int(stats[0] or 0), float(stats[1] or 0), float(stats[2] or 0), int(stats[3] or 0)
+    n, sanc = int(n or 0), float(sanc or 0)
+    exp = float(led["total_expenditure"])
+    completed = int(led["completed_works"])
     if n == 0:
         return f"No projects found for {label}.", []
     answer = (
         f"**{label}**: {n:,} projects\n"
         f"• Sanctioned: {_fmt_money(sanc)}\n"
-        f"• Recorded expenditure: {_fmt_money(exp)} ({(exp/sanc*100) if sanc else 0:.1f}% utilization)\n"
-        f"• Completed: {completed:,}"
+        f"• Recorded expenditure (payment ledger): {_fmt_money(exp)} ({(exp/sanc*100) if sanc else 0:.1f}% of sanctioned)\n"
+        f"• Completed works (completions ledger): {completed:,}"
     )
     actions = [ActionOut(label="Browse projects", action="navigate", target="Projects")]
     if not state:
@@ -847,7 +868,7 @@ def _intent_project_detail(q: str, ql: str, ctx_project_id: Optional[int], user,
         return (f"❓ I couldn't find a project with ID {pid}. Please check the Project ID and try "
                 "again.", [], None)
     risk = db.query(models.RiskScore).filter(models.RiskScore.project_id == pid).first()
-    answer, actions = _project_profile_answer(p, risk)
+    answer, actions = _project_profile_answer(p, risk, linked_expenditure=_linked_expenditure(db, p))
     return answer, actions, pid
 
 
@@ -984,21 +1005,29 @@ def _intent_analytical_screening(ql: str, user, db: Session):
         .join(models.RiskScore, models.RiskScore.project_id == models.Project.id)
         .filter(models.Project.sanctioned_amount > 0)
     )
+    # Per-project ledger linkage via the SAME conservative normalized-key
+    # join used by the timeline (work key + MP + IDA). The catalog's
+    # per-project expenditure column is a zeroed legacy stamp and must not
+    # drive screens.
+    import metrics as _metrics
+    exp_map = _metrics.project_expenditure_map(db)
     label = ""
     if is_cost:
-        q = q.filter(models.Project.expenditure > models.Project.sanctioned_amount * 1.1)
-        label = "expenditure exceeds the sanctioned amount by more than 10% (potential cost deviation)"
+        q = q.filter(
+            models.Project.id.in_([pid for pid, amt in exp_map.items() if amt > 0])
+        )
+        label = "payments recorded in the expenditure ledger for their work (per-project cost-deviation screening is unavailable because sanctioned amounts are not recorded against those payment rows)"
     elif is_mismatch:
         q = q.filter(
-            models.Project.expenditure > 0,
             models.Project.completion_percentage < 25,
-            models.Project.expenditure >= models.Project.sanctioned_amount * 0.5,
+            models.Project.id.in_([pid for pid, amt in exp_map.items() if amt >= 100000])
         )
-        label = ("expenditure is at least 50% of the sanctioned amount while recorded "
-                 "physical completion is below 25% (potential progress/expenditure mismatch)")
+        label = ("payments of ₹1 lakh or more are recorded for the work in the expenditure ledger "
+                 "while recorded physical completion is below 25% (potential progress/expenditure mismatch)")
     elif is_delayed:
-        q = q.filter(models.Project.status == "Not Started", models.Project.expenditure > 0)
-        label = "recorded status is 'Not Started' while expenditure has already been booked (potential execution delay)"
+        q = q.filter(models.Project.id.in_([pid for pid, amt in exp_map.items() if amt > 0]))
+        label = ("payments are recorded in the expenditure ledger while the catalog carries no "
+                 "'Not Started' statuses — delayed-work screening by status is unavailable in this dataset")
     else:  # verification needs
         q = q.filter(
             models.RiskScore.risk_score >= 50,

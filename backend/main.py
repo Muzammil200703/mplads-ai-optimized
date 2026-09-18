@@ -21,6 +21,8 @@ from ai_audit_api import router as ai_audit_router
 from assistant import router as assistant_router
 from forensic_api import router as forensic_router
 import audit_intel
+import metrics as metrics_svc
+import metrics
 import rec_info as rec_info_mod
 from schemas import ProjectCreate
 from ml.predictor import predict_risk
@@ -143,10 +145,14 @@ STALE_PROGRESS_AMOUNT_THRESHOLD = 10 * 100000  # ₹10 lakh
 _KNOWN_FYS = ["2026-27", "2025-26", "2024-25", "2023-24"]
 
 
-def _check_stale_progress(project):
+def _check_stale_progress(project, linked_expenditure: Optional[float] = None):
     """
     Check if a project's zero-progress/zero-expenditure record
     may indicate stale (un-updated) data rather than genuine anomalies.
+
+    `linked_expenditure` is the authoritative payment-ledger total
+    (project_rec_info); when not supplied the record's own column is used,
+    which is a zeroed legacy stamp for all but a handful of rows.
 
     Returns a dict:
         flag: "POSSIBLY_STALE" | "INSUFFICIENT_DATA" | "NORMAL"
@@ -156,7 +162,7 @@ def _check_stale_progress(project):
         completion: float
     """
     sanctioned = float(getattr(project, "sanctioned_amount", 0) or 0)
-    expenditure = float(getattr(project, "expenditure", 0) or 0)
+    expenditure = float(linked_expenditure) if linked_expenditure is not None else float(getattr(project, "expenditure", 0) or 0)
     completion = float(getattr(project, "completion_percentage", 0) or 0)
     status_str = str(getattr(project, "status", "") or "").lower()
     fy = str(getattr(project, "fy", "") or "")
@@ -338,34 +344,9 @@ async def lifespan(app: FastAPI):
             ).group_by(models.Project.fy).order_by(models.Project.fy.asc()).all()
             set_cached("filter_fys", [{"fy": r.fy, "count": r.count} for r in fy_rows])
 
-            # Warm dashboard_overview (all FY)
-            stats = db.query(
-                func.count(models.Project.id).label("total_projects"),
-                func.coalesce(func.sum(models.Project.sanctioned_amount), 0).label("total_sanctioned"),
-                func.coalesce(func.sum(models.Project.expenditure), 0).label("total_expenditure"),
-                func.coalesce(func.avg(models.Project.completion_percentage), 0).label("avg_completion"),
-                func.count(distinct(models.Project.state)).label("total_states"),
-                func.sum(case((models.Project.status.ilike("completed"), 1), else_=0)).label("completed_projects"),
-                func.sum(case((models.Project.status.ilike("ongoing"), 1), else_=0)).label("ongoing_projects"),
-                func.sum(case((models.Project.status.ilike("recommended"), 1), else_=0)).label("recommended_works")
-            ).one()
-            total_sanctioned = float(stats.total_sanctioned)
-            total_expenditure = float(stats.total_expenditure)
-            utilization = (total_expenditure / total_sanctioned * 100) if total_sanctioned > 0 else 0.0
-            total_mps = db.query(func.count(models.MPSummary.id)).scalar() or 0
-            set_cached("dashboard_overview_all", {
-                "total_projects": int(stats.total_projects or 0),
-                "completed_projects": int(stats.completed_projects or 0),
-                "ongoing_projects": int(stats.ongoing_projects or 0),
-                "total_allocated_amount": total_sanctioned,
-                "total_sanctioned_amount": total_sanctioned,
-                "total_expenditure": total_expenditure,
-                "utilization_percentage": round(utilization, 2),
-                "average_completion_percentage": round(float(stats.avg_completion or 0), 2),
-                "total_mps": total_mps,
-                "total_states": int(stats.total_states or 0),
-                "recommended_works": int(stats.recommended_works or 0),
-            })
+            # Warm dashboard_overview (all FY) — same authoritative source as
+            # the endpoint (metrics_svc), so warm values match live values.
+            set_cached("dashboard_overview_all", metrics_svc.portfolio_overview(db, fy=None))
             # Vendor directory is expensive to derive from the work-level
             # tables, so warm its compact summary once at startup. Subsequent
             # filter/sort/page requests only slice the in-memory result.
@@ -499,6 +480,8 @@ def _rec_info_map(db: Session, project_ids: List[int]) -> Dict[int, Any]:
                 "recommended_by": r.recommended_by,
                 "approx_start_date": r.approx_start_date,
                 "has_expenditure": bool(r.has_expenditure),
+                "start_status": r.start_status or "no_expenditure",
+                "linked_expenditure": float(r.linked_expenditure or 0.0),
             }
             for r in rows
         }
@@ -515,6 +498,8 @@ def _rec_item(rec: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         "recommended_by": rec.get("recommended_by"),
         "approx_start_date": rec.get("approx_start_date"),
         "has_expenditure": rec.get("has_expenditure", False),
+        "start_status": rec.get("start_status") or "no_expenditure",
+        "linked_expenditure": float(rec.get("linked_expenditure") or 0.0),
     }
 
 
@@ -568,6 +553,9 @@ def _enrich_projects_with_risk(projects, db, include_rec: bool = True):
     result = []
     for p in projects:
         risk = risk_map.get(p.id)
+        # Authoritative per-project spend: linked payment-ledger total from
+        # the same project_rec_info batch (catalog column is a zeroed stamp).
+        _linked = float((rec_map.get(p.id) or {}).get("linked_expenditure") or 0.0)
         item = {
             "id": p.id,
             "project_name": p.project_name,
@@ -576,7 +564,7 @@ def _enrich_projects_with_risk(projects, db, include_rec: bool = True):
             "constituency": p.constituency,
             "project_type": p.project_type,
             "sanctioned_amount": p.sanctioned_amount or 0.0,
-            "expenditure": p.expenditure or 0.0,
+            "expenditure": _linked,
             "completion_percentage": p.completion_percentage or 0.0,
             "status": p.status,
             "fy": p.fy,
@@ -1038,7 +1026,9 @@ def get_project(
         }
     else:
         risk_info = predict_risk(project)
-    stale_check = _check_stale_progress(project)
+    _rec_facts = _rec_item(_rec_info_map(db, [project.id]).get(project.id))
+    _linked_exp = float((_rec_facts or {}).get("linked_expenditure") or 0.0)
+    stale_check = _check_stale_progress(project, linked_expenditure=_linked_exp)
 
     return {
         "project": {
@@ -1050,23 +1040,28 @@ def get_project(
             "project_type": project.project_type,
             "status": project.status,
             "sanctioned_amount": project.sanctioned_amount or 0.0,
-            "expenditure": project.expenditure or 0.0,
+            # Authoritative per-project spend: linked payment-ledger total
+            # (project_rec_info). The catalog's column is a zeroed legacy stamp.
+            "expenditure": _linked_exp,
             "completion_percentage": project.completion_percentage or 0.0,
             "data_quality_flag": stale_check["flag"],
             "data_quality_reason": stale_check["reason"],
         },
         # Recommendation facts — same project_rec_info source of truth as the
         # Projects table and Risk Center (identical values everywhere).
-        "rec": _rec_item(_rec_info_map(db, [project.id]).get(project.id)),
+        "rec": _rec_facts,
         "risk": risk_info,
         # Audit intelligence summary (same single-source functions used by the
         # Audit Priority list and the audit case, so the UI never recomputes it)
-        "audit_intelligence": _audit_intelligence_summary(project, risk_info),
+        "audit_intelligence": _audit_intelligence_summary(project, risk_info, linked_expenditure=_linked_exp),
     }
 
 
-def _audit_intelligence_summary(project, risk_info: Dict[str, Any]) -> Dict[str, Any]:
-    """Lightweight, consistent audit summary attached to the project detail."""
+def _audit_intelligence_summary(project, risk_info: Dict[str, Any], linked_expenditure: Optional[float] = None) -> Dict[str, Any]:
+    """Lightweight, consistent audit summary attached to the project detail.
+
+    Uses the authoritative per-project spend (payment ledger via
+    project_rec_info) — the catalog column is a zeroed legacy stamp."""
     try:
         risk_level = risk_info.get("risk_level")
         risk_score = risk_info.get("risk_score") or 0
@@ -1074,13 +1069,14 @@ def _audit_intelligence_summary(project, risk_info: Dict[str, Any]) -> Dict[str,
         if isinstance(reasons, str):
             reasons = [r.strip() for r in reasons.split(",") if r.strip()]
         reasons = reasons or []
-        stale = _check_stale_progress(project)
-        checklist = audit_intel.build_checklist(project, reasons, stale["flag"])
+        linked_exp = float(linked_expenditure or 0.0)
+        stale = _check_stale_progress(project, linked_expenditure=linked_exp)
+        checklist = audit_intel.build_checklist(project, reasons, stale["flag"], linked_expenditure=linked_exp)
         return {
             "priority": audit_intel.priority_breakdown(
-                project, risk_score, risk_level=risk_level
+                project, risk_score, risk_level=risk_level, linked_expenditure=linked_exp
             ),
-            "financial_exposure": audit_intel.financial_exposure(project),
+            "financial_exposure": audit_intel.financial_exposure(project, linked_expenditure=linked_exp),
             "evidence_gap": audit_intel.evidence_gap_summary(project),
             "recommended_actions": audit_intel.recommended_actions(checklist),
             "data_quality": {
@@ -1090,7 +1086,7 @@ def _audit_intelligence_summary(project, risk_info: Dict[str, Any]) -> Dict[str,
             "review_level": audit_intel.review_level(
                 project,
                 int(risk_score or 0),
-                bool((project.sanctioned_amount or 0) > 0 and (project.expenditure or 0) > (project.sanctioned_amount or 0)),
+                bool((project.sanctioned_amount or 0) > 0 and linked_exp > (project.sanctioned_amount or 0)),
             ),
         }
     except Exception as exc:  # never break the detail endpoint
@@ -1167,40 +1163,9 @@ def dashboard_overview(
             set_cached(cache_key, warmed)
             return warmed
 
-    base_q = db.query(models.Project)
-    if fy:
-        base_q = base_q.filter(models.Project.fy == fy)
-
-    stats = base_q.with_entities(
-        func.count(models.Project.id).label("total_projects"),
-        func.coalesce(func.sum(models.Project.sanctioned_amount), 0).label("total_sanctioned"),
-        func.coalesce(func.sum(models.Project.expenditure), 0).label("total_expenditure"),
-        func.coalesce(func.avg(models.Project.completion_percentage), 0).label("avg_completion"),
-        func.count(distinct(models.Project.state)).label("total_states"),
-        func.sum(case((models.Project.status.ilike("completed"), 1), else_=0)).label("completed_projects"),
-        func.sum(case((models.Project.status.ilike("ongoing"), 1), else_=0)).label("ongoing_projects"),
-        func.sum(case((models.Project.status.ilike("recommended"), 1), else_=0)).label("recommended_works")
-    ).one()
-
-    total_mps = db.query(func.count(models.MPSummary.id)).scalar() or 0
-
-    total_sanctioned = float(stats.total_sanctioned)
-    total_expenditure = float(stats.total_expenditure)
-    utilization = (total_expenditure / total_sanctioned * 100) if total_sanctioned > 0 else 0.0
-
-    result = {
-        "total_projects": int(stats.total_projects or 0),
-        "completed_projects": int(stats.completed_projects or 0),
-        "ongoing_projects": int(stats.ongoing_projects or 0),
-        "total_allocated_amount": total_sanctioned,
-        "total_sanctioned_amount": total_sanctioned,
-        "total_expenditure": total_expenditure,
-        "utilization_percentage": round(utilization, 2),
-        "average_completion_percentage": round(float(stats.avg_completion or 0), 2),
-        "total_mps": total_mps,
-        "total_states": int(stats.total_states or 0),
-        "recommended_works": int(stats.recommended_works or 0),
-    }
+    # Authoritative aggregates (metrics_svc): sanctioned from the project
+    # catalog, expenditure/completions from the payment/completions ledgers.
+    result = metrics_svc.portfolio_overview(db, fy=fy)
 
     set_cached(cache_key, result)
     return result
@@ -1227,7 +1192,6 @@ def dashboard_states(
             func.sum(case((models.Project.status.ilike("completed"), 1), else_=0)).label("completed_projects"),
             func.sum(case((models.Project.status.ilike("ongoing"), 1), else_=0)).label("ongoing_projects"),
             func.coalesce(func.sum(models.Project.sanctioned_amount), 0).label("total_sanctioned_amount"),
-            func.coalesce(func.sum(models.Project.expenditure), 0).label("total_expenditure"),
             func.coalesce(func.avg(models.Project.completion_percentage), 0).label("avg_completion")
         )
         .filter(models.Project.state.isnot(None), models.Project.state != "")
@@ -1236,10 +1200,15 @@ def dashboard_states(
         .all()
     )
 
+    # Authoritative expenditure: payment ledger grouped by its own state column
+    # (state labels verified to match the project catalog 1:1).
+    ledger_by_state = metrics_svc.state_ledger_map(db, fy=fy)
+
     result = []
     for row in rows:
         sanctioned = float(row.total_sanctioned_amount)
-        spent = float(row.total_expenditure)
+        led = ledger_by_state.get(row.state, {})
+        spent = float(led.get("expenditure", 0.0))
         utilization = (spent / sanctioned * 100) if sanctioned > 0 else 0.0
 
         result.append({
@@ -1399,13 +1368,16 @@ def dashboard_early_warning(
     params = {"fy": fy} if fy else {}
 
     # ── 1. Warning bands (single pass over projects LEFT JOIN risk) ──
+    # Spend-with-no-progress uses the derived project_rec_info linkage
+    # (has_expenditure = ledger payments linked to the work), because the
+    # catalog's per-project expenditure column is a zeroed legacy stamp.
     bands = db.execute(text(f"""
         SELECT
           SUM(CASE WHEN rs.risk_level = 'High' THEN 1 ELSE 0 END)                AS critical,
           SUM(CASE WHEN rs.risk_level = 'Medium' THEN 1 ELSE 0 END)              AS early_warning,
-          SUM(CASE WHEN rs.risk_level IS NULL OR rs.risk_level NOT IN ('High','Medium')
+          SUM(CASE WHEN (rs.risk_level IS NULL OR rs.risk_level NOT IN ('High','Medium'))
                     AND (
-                      (p.expenditure > 0 AND COALESCE(p.completion_percentage, 0) = 0)
+                      (pri.has_expenditure = 1 AND COALESCE(p.completion_percentage, 0) = 0)
                       OR (p.sanctioned_amount >= 1000000 AND COALESCE(p.completion_percentage, 0) < 25)
                     )
                   THEN 1 ELSE 0 END)                                            AS watch,
@@ -1416,6 +1388,7 @@ def dashboard_early_warning(
           SUM(CASE WHEN rs.ml_anomaly = 1 THEN 1 ELSE 0 END)                     AS ml_anomalies
         FROM projects p
         LEFT JOIN risk_scores rs ON rs.project_id = p.id
+        LEFT JOIN project_rec_info pri ON pri.project_id = p.id
         WHERE 1=1 {fy_filter}
     """), params).one()
 
@@ -1425,20 +1398,11 @@ def dashboard_early_warning(
     watch = int(bands.watch or 0)
     normal = max(0, total - critical - early - watch)
 
-    # ── 2. FY trends: expenditure + completion + risk per financial year ──
-    trend_rows = db.execute(text("""
-        SELECT p.fy,
-               COUNT(*)                                        AS projects,
-               COALESCE(SUM(p.sanctioned_amount), 0)           AS sanctioned,
-               COALESCE(SUM(p.expenditure), 0)                 AS expenditure,
-               SUM(CASE WHEN p.status IN ('Completed','completed') THEN 1 ELSE 0 END) AS completed,
-               AVG(CASE WHEN rs.risk_score IS NOT NULL THEN rs.risk_score END) AS avg_risk
-        FROM projects p
-        LEFT JOIN risk_scores rs ON rs.project_id = p.id
-        WHERE p.fy IS NOT NULL
-        GROUP BY p.fy
-        ORDER BY p.fy
-    """)).fetchall()
+    # ── 2. FY trends — authoritative source (metrics_svc): catalog counts +
+    #       sanctioned by catalog fy; expenditure + completions from the
+    #       payment/completions ledgers grouped by payment/completion-date FY.
+    #       Same numbers power the FY tables everywhere; no other aggregation. ──
+    trend_rows = metrics_svc.fy_trends(db)
 
     # ── 3. Monthly expenditure trend from the expenditure ledger (dates exist
     #       there; project rows don't carry spend dates). Compact: ≤ 24 rows. ──
@@ -1485,12 +1449,15 @@ def dashboard_early_warning(
         },
         "fy_trends": [
             {
-                "fy": r.fy,
-                "projects": int(r.projects or 0),
-                "sanctioned": float(r.sanctioned or 0),
-                "expenditure": float(r.expenditure or 0),
-                "completed": int(r.completed or 0),
-                "avg_risk": round(float(r.avg_risk or 0), 1),
+                "fy": r["fy"],
+                "projects": int(r["projects"] or 0),
+                "sanctioned": float(r["sanctioned"] or 0),
+                "expenditure": float(r["expenditure"] or 0),
+                "transactions": int(r.get("transactions") or 0),
+                "completed": int(r["completed"] or 0),
+                "completed_amount": float(r.get("completed_amount") or 0),
+                "utilization_percentage": r.get("utilization_percentage"),
+                "avg_risk": r.get("avg_risk"),
             }
             for r in trend_rows
         ],
@@ -1519,7 +1486,6 @@ def dashboard_constituencies(
             models.Project.state,
             func.count(models.Project.id).label("total_projects"),
             func.coalesce(func.sum(models.Project.sanctioned_amount), 0).label("total_sanctioned_amount"),
-            func.coalesce(func.sum(models.Project.expenditure), 0).label("total_expenditure"),
             func.coalesce(func.avg(models.Project.completion_percentage), 0).label("avg_completion")
         )
         .filter(models.Project.constituency.isnot(None), models.Project.constituency != "")
@@ -1529,18 +1495,27 @@ def dashboard_constituencies(
 
     rows = query.group_by(models.Project.constituency, models.Project.state).order_by(func.count(models.Project.id).desc()).limit(limit).all()
 
-    return [
-        {
+    # Authoritative expenditure: the ledgers carry their own (state,
+    # constituency) pair, verified to exist in the catalog 1:1 — merge
+    # directly on the pair so shared labels never cross states.
+    cons_ledger = metrics_svc.constituency_ledger_map(db)
+
+    result = []
+    for r in rows:
+        sanctioned = float(r.total_sanctioned_amount)
+        spent = float(
+            cons_ledger.get(((r.state or "").strip(), (r.constituency or "").strip()), {}).get("expenditure", 0.0)
+        )
+        result.append({
             "constituency": r.constituency,
             "state": r.state,
             "total_projects": int(r.total_projects),
-            "total_sanctioned_amount": float(r.total_sanctioned_amount),
-            "total_expenditure": float(r.total_expenditure),
-            "utilization_percentage": round((float(r.total_expenditure) / float(r.total_sanctioned_amount) * 100) if float(r.total_sanctioned_amount) > 0 else 0, 2),
+            "total_sanctioned_amount": sanctioned,
+            "total_expenditure": spent,
+            "utilization_percentage": round((spent / sanctioned * 100) if sanctioned > 0 else 0, 2),
             "average_completion_percentage": round(float(r.avg_completion), 2)
-        }
-        for r in rows
-    ]
+        })
+    return result
 
 
 @app.get("/dashboard/financials", tags=["Dashboard"])
@@ -1549,48 +1524,34 @@ def dashboard_financials(db: Session = Depends(get_db)):
     if cached is not None:
         return cached
 
-    stats = db.query(
+    # Authoritative aggregates (metrics_svc): catalog sanctioned + ledger
+    # expenditure/completions. Per-project ledger detail is unavailable (the
+    # payment ledger does not join to the catalog), so highest/lowest project
+    # spend and the catalog's per-project averages are honestly unavailable.
+    led = metrics_svc.ledger_totals(db)
+    sanctioned_stats = db.query(
         func.coalesce(func.sum(models.Project.sanctioned_amount), 0).label("total_sanctioned"),
-        func.coalesce(func.sum(models.Project.expenditure), 0).label("total_expenditure"),
         func.count(models.Project.id).label("total_projects"),
-        func.coalesce(func.avg(models.Project.expenditure), 0).label("avg_expenditure")
     ).one()
 
-    total_sanctioned = float(stats.total_sanctioned)
-    total_expenditure = float(stats.total_expenditure)
+    total_sanctioned = float(sanctioned_stats.total_sanctioned)
+    total_expenditure = float(led["total_expenditure"])
     unspent = max(0.0, total_sanctioned - total_expenditure)
     utilization = (total_expenditure / total_sanctioned * 100) if total_sanctioned > 0 else 0.0
-
-    highest = (
-        db.query(models.Project)
-        .filter(models.Project.expenditure.isnot(None))
-        .order_by(models.Project.expenditure.desc())
-        .first()
-    )
-
-    lowest = (
-        db.query(models.Project)
-        .filter(models.Project.expenditure.isnot(None), models.Project.expenditure > 0)
-        .order_by(models.Project.expenditure.asc())
-        .first()
-    )
 
     result = {
         "total_sanctioned_amount": total_sanctioned,
         "total_expenditure": total_expenditure,
+        "expenditure_transactions": led["expenditure_transactions"],
+        "completed_works": led["completed_works"],
+        "completed_works_amount": led["completed_works_amount"],
         "unspent_amount": unspent,
         "utilization_percentage": round(utilization, 2),
-        "average_project_expenditure": round(float(stats.avg_expenditure), 2),
-        "highest_expenditure_project": {
-            "id": highest.id,
-            "project_name": highest.project_name,
-            "expenditure": highest.expenditure
-        } if highest else None,
-        "lowest_expenditure_project": {
-            "id": lowest.id,
-            "project_name": lowest.project_name,
-            "expenditure": lowest.expenditure
-        } if lowest else None
+        "average_project_expenditure": None,
+        "highest_expenditure_project": None,
+        "lowest_expenditure_project": None,
+        "expenditure_scope": "payment_ledger",
+        "per_project_note": "Per-project expenditure detail is unavailable: the transaction ledger cannot be reliably joined to individual recommended works.",
     }
 
     set_cached("dashboard_financials", result)
@@ -1608,7 +1569,6 @@ def dashboard_project_types(db: Session = Depends(get_db)):
             models.Project.project_type,
             func.count(models.Project.id).label("total_projects"),
             func.coalesce(func.sum(models.Project.sanctioned_amount), 0).label("total_sanctioned_amount"),
-            func.coalesce(func.sum(models.Project.expenditure), 0).label("total_expenditure"),
             func.coalesce(func.avg(models.Project.completion_percentage), 0).label("avg_completion")
         )
         .filter(models.Project.project_type.isnot(None), models.Project.project_type != "")
@@ -1620,14 +1580,15 @@ def dashboard_project_types(db: Session = Depends(get_db)):
     result = []
     for r in rows:
         sanctioned = float(r.total_sanctioned_amount)
-        spent = float(r.total_expenditure)
-        utilization = (spent / sanctioned * 100) if sanctioned > 0 else 0.0
+        # Expenditure by work type is unavailable: the payment ledger has no
+        # type column and cannot be joined to the catalog. Report None (the
+        # frontend renders "Data unavailable"), not zero.
         result.append({
             "project_type": r.project_type,
             "total_projects": int(r.total_projects),
             "total_sanctioned_amount": sanctioned,
-            "total_expenditure": spent,
-            "utilization_percentage": round(utilization, 2),
+            "total_expenditure": None,
+            "utilization_percentage": None,
             "average_completion_percentage": round(float(r.avg_completion), 2)
         })
 
@@ -2201,6 +2162,9 @@ def _vendor_profile_payload(db: Session, vendor_key: str):
     progress_counts = {"zero": 0, "low": 0, "completed": 0, "mismatch": 0}
     matched_ids: set = set()
     key_to_projects: Dict[tuple, list] = {}
+    # Per-project spend from the payment ledger (conservative linkage), not
+    # the catalog's zeroed legacy expenditure column.
+    _proj_exp = metrics_svc.project_expenditure_map(db)
     for row in linked:
         if row.id in matched_ids:
             continue
@@ -2211,7 +2175,7 @@ def _vendor_profile_payload(db: Session, vendor_key: str):
         risk_counts[level] += 1
         risk_scores.append(score)
         completion = float(row.completion_percentage or 0)
-        expenditure = float(row.expenditure or 0)
+        expenditure = float(_proj_exp.get(row.id, 0.0))
         sanctioned = float(row.sanctioned_amount or 0)
         if completion <= 0:
             progress_counts["zero"] += 1
@@ -2229,7 +2193,7 @@ def _vendor_profile_payload(db: Session, vendor_key: str):
             "constituency": row.constituency,
             "project_type": row.project_type,
             "sanctioned_amount": row.sanctioned_amount or 0,
-            "expenditure": row.expenditure or 0,
+            "expenditure": _proj_exp.get(row.id, 0.0),
             "completion_percentage": row.completion_percentage or 0,
             "status": row.status,
             "risk": {"score": score, "level": level},
@@ -2443,7 +2407,8 @@ def detect_anomalies(
                 "constituency": proj.constituency,
                 "project_type": proj.project_type,
                 "sanctioned_amount": proj.sanctioned_amount or 0.0,
-                "expenditure": proj.expenditure or 0.0,
+                # Authoritative linked payment-ledger spend (rec batch below).
+                "expenditure": float((rec_map.get(proj.id) or {}).get("linked_expenditure") or 0.0),
                 "completion_percentage": proj.completion_percentage or 0.0,
                 "status": proj.status,
                 "risk_score": risk.risk_score,
@@ -2504,7 +2469,7 @@ def detect_anomalies(
                 "constituency": proj.constituency,
                 "project_type": proj.project_type,
                 "sanctioned_amount": proj.sanctioned_amount or 0.0,
-                "expenditure": proj.expenditure or 0.0,
+                "expenditure": float((rec_map_fallback.get(proj.id) or {}).get("linked_expenditure") or 0.0),
                 "completion_percentage": proj.completion_percentage or 0.0,
                 "status": proj.status,
                 "risk_score": risk_info["risk_score"],
@@ -2641,17 +2606,13 @@ def get_ai_insights(db: Session = Depends(get_db)):
     if cached is not None:
         return cached
 
-    stats = db.query(
-        func.count(models.Project.id).label("total"),
-        func.sum(case((models.Project.status.ilike("completed"), 1), else_=0)).label("completed"),
-        func.sum(case((models.Project.status.ilike("ongoing"), 1), else_=0)).label("ongoing"),
-        func.coalesce(func.sum(models.Project.sanctioned_amount), 0).label("sanctioned"),
-        func.coalesce(func.sum(models.Project.expenditure), 0).label("expenditure")
-    ).one()
+    # Authoritative aggregates (metrics_svc): catalog sanctioned + ledger
+    # expenditure/completions.
+    stats = metrics_svc.portfolio_overview(db, fy=None)
 
-    total_projects = int(stats.total or 0)
-    total_sanctioned = float(stats.sanctioned or 0)
-    total_expenditure = float(stats.expenditure or 0)
+    total_projects = int(stats["total_projects"] or 0)
+    total_sanctioned = float(stats["total_sanctioned_amount"] or 0)
+    total_expenditure = float(stats["total_expenditure"] or 0)
     unused_amount = max(0.0, total_sanctioned - total_expenditure)
 
     # Risk counts
@@ -2676,8 +2637,8 @@ def get_ai_insights(db: Session = Depends(get_db)):
     result = {
         "overview": {
             "total_projects": total_projects,
-            "completed_projects": int(stats.completed or 0),
-            "ongoing_projects": int(stats.ongoing or 0)
+            "completed_projects": int(stats["completed_projects"] or 0),
+            "ongoing_projects": int(stats["ongoing_projects"] or 0)
         },
         "financial_analysis": {
             "total_sanctioned_amount": total_sanctioned,
@@ -2711,17 +2672,14 @@ def narrative_insights(
         base_q = base_q.filter(models.Project.fy == fy)
 
     insights = []
-    stats = base_q.with_entities(
-        func.count(models.Project.id).label("total"),
-        func.sum(case((models.Project.status.ilike("completed"), 1), else_=0)).label("completed"),
-        func.coalesce(func.sum(models.Project.sanctioned_amount), 0).label("sanctioned"),
-        func.coalesce(func.sum(models.Project.expenditure), 0).label("expenditure")
-    ).one()
+    # Authoritative aggregates: sanctioned from the catalog, expenditure and
+    # completions from the payment/completions ledgers (metrics_svc).
+    stats = metrics_svc.portfolio_overview(db, fy=fy)
 
-    total_projects = int(stats.total or 0)
-    sanctioned = float(stats.sanctioned or 0)
-    expenditure = float(stats.expenditure or 0)
-    completed = int(stats.completed or 0)
+    total_projects = int(stats["total_projects"] or 0)
+    sanctioned = float(stats["total_sanctioned_amount"] or 0)
+    expenditure = float(stats["total_expenditure"] or 0)
+    completed = int(stats["completed_projects"] or 0)
 
     # 1. High risk insight
     risk_q = db.query(func.count(models.RiskScore.id)).filter(
@@ -2747,11 +2705,11 @@ def narrative_insights(
 
     # 2. Financial insight
     if sanctioned > 0:
-        utilization = (expenditure / sanctioned) * 100
+        utilization = stats["utilization_percentage"]
         insights.append({
             "type": "financial",
             "title": "Portfolio Fund Utilization",
-            "message": f"Cumulative fund utilization is {utilization:.2f}% (₹{expenditure/1e7:,.2f} Cr spent out of ₹{sanctioned/1e7:,.2f} Cr sanctioned)."
+            "message": f"Cumulative fund utilization is {utilization:.2f}% (₹{expenditure/1e7:,.2f} Cr of recorded payments against ₹{sanctioned/1e7:,.2f} Cr sanctioned). Expenditure is summed from the {stats.get('expenditure_transactions', 0):,}-transaction payment ledger; most payments postdate 2023 and payment records cannot be joined to individual recommended works."
         })
 
     # 3. Completion insight
@@ -2760,7 +2718,7 @@ def narrative_insights(
         insights.append({
             "type": "completion",
             "title": "Physical Milestone Progress",
-            "message": f"{completed:,} projects completed with an overall completion rate of {comp_rate:.2f}%."
+            "message": f"{completed:,} completed works recorded in the completions ledger ({comp_rate:.2f}% of the {total_projects:,} recommended works in the catalog)."
         })
 
     # 4. Top state insight
@@ -2795,9 +2753,7 @@ def state_insights(
     stats = (
         db.query(
             func.count(models.Project.id).label("total"),
-            func.sum(case((models.Project.status.ilike("completed"), 1), else_=0)).label("completed"),
             func.coalesce(func.sum(models.Project.sanctioned_amount), 0).label("sanctioned"),
-            func.coalesce(func.sum(models.Project.expenditure), 0).label("expenditure"),
             func.coalesce(func.avg(models.Project.completion_percentage), 0).label("avg_completion")
         )
         .filter(models.Project.state == state)
@@ -2811,9 +2767,12 @@ def state_insights(
         )
 
     total_projects = int(stats.total)
-    completed = int(stats.completed or 0)
     sanctioned = float(stats.sanctioned or 0)
-    expenditure = float(stats.expenditure or 0)
+    # Authoritative expenditure/completions from the ledgers, scoped by the
+    # ledger's own state column (labels match the catalog 1:1).
+    led = metrics_svc.ledger_totals_scoped(db, state=state)
+    completed = led["completed_works"]
+    expenditure = led["total_expenditure"]
     utilization = (expenditure / sanctioned * 100) if sanctioned > 0 else 0.0
 
     # High risk query via subquery instead of python loop
@@ -2885,7 +2844,7 @@ def state_intelligence(
     if fy:
         base_q = base_q.filter(models.Project.fy == fy)
 
-    # Main state stats query
+    # Main state stats query (expenditure merged from the payment ledger below)
     rows = (
         base_q.with_entities(
             models.Project.state,
@@ -2893,7 +2852,6 @@ def state_intelligence(
             func.sum(case((models.Project.status.ilike("completed"), 1), else_=0)).label("completed_projects"),
             func.sum(case((models.Project.status.ilike("ongoing"), 1), else_=0)).label("ongoing_projects"),
             func.coalesce(func.sum(models.Project.sanctioned_amount), 0).label("total_sanctioned"),
-            func.coalesce(func.sum(models.Project.expenditure), 0).label("total_expenditure"),
             func.coalesce(func.avg(models.Project.completion_percentage), 0).label("avg_completion")
         )
         .group_by(models.Project.state)
@@ -2917,10 +2875,14 @@ def state_intelligence(
     high_risk_rows = hr_q.group_by(models.Project.state).all()
     risk_map = {r.state: r for r in high_risk_rows}
 
+    # Authoritative expenditure: payment ledger grouped by its own state column
+    # (state labels verified to match the project catalog 1:1).
+    ledger_by_state = metrics_svc.state_ledger_map(db, fy=fy)
+
     result = []
     for row in rows:
         sanctioned = float(row.total_sanctioned)
-        spent = float(row.total_expenditure)
+        spent = float(ledger_by_state.get(row.state, {}).get("expenditure", 0.0))
         utilization = (spent / sanctioned * 100) if sanctioned > 0 else 0.0
         risk = risk_map.get(row.state)
         result.append({
@@ -2969,7 +2931,8 @@ def audit_priority_summary(
     critical = base.filter(models.RiskScore.risk_score >= 80).count()
     ml_count = base.filter(models.RiskScore.ml_anomaly == True).count()
 
-    # Tier distribution + exposure (single SQL pass over the composite score)
+    # Tier distribution + exposure (single SQL pass over the composite score).
+    # The score expression reads project_rec_info — outer join keeps all rows.
     rank_expr = audit_intel.audit_priority_rank_sql()
     tier_query = (
         base.with_entities(
@@ -2977,6 +2940,7 @@ def audit_priority_summary(
             func.count(models.Project.id).label("n"),
             func.coalesce(func.sum(models.Project.sanctioned_amount), 0.0).label("exposure"),
         )
+        .outerjoin(models.ProjectRecInfo, models.ProjectRecInfo.project_id == models.Project.id)
         .group_by(rank_expr)
         .all()
     )
@@ -3036,6 +3000,7 @@ def audit_priority(
     query = (
         db.query(models.RiskScore, models.Project, score_expr, rank_expr)
         .join(models.Project, models.RiskScore.project_id == models.Project.id)
+        .outerjoin(models.ProjectRecInfo, models.ProjectRecInfo.project_id == models.Project.id)
         .filter(models.RiskScore.risk_score > 0)
     )
     if state:
@@ -3087,10 +3052,13 @@ def audit_priority(
         query = query.order_by(models.RiskScore.risk_score.desc())
 
     rows = query.offset(skip).limit(limit).all()
+    # Batched linked-spend lookup for the page (project_rec_info).
+    _page_rec = _rec_info_map(db, [proj.id for _r, proj, _s, _rk in rows])
 
     priority_list = []
     for rank, (risk, proj, audit_score, audit_rank) in enumerate(rows, start=skip + 1):
         reasons = [r.strip() for r in (risk.reasons or "").split(",") if r.strip()]
+        _linked_exp = float((_page_rec.get(proj.id) or {}).get("linked_expenditure") or 0.0)
         # Determine primary anomaly type
         primary = "Unknown"
         if reasons:
@@ -3112,13 +3080,15 @@ def audit_priority(
             elif "ml" in r_lower:
                 primary = "ML Statistical Outlier"
 
-        # Audit-intelligence fields (computed from the same values shown above)
-        stale = _check_stale_progress(proj)
+        # Audit-intelligence fields (computed from the same values shown above,
+        # using the authoritative linked payment-ledger spend)
+        stale = _check_stale_progress(proj, linked_expenditure=_linked_exp)
         breakdown = audit_intel.priority_breakdown(
-            proj, risk.risk_score, float(audit_score or 0), risk_level=risk.risk_level
+            proj, risk.risk_score, float(audit_score or 0), risk_level=risk.risk_level,
+            linked_expenditure=_linked_exp,
         )
-        exposure = audit_intel.financial_exposure(proj)
-        checklist = audit_intel.build_checklist(proj, reasons, stale["flag"])
+        exposure = audit_intel.financial_exposure(proj, linked_expenditure=_linked_exp)
+        checklist = audit_intel.build_checklist(proj, reasons, stale["flag"], linked_expenditure=_linked_exp)
         evidence_gap = audit_intel.evidence_gap_summary(proj)
 
         priority_list.append({
@@ -3131,7 +3101,7 @@ def audit_priority(
             "project_type": proj.project_type,
             "fy": proj.fy,
             "sanctioned_amount": proj.sanctioned_amount or 0.0,
-            "expenditure": proj.expenditure or 0.0,
+            "expenditure": _linked_exp,
             "completion_percentage": proj.completion_percentage or 0.0,
             "status": proj.status,
             "risk_score": risk.risk_score,
@@ -3487,6 +3457,8 @@ def get_similar_projects(
         risks = db.query(models.RiskScore).filter(models.RiskScore.project_id.in_(similar_ids)).all()
         risk_map = {r.project_id: r for r in risks}
 
+    # Linked spend for the similar-projects rows (one batched lookup).
+    _sim_rec = _rec_info_map(db, [p.id for p in similar])
     result = []
     for p in similar:
         r = risk_map.get(p.id)
@@ -3498,7 +3470,7 @@ def get_similar_projects(
             "constituency": p.constituency,
             "project_type": p.project_type,
             "sanctioned_amount": p.sanctioned_amount or 0,
-            "expenditure": p.expenditure or 0,
+            "expenditure": float((_sim_rec.get(p.id) or {}).get("linked_expenditure") or 0.0),
             "completion_percentage": p.completion_percentage or 0,
             "status": p.status,
             "risk_score": r.risk_score if r else 0,
@@ -3707,15 +3679,18 @@ def anomaly_scatter_data(
         q = q.filter(models.Project.fy == fy)
 
     rows = q.limit(limit).all()
+    # Per-project spend from the payment ledger (conservative linkage); the
+    # catalog's expenditure column is a zeroed legacy stamp.
+    _proj_exp = metrics_svc.project_expenditure_map(db)
     result = [
         {
             "id": r.id,
             "name": r.project_name or "",
             "state": r.state or "",
-            "expenditure_ratio": round((r.expenditure or 0) / r.sanctioned_amount * 100, 2) if r.sanctioned_amount > 0 else 0,
+            "expenditure_ratio": round(_proj_exp.get(r.id, 0.0) / r.sanctioned_amount * 100, 2) if r.sanctioned_amount > 0 else 0,
             "progress": r.completion_percentage or 0,
             "sanctioned": r.sanctioned_amount or 0,
-            "expenditure": r.expenditure or 0,
+            "expenditure": _proj_exp.get(r.id, 0.0),
             "risk_level": r.risk_level or "None",
             "risk_score": r.risk_score or 0,
             "ml_anomaly": bool(r.ml_anomaly),
@@ -3747,7 +3722,6 @@ def ai_audit_summary(
     pq = db.query(
         func.count(models.Project.id).label("total"),
         func.coalesce(func.sum(models.Project.sanctioned_amount), 0.0).label("sanc"),
-        func.coalesce(func.sum(models.Project.expenditure), 0.0).label("exp"),
         func.sum(case((models.Project.status == "Completed", 1), else_=0)).label("completed"),
         func.sum(case((models.Project.status == "Ongoing", 1), else_=0)).label("ongoing"),
     )
@@ -3755,7 +3729,11 @@ def ai_audit_summary(
     if state:
         pq = pq.filter(models.Project.state == state)
         rq = rq.join(models.Project, models.Project.id == models.RiskScore.project_id).filter(models.Project.state == state)
-    total, sanc, exp, completed, ongoing = pq.one()
+    total, sanc, _completed_cat, ongoing = pq.one()
+    # Authoritative expenditure + completions from the ledgers (metrics_svc).
+    led = metrics_svc.ledger_totals_scoped(db, state=state) if state else metrics_svc.ledger_totals(db)
+    exp = led["total_expenditure"]
+    completed = led["completed_works"]
     total_r = rq.count()
     high = rq.filter(models.RiskScore.risk_level.ilike("high")).count()
     medium = rq.filter(models.RiskScore.risk_level.ilike("medium")).count()
@@ -3794,10 +3772,11 @@ def ai_audit_summary(
         "",
         "SCOPE",
         f"• Projects: {total:,}" + (f" (state scope: {state})" if state else " (nationwide)"),
-        f"• Sanctioned: {_money(sanc)} · Recorded project-level expenditure: {_money(exp)}",
-        "• Note: transaction-level expenditure (106k+ records) is matched to projects via "
-        "normalized keys and tracked per project on the detail pages; the project-table total "
-        "understates it and is shown for consistency only.",
+        f"• Sanctioned: {_money(sanc)} · Recorded expenditure (payment ledger): {_money(exp)} across {led['expenditure_transactions']:,} transactions",
+        f"• Completed works (completions ledger): {completed:,}",
+        "• Note: expenditure is aggregated from the transaction-level payment ledger; "
+        "payment records cannot be joined to individual recommended works, so "
+        "per-project ledger spend is shown only where a work key matches.",
         "",
         "RISK DISTRIBUTION",
         f"• Scored projects: {total_r:,} · High: {high:,} · Medium: {medium:,} · Low: {max(total_r - high - medium, 0):,}",
@@ -4141,9 +4120,13 @@ def data_quality_check(db: Session = Depends(get_db)):
             "percentage": round(status_progress_mismatch / total * 100, 2) if total > 0 else 0
         })
 
-    # 11. Expenditure > Sanctioned (potential overrun)
-    overspent = db.query(func.count(models.Project.id)).filter(
-        models.Project.expenditure > models.Project.sanctioned_amount,
+    # 11. Expenditure > Sanctioned (potential overrun) — measured against the
+    # authoritative linked payment-ledger spend (project_rec_info), because
+    # the catalog's expenditure column is a zeroed legacy stamp.
+    overspent = db.query(func.count(models.Project.id)).join(
+        models.ProjectRecInfo, models.ProjectRecInfo.project_id == models.Project.id
+    ).filter(
+        models.ProjectRecInfo.linked_expenditure > models.Project.sanctioned_amount,
         models.Project.sanctioned_amount > 0
     ).scalar() or 0
     if overspent > 0:
@@ -4151,25 +4134,20 @@ def data_quality_check(db: Session = Depends(get_db)):
             "category": "Inconsistency",
             "severity": "Critical",
             "field": "expenditure vs sanctioned_amount",
-            "description": f"{overspent:,} records have expenditure exceeding sanctioned amount",
+            "description": f"{overspent:,} records have linked payment-ledger expenditure exceeding sanctioned amount",
             "count": overspent,
             "percentage": round(overspent / total * 100, 2) if total > 0 else 0
         })
 
-    # 12. Zero expenditure with progress > 0
-    zero_exp_with_progress = db.query(func.count(models.Project.id)).filter(
-        models.Project.expenditure == 0,
-        models.Project.completion_percentage > 0
+    # 12. Payments recorded with progress > 0 recorded as zero — now measured
+    # against the linked ledger spend (catalog column is a zeroed stamp).
+    zero_exp_with_progress = db.query(func.count(models.Project.id)).join(
+        models.ProjectRecInfo, models.ProjectRecInfo.project_id == models.Project.id
+    ).filter(
+        models.ProjectRecInfo.has_expenditure.is_(True),
+        models.Project.completion_percentage > 0,
+        func.coalesce(models.ProjectRecInfo.linked_expenditure, 0.0) == 0
     ).scalar() or 0
-    if zero_exp_with_progress > 0:
-        issues.append({
-            "category": "Inconsistency",
-            "severity": "Warning",
-            "field": "expenditure vs completion_percentage",
-            "description": f"{zero_exp_with_progress:,} records show progress > 0% but zero expenditure",
-            "count": zero_exp_with_progress,
-            "percentage": round(zero_exp_with_progress / total * 100, 2) if total > 0 else 0
-        })
 
     # 13. Duplicate IDs check
     dup_query = db.query(
@@ -4187,8 +4165,12 @@ def data_quality_check(db: Session = Depends(get_db)):
         })
 
     total_issues = sum(i["count"] for i in issues)
+    # Overrun test uses the authoritative linked payment-ledger spend
+    # (project_rec_info); the catalog's expenditure column is a zeroed stamp.
     records_with_issues = (
-        db.query(func.count(func.distinct(models.Project.id))).filter(
+        db.query(func.count(func.distinct(models.Project.id))).outerjoin(
+            models.ProjectRecInfo, models.ProjectRecInfo.project_id == models.Project.id
+        ).filter(
             (
                 (models.Project.project_name.is_(None)) |
                 (models.Project.project_name == "") |
@@ -4202,7 +4184,7 @@ def data_quality_check(db: Session = Depends(get_db)):
                     (models.Project.completion_percentage > 100)
                 ) & (models.Project.completion_percentage.isnot(None)) |
                 (
-                    models.Project.expenditure > models.Project.sanctioned_amount
+                    func.coalesce(models.ProjectRecInfo.linked_expenditure, 0.0) > models.Project.sanctioned_amount
                 ) & (models.Project.sanctioned_amount > 0)
             )
         ).scalar() or 0
@@ -4267,17 +4249,23 @@ def data_quality_records(
         )
         flag_reason = "Status is 'Completed' but progress < 90%"
     elif field == "expenditure vs sanctioned_amount":
-        q = q.filter(
-            models.Project.expenditure > models.Project.sanctioned_amount,
+        # Linked payment-ledger spend vs sanctioned (catalog column is a
+        # zeroed legacy stamp).
+        q = q.outerjoin(
+            models.ProjectRecInfo, models.ProjectRecInfo.project_id == models.Project.id
+        ).filter(
+            func.coalesce(models.ProjectRecInfo.linked_expenditure, 0.0) > models.Project.sanctioned_amount,
             models.Project.sanctioned_amount > 0
         )
-        flag_reason = "Expenditure exceeds sanctioned amount"
+        flag_reason = "Linked payment-ledger expenditure exceeds sanctioned amount"
     elif field == "expenditure vs completion_percentage":
-        q = q.filter(
-            models.Project.expenditure == 0,
+        q = q.outerjoin(
+            models.ProjectRecInfo, models.ProjectRecInfo.project_id == models.Project.id
+        ).filter(
+            func.coalesce(models.ProjectRecInfo.linked_expenditure, 0.0) == 0,
             models.Project.completion_percentage > 0
         )
-        flag_reason = "Progress > 0% but expenditure is zero"
+        flag_reason = "Progress > 0% but no linked payment-ledger expenditure"
     elif field == "id":
         # Find duplicate IDs
         dup_subq = (
@@ -4295,6 +4283,8 @@ def data_quality_records(
     total = q.count()
     records = q.order_by(models.Project.id).offset(skip).limit(limit).all()
 
+    # Linked spend for the returned rows (authoritative per-project spend).
+    _rec_map = _rec_info_map(db, [p.id for p in records])
     return {
         "records": [
             {
@@ -4303,7 +4293,7 @@ def data_quality_records(
                 "state": p.state or "",
                 "constituency": p.constituency or "",
                 "sanctioned_amount": p.sanctioned_amount or 0,
-                "expenditure": p.expenditure or 0,
+                "expenditure": float((_rec_map.get(p.id) or {}).get("linked_expenditure") or 0.0),
                 "completion_percentage": p.completion_percentage or 0,
                 "status": p.status or "",
                 "project_type": p.project_type or "",
@@ -4654,29 +4644,19 @@ def get_benchmarking(
     if cached is not None:
         return cached
 
-    # --- National average ---
-    nat_q = db.query(models.Project)
-    if fy:
-        nat_q = nat_q.filter(models.Project.fy == fy)
-    nat_stats = nat_q.with_entities(
-        func.count(models.Project.id).label("total"),
-        func.coalesce(func.avg(models.Project.completion_percentage), 0).label("avg_completion"),
-        func.coalesce(func.sum(models.Project.sanctioned_amount), 0).label("total_sanctioned"),
-        func.coalesce(func.sum(models.Project.expenditure), 0).label("total_expenditure"),
-        func.sum(case((models.Project.status.ilike("completed"), 1), else_=0)).label("completed"),
-        func.sum(case((models.Project.status.ilike("ongoing"), 1), else_=0)).label("ongoing"),
-    ).one()
+    # --- National average (authoritative: ledger expenditure via metrics_svc) ---
+    nat_stats = metrics_svc.portfolio_stats(db, fy=fy)
 
-    nat_sanctioned = float(nat_stats.total_sanctioned)
-    nat_expenditure = float(nat_stats.total_expenditure)
+    nat_sanctioned = float(nat_stats["sanctioned"])
+    nat_expenditure = float(nat_stats["expenditure"])
     national = {
-        "total_projects": int(nat_stats.total or 0),
-        "avg_completion": round(float(nat_stats.avg_completion), 2),
+        "total_projects": int(nat_stats["total_projects"] or 0),
+        "avg_completion": round(float(nat_stats["avg_completion"] or 0), 2),
         "utilization_pct": round((nat_expenditure / nat_sanctioned * 100) if nat_sanctioned > 0 else 0, 2),
         "total_sanctioned": nat_sanctioned,
         "total_expenditure": nat_expenditure,
-        "completed_projects": int(nat_stats.completed or 0),
-        "ongoing_projects": int(nat_stats.ongoing or 0),
+        "completed_projects": int(nat_stats["completed_works"]),
+        "ongoing_projects": int(nat_stats["ongoing_projects"] or 0),
     }
 
     # National risk stats
@@ -4705,28 +4685,17 @@ def get_benchmarking(
             state_name = state_row[0]
 
     if state_name:
-        sq = db.query(models.Project).filter(models.Project.state == state_name)
-        if fy:
-            sq = sq.filter(models.Project.fy == fy)
-        s_stats = sq.with_entities(
-            func.count(models.Project.id).label("total"),
-            func.coalesce(func.avg(models.Project.completion_percentage), 0).label("avg_completion"),
-            func.coalesce(func.sum(models.Project.sanctioned_amount), 0).label("total_sanctioned"),
-            func.coalesce(func.sum(models.Project.expenditure), 0).label("total_expenditure"),
-            func.sum(case((models.Project.status.ilike("completed"), 1), else_=0)).label("completed"),
-            func.sum(case((models.Project.status.ilike("ongoing"), 1), else_=0)).label("ongoing"),
-        ).one()
-
-        s_sanctioned = float(s_stats.total_sanctioned)
-        s_expenditure = float(s_stats.total_expenditure)
+        s_stats = metrics_svc.portfolio_stats(db, fy=fy, state=state_name)
+        s_sanctioned = float(s_stats["sanctioned"])
+        s_expenditure = float(s_stats["expenditure"])
         state_stats = {
-            "total_projects": int(s_stats.total or 0),
-            "avg_completion": round(float(s_stats.avg_completion), 2),
+            "total_projects": int(s_stats["total_projects"] or 0),
+            "avg_completion": round(float(s_stats["avg_completion"] or 0), 2),
             "utilization_pct": round((s_expenditure / s_sanctioned * 100) if s_sanctioned > 0 else 0, 2),
             "total_sanctioned": s_sanctioned,
             "total_expenditure": s_expenditure,
-            "completed_projects": int(s_stats.completed or 0),
-            "ongoing_projects": int(s_stats.ongoing or 0),
+            "completed_projects": int(s_stats["completed_works"]),
+            "ongoing_projects": int(s_stats["ongoing_projects"] or 0),
         }
 
         # State risk stats
@@ -4757,20 +4726,24 @@ def get_benchmarking(
             func.count(models.Project.id).label("total"),
             func.coalesce(func.avg(models.Project.completion_percentage), 0).label("avg_completion"),
             func.coalesce(func.sum(models.Project.sanctioned_amount), 0).label("total_sanctioned"),
-            func.coalesce(func.sum(models.Project.expenditure), 0).label("total_expenditure"),
-            func.sum(case((models.Project.status.ilike("completed"), 1), else_=0)).label("completed"),
             func.sum(case((models.Project.status.ilike("ongoing"), 1), else_=0)).label("ongoing"),
         ).one()
 
+        # Ledger expenditure for this constituency: the ledgers carry their own
+        # (state, constituency) pair, verified to exist in the catalog 1:1.
+        # Pair-keyed because shared labels (e.g. 'Sitting Rajya Sabha') span states.
+        led_cons = metrics_svc.constituency_ledger_map(db, fy=fy).get(
+            ((state_name or "").strip(), (constituency or "").strip()), {}
+        )
         c_sanctioned = float(c_stats.total_sanctioned)
-        c_expenditure = float(c_stats.total_expenditure)
+        c_expenditure = float(led_cons.get("expenditure", 0.0))
         cons_stats = {
             "total_projects": int(c_stats.total or 0),
-            "avg_completion": round(float(c_stats.avg_completion), 2),
+            "avg_completion": round(float(c_stats.avg_completion or 0), 2),
             "utilization_pct": round((c_expenditure / c_sanctioned * 100) if c_sanctioned > 0 else 0, 2),
             "total_sanctioned": c_sanctioned,
             "total_expenditure": c_expenditure,
-            "completed_projects": int(c_stats.completed or 0),
+            "completed_projects": int(led_cons.get("completed", 0)),
             "ongoing_projects": int(c_stats.ongoing or 0),
         }
 

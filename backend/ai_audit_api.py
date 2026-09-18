@@ -151,11 +151,26 @@ _FLAG_WEIGHTS = {
 }
 
 
+def _linked_exp_for(db, project) -> float:
+    """Authoritative per-project spend from the payment ledger
+    (project_rec_info.linked_expenditure). The catalog column is a zeroed
+    legacy stamp."""
+    try:
+        row = (
+            db.query(models.ProjectRecInfo)
+            .filter(models.ProjectRecInfo.project_id == project.id)
+            .first()
+        )
+        return float(row.linked_expenditure or 0.0) if row is not None else 0.0
+    except Exception:
+        return 0.0
+
+
 def _derive_flags(project, risk_row, extra: Dict) -> List[Dict]:
     """Explainable AI flags with numeric evidence from recorded data."""
     flags: List[Dict] = []
     sanctioned = float(project.sanctioned_amount or 0)
-    spent = float(project.expenditure or 0)
+    spent = float(extra.get("linked_expenditure") or 0.0)
     completion = float(project.completion_percentage or 0)
 
     bench = extra.get("benchmark") or {}
@@ -306,6 +321,7 @@ def audit_queue(
         extra = extra_map.get(project.id, {})
         bench = _benchmark_for(ai_audit.norm_category(project.project_type), project.state)
         extra["benchmark"] = bench
+        extra["linked_expenditure"] = _linked_exp_for(db, project)
         flags = _derive_flags(project, risk_row, extra)
         score = _risk_index(flags, risk_row)
         items.append({
@@ -315,7 +331,7 @@ def audit_queue(
             "state": project.state,
             "constituency": project.constituency,
             "sanctioned_amount": project.sanctioned_amount or 0,
-            "expenditure": project.expenditure or 0,
+            "expenditure": extra["linked_expenditure"],
             "completion_percentage": project.completion_percentage or 0,
             "risk_index": score,
             "severity": ai_audit.risk_band(score)[0],
@@ -1229,6 +1245,7 @@ def inspection_bundle(project_id: int, db: Session = Depends(get_db)):
     extra = _project_extra_context(db, [project_id]).get(project_id, {})
     bench = _benchmark_for(ai_audit.norm_category(project.project_type), project.state)
     extra["benchmark"] = bench
+    extra["linked_expenditure"] = _linked_exp_for(db, project)
     flags = _derive_flags(project, risk_row, extra)
     score = _risk_index(flags, risk_row)
 
@@ -1294,7 +1311,7 @@ def inspection_bundle(project_id: int, db: Session = Depends(get_db)):
             "district": project.district, "state": project.state,
             "constituency": project.constituency,
             "sanctioned_amount": project.sanctioned_amount or 0,
-            "expenditure": project.expenditure or 0,
+            "expenditure": extra.get("linked_expenditure") or 0,
             "completion_percentage": project.completion_percentage or 0,
             "status": project.status, "project_type": project.project_type,
         },

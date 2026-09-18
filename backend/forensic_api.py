@@ -102,12 +102,14 @@ def forensic_bundle(project_id: int, db: Session = Depends(get_db)):
 
     # -- Financial evidence ------------------------------------------
     sanctioned = _num(project.sanctioned_amount)
-    expenditure = _num(project.expenditure)
+    # Authoritative per-project spend: linked payment-ledger total
+    # (project_rec_info). The catalog column is a zeroed legacy stamp.
+    expenditure = _linked_expenditure_for(db, project)
     completion = _num(project.completion_percentage)
     utilization = (expenditure / sanctioned * 100) if sanctioned > 0 else None
 
     # Existing calculators — no new formulas
-    exposure = audit_intel.financial_exposure(project)
+    exposure = audit_intel.financial_exposure(project, linked_expenditure=expenditure)
     stale = audit_intel and _stale_via_main(project_id, db)
 
     # -- Physical evidence -------------------------------------------
@@ -250,11 +252,12 @@ def forensic_bundle(project_id: int, db: Session = Depends(get_db)):
         ("fy", "Financial year"),
         ("project_type", "Category/type"),
         ("completion_percentage", "Recorded progress"),
-        ("expenditure", "Recorded expenditure"),
     ):
         if getattr(project, field, None) in (None, ""):
             data_quality["missing_fields"].append(label)
-    if project.expenditure == 0 and project.completion_percentage == 0:
+    # Spend availability comes from the linked payment ledger, not the
+    # catalog's zeroed legacy column.
+    if expenditure == 0 and _num(project.completion_percentage) == 0:
         data_quality["missing_fields"].append(
             "Note: expenditure and progress are recorded as zero — this may mean "
             "missing data rather than actual zero values."
@@ -357,6 +360,18 @@ def _vendor_evidence_for_key(db: Session, key: str) -> Dict[str, Any]:
     }
 
 
+def _linked_expenditure_for(db, project) -> float:
+    """Authoritative per-project spend from the payment ledger
+    (project_rec_info.linked_expenditure). The catalog's `expenditure`
+    column is a zeroed legacy stamp and must not drive evidence panels."""
+    row = (
+        db.query(models.ProjectRecInfo)
+        .filter(models.ProjectRecInfo.project_id == project.id)
+        .first()
+    )
+    return float(row.linked_expenditure or 0.0) if row is not None else 0.0
+
+
 def _forensic_summary(
     project, rule_items, ml_anomaly, ml_score, utilization,
     completion, status_consistency, vendor_evidence, ground, data_quality,
@@ -364,7 +379,7 @@ def _forensic_summary(
 ) -> str:
     """Deterministic forensic narrative — only the evidence above is used."""
     s = _num(project.sanctioned_amount)
-    e = _num(project.expenditure)
+    e = utilization * s / 100.0 if (utilization is not None and s > 0) else 0.0
     parts: List[str] = []
 
     triggered = [r for r in rule_items if r["source"] in ("rule", "ml")]
@@ -465,7 +480,8 @@ def project_dna(
     risk_level = risk_row.risk_level if risk_row else "None"
 
     s = _num(project.sanctioned_amount)
-    e = _num(project.expenditure)
+    # Authoritative linked payment-ledger spend (catalog column is a zeroed stamp).
+    e = _linked_expenditure_for(db, project)
     c = _num(project.completion_percentage)
 
     # Cohort medians (same state + normalized type, indexed filters).
@@ -616,7 +632,8 @@ def _find_twins(
         return {"peers": [], "cohort_size": 0, "criteria": {}, "method": ""}
 
     s = _num(project.sanctioned_amount)
-    e = _num(project.expenditure)
+    # Authoritative linked payment-ledger spend (catalog column is a zeroed stamp).
+    e = _linked_expenditure_for(db, project)
     c = _num(project.completion_percentage)
     util = (e / s * 100) if s > 0 else None
     status_str = (project.status or "").strip().lower()
@@ -666,11 +683,18 @@ def _find_twins(
         .filter(models.RiskScore.project_id.in_(ids))
         .all()
     }
+    # Linked payment-ledger spend for the candidate page (authoritative).
+    linked_map = {
+        r.project_id: float(r.linked_expenditure or 0.0)
+        for r in db.query(models.ProjectRecInfo)
+        .filter(models.ProjectRecInfo.project_id.in_(ids))
+        .all()
+    }
 
     scored = []
     for p in candidates:
         ps = _num(p.sanctioned_amount)
-        pe = _num(p.expenditure)
+        pe = linked_map.get(p.id, 0.0)
         pc = _num(p.completion_percentage)
         p_util = (pe / ps * 100) if ps > 0 else None
         score = 0.0
@@ -789,7 +813,8 @@ def stress_test(
         .first()
     )
     cur_s = _num(project.sanctioned_amount)
-    cur_e = _num(project.expenditure)
+    # Baseline spend = authoritative linked payment-ledger total.
+    cur_e = _linked_expenditure_for(db, project)
     cur_c = _num(project.completion_percentage)
     stored_ml = bool(risk_row.ml_anomaly) if risk_row else False
     stored_score = int(risk_row.risk_score or 0) if risk_row else 0

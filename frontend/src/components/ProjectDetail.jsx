@@ -501,11 +501,11 @@ function ProjectDetail({ projectId, onClose }) {
               <div className="rounded-xl border border-gray-200 bg-gray-50/50 p-4 dark:border-gray-700 dark:bg-[#0a0a0c]">
                 <p className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">Recommendation & Timeline</p>
                 <div className="mt-2.5">
-                  <RecTimelineBlock rec={detail.rec} />
+                  <RecTimelineBlock rec={detail.rec} physical_completion_pct={detail?.financial_physical?.physical_completion_pct} />
                 </div>
               </div>
               <ProgressCard completion={completion} />
-              {/* Predictive estimates + compliance checklist + payment-data
+              {/* Predictive estimates + payment-data
                   availability — derived from recorded values only. */}
               <PredictiveInsightsPanel detail={detail} />
             </>

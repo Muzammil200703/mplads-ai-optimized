@@ -460,8 +460,16 @@ class ProjectRecInfo(Base):
     project_id = Column(Integer, index=True, nullable=False)
     recommendation_date = Column(String)   # ISO YYYY-MM-DD or NULL
     recommended_by = Column(String)        # MP name from recommended_works
-    approx_start_date = Column(String)     # ISO, earliest MP-verified expenditure
+    approx_start_date = Column(String)     # ISO, earliest VALID (on/after rec) expenditure
     has_expenditure = Column(Boolean, default=False)
+    # 'valid' | 'pre_recommendation' | 'no_expenditure' — drives UI wording;
+    # pre_recommendation means every linked expenditure predates the
+    # recommendation date, so no start proxy is shown.
+    start_status = Column(String)
+    # SUM(expenditure_amount) of ledger payments linked to this project's
+    # work key (same conservative linkage). The authoritative per-project
+    # spend; the catalog's `expenditure` column is a zeroed legacy stamp.
+    linked_expenditure = Column(Float)
 
     __table_args__ = (
         Index("idx_rec_info_project", "project_id", unique=True),

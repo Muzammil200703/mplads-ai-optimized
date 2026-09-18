@@ -6,22 +6,40 @@ One derived, rebuildable table answering, per project:
   • recommendation_date — earliest recorded recommendation for this work
     (from recommended_works.recommendation_date)
   • recommended_by      — MP name from that recommended work
-  • approx_start_date   — earliest MP-verified expenditure_date
-    (proxy for project start; the UI always labels it "Approx.")
-  • has_expenditure     — whether any MP-verified expenditure exists
+  • approx_start_date   — earliest VALID expenditure_date, where "valid"
+    means the record is genuinely linked to THIS project's work AND is on
+    or after the recommendation date (a payment can only follow the work
+    being recommended — anything earlier indicates a cross-project match
+    or a data anomaly, never a real project start)
+  • start_status        — 'valid' | 'pre_recommendation' | 'no_expenditure'
+  • has_expenditure     — whether any linked expenditure exists at all
 
-Linkage is identical to activity.py: the normalized (name, constituency,
-state) work key via SQL normkey() (expression-indexed), with the same
-MP-verification rule (when a recommended work matches the key, only
-expenditures whose MP equals that work's MP count). When no recommended
-work matches, the earliest expenditure across any MP is used — exactly
-what activity._verified_rows does.
+Linkage (strongest reliable identifier available in this dataset):
+  The normalized (name, constituency, state) work key via SQL normkey()
+  — the same base key activity.py uses — TIGHTENED with two anchors:
+    1. MP match      (normkey(mp_name) equals the recommended work's MP)
+    2. IDA match     (the implementing-district-authority prefix, e.g.
+      "AMRAVATI(...)" → "amravati", equals the recommended work's IDA)
+  Both expenditures and recommended_works carry the IDA field 100%
+  populated. The generic constituency values ("Sitting Rajya Sabha",
+  "Nominated Rajya Sabha") are shared by every RS/TLS MP of a state, so
+  name+constituency+state alone demonstrably cross-matches payments from
+  unrelated districts; the IDA anchor removes those false links.
 
-Nothing is invented: projects with no matching recommended_works row get
-no recommendation date/MP; projects with no matched expenditure get no
-start date. The table is fully derived — rebuild(db) regenerates it after
-any data sync. All aggregation runs inside SQLite; peak Python memory
-stays flat (no row materialization).
+Validation: only expenditures ON/AFTER recommendation_date feed the start
+proxy (start_status='valid'). If every linked expenditure predates the
+recommendation, the dates are NOT shown as a start (start_status=
+'pre_recommendation' → UI shows "Start date unavailable"). Projects with
+no linked expenditure are 'no_expenditure'. When no recommended work
+matches a project at all, there is no recommendation date to validate
+against, so the conservative any-MP earliest expenditure is kept (same
+rule as activity._verified_rows) with status 'valid'.
+
+Nothing is invented: dates come from recommended_works.recommendation_date
+and expenditures.expenditure_date; the MP comes from recommended_works.
+The table is fully derived — rebuild(db) regenerates it after any data
+sync. All aggregation runs inside SQLite; peak Python memory stays flat
+(no row materialization).
 """
 
 import threading
@@ -50,6 +68,14 @@ def _normdate_sql(value) -> str:
     return ""
 
 
+def _idapfx_sql(value) -> str:
+    """SQL-side IDA prefix: 'AMRAVATI(DISTRICT COLLECTOR AMRAVATI_IDA)' →
+    normkey('AMRAVATI'). The prefix (before the parenthetical) is stable
+    across the datasets while tolerating punctuation/spacing variants."""
+    s = str(value or "").split("(")[0]
+    return _normkey(s)
+
+
 def rebuild(db, force: bool = False) -> dict:
     """Rebuild project_rec_info from source tables in one SQL statement.
 
@@ -65,24 +91,41 @@ def rebuild(db, force: bool = False) -> dict:
         conn = db.connection().connection  # raw sqlite3 connection
         conn.create_function("normkey", 1, _normkey, deterministic=True)
         conn.create_function("normdate", 1, _normdate_sql, deterministic=True)
+        conn.create_function("idapfx", 1, _idapfx_sql, deterministic=True)
         t0 = time.time()
         cur = conn.cursor()
         try:
+            # Idempotent schema upgrade for deployments with the pre-validation
+            # table shape (adds the start_status discriminator column).
+            try:
+                cur.execute("ALTER TABLE project_rec_info ADD COLUMN start_status TEXT")
+            except Exception:
+                pass  # column already exists
+
+            # Idempotent schema upgrade for deployments with the earlier
+            # table shape (adds the linked-expenditure column).
+            try:
+                cur.execute("ALTER TABLE project_rec_info ADD COLUMN linked_expenditure REAL")
+            except Exception:
+                pass  # column already exists
+
             cur.execute("DELETE FROM project_rec_info")
             cur.execute("""
                 INSERT INTO project_rec_info
                     (project_id, recommendation_date, recommended_by,
-                     approx_start_date, has_expenditure)
+                     approx_start_date, has_expenditure, start_status,
+                     linked_expenditure)
                 WITH
-                -- Earliest recommendation per work key (date, MP, normalized MP)
+                -- Earliest recommendation per work key (date, MP, IDA)
                 rec_agg AS (
-                    SELECT dk, ck, sk, rec_date, rec_mp, mpk FROM (
+                    SELECT dk, ck, sk, rec_date, rec_mp, mpk, idapk FROM (
                         SELECT normkey(rw.work_description)              AS dk,
                                normkey(rw.constituency)                  AS ck,
                                normkey(rw.state)                         AS sk,
                                normdate(rw.recommendation_date)          AS rec_date,
                                TRIM(COALESCE(rw.mp_name, ''))            AS rec_mp,
                                normkey(rw.mp_name)                       AS mpk,
+                               idapfx(rw.ida)                            AS idapk,
                                ROW_NUMBER() OVER (
                                    PARTITION BY normkey(rw.work_description),
                                                 normkey(rw.constituency),
@@ -94,20 +137,39 @@ def rebuild(db, force: bool = False) -> dict:
                         FROM recommended_works rw
                     ) WHERE rn = 1
                 ),
-                -- Earliest expenditure per (work key, MP)
-                exp_by_mp AS (
-                    SELECT normkey(e.work_description)               AS dk,
-                           normkey(e.constituency)                   AS ck,
-                           normkey(e.state)                          AS sk,
-                           normkey(e.mp_name)                        AS mpk,
-                           MIN(NULLIF(normdate(e.expenditure_date), '')) AS first_exp
+                -- MP+IDA-verified expenditures for recommended work keys:
+                -- first_exp    = earliest linked expenditure (any date)
+                -- first_valid  = earliest expenditure ON/AFTER the
+                --                recommendation date (the only ones usable
+                --                as a start proxy)
+                exp_verified AS (
+                    SELECT ra.dk, ra.ck, ra.sk,
+                           MIN(NULLIF(normdate(e.expenditure_date), '')) AS first_exp,
+                           MIN(CASE
+                                   WHEN ra.rec_date IS NOT NULL AND ra.rec_date <> ''
+                                    AND normdate(e.expenditure_date) >= ra.rec_date
+                                   THEN normdate(e.expenditure_date)
+                               END) AS first_valid,
+                           SUM(e.expenditure_amount) AS linked_amount
                     FROM expenditures e
-                    GROUP BY dk, ck, sk, mpk
+                    JOIN rec_agg ra
+                      ON ra.dk    = normkey(e.work_description)
+                     AND ra.ck    = normkey(e.constituency)
+                     AND ra.sk    = normkey(e.state)
+                     AND ra.mpk   = normkey(e.mp_name)
+                     AND ra.idapk = idapfx(e.ida)
+                    GROUP BY ra.dk, ra.ck, ra.sk
                 ),
-                -- Earliest expenditure per work key across any MP
+                -- Fallback: earliest expenditure per work key across any
+                -- MP/IDA — used ONLY when no recommended work matches the
+                -- project key (then there is no rec date to validate
+                -- against; same rule as activity._verified_rows).
                 exp_any AS (
-                    SELECT dk, ck, sk, MIN(first_exp) AS any_first
-                    FROM exp_by_mp
+                    SELECT normkey(e.work_description)  AS dk,
+                           normkey(e.constituency)      AS ck,
+                           normkey(e.state)             AS sk,
+                           MIN(NULLIF(normdate(e.expenditure_date), '')) AS any_first
+                    FROM expenditures e
                     GROUP BY dk, ck, sk
                 )
                 SELECT p.id,
@@ -115,27 +177,40 @@ def rebuild(db, force: bool = False) -> dict:
                             THEN ra.rec_date END,
                        CASE WHEN ra.rec_mp IS NOT NULL AND ra.rec_mp <> ''
                             THEN ra.rec_mp END,
-                       -- MP-verified when a recommendation exists, else any-MP
-                       -- earliest (same rule as activity._verified_rows)
                        CASE
-                           WHEN ra.mpk IS NOT NULL AND ev.first_exp IS NOT NULL THEN ev.first_exp
-                           WHEN ra.mpk IS NULL     AND ea.any_first IS NOT NULL THEN ea.any_first
+                           -- verified linkage: only valid (>= rec) dates
+                           WHEN ra.mpk IS NOT NULL AND ev.first_exp IS NOT NULL
+                               THEN ev.first_valid
+                           -- no recommendation matched: conservative fallback
+                           WHEN ra.mpk IS NULL AND ea.any_first IS NOT NULL
+                               THEN ea.any_first
                        END,
                        CASE WHEN (ra.mpk IS NOT NULL AND ev.first_exp IS NOT NULL)
                                  OR (ra.mpk IS NULL AND ea.any_first IS NOT NULL)
-                            THEN 1 ELSE 0 END
+                            THEN 1 ELSE 0 END,
+                       CASE
+                           WHEN ra.mpk IS NOT NULL AND ev.first_exp IS NOT NULL THEN
+                               CASE WHEN ev.first_valid IS NOT NULL
+                                    THEN 'valid'
+                                    ELSE 'pre_recommendation' END
+                           WHEN ra.mpk IS NULL AND ea.any_first IS NOT NULL
+                               THEN 'valid'
+                           ELSE 'no_expenditure'
+                       END,
+                       CASE WHEN ra.mpk IS NOT NULL AND ev.linked_amount IS NOT NULL
+                            THEN ev.linked_amount ELSE 0.0 END
                 FROM projects p
                 LEFT JOIN rec_agg ra
                        ON ra.dk = normkey(p.project_name)
                       AND ra.ck = normkey(p.constituency)
                       AND ra.sk = normkey(p.state)
-                LEFT JOIN exp_by_mp ev
+                LEFT JOIN exp_verified ev
                        ON ev.dk = normkey(p.project_name)
                       AND ev.ck = normkey(p.constituency)
                       AND ev.sk = normkey(p.state)
-                      AND ra.mpk IS NOT NULL AND ev.mpk = ra.mpk
                 LEFT JOIN exp_any ea
-                       ON ea.dk = normkey(p.project_name)
+                       ON ra.mpk IS NULL
+                      AND ea.dk = normkey(p.project_name)
                       AND ea.ck = normkey(p.constituency)
                       AND ea.sk = normkey(p.state)
             """)
@@ -147,12 +222,16 @@ def rebuild(db, force: bool = False) -> dict:
             with_exp = cur.execute(
                 "SELECT COUNT(*) FROM project_rec_info WHERE has_expenditure = 1"
             ).fetchone()[0]
+            linked_sum = cur.execute(
+                "SELECT COALESCE(SUM(linked_expenditure), 0) FROM project_rec_info"
+            ).fetchone()[0]
             _last_build.update(ok=True, rows=rows, at=time.time(), error=None)
             return {
                 "ok": True,
                 "rows": rows,
                 "with_recommendation_date": dated,
                 "with_expenditure": with_exp,
+                "linked_expenditure_total": float(linked_sum or 0),
                 "seconds": round(time.time() - t0, 2),
             }
         except Exception as exc:
