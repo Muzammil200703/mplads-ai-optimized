@@ -156,10 +156,16 @@ def audit_priority_score_sql():
               + financial exposure (0–20)
               + financial/physical mismatch (0–15)
               + evidence/data gap (0–10)
+
+    Utilization/mismatch use the authoritative linked payment-ledger spend
+    (project_rec_info.linked_expenditure, LEFT JOINed by the callers); the
+    catalog's per-project expenditure column is a zeroed legacy stamp.
+    Callers MUST join ProjectRecInfo on project_id (outer join keeps rows).
     """
+    linked_exp = func.coalesce(models.ProjectRecInfo.linked_expenditure, 0.0)
     utilization = case(
         (models.Project.sanctioned_amount > 0,
-         func.coalesce(models.Project.expenditure, 0) * 100.0 / models.Project.sanctioned_amount),
+         linked_exp * 100.0 / models.Project.sanctioned_amount),
         else_=0.0,
     )
     risk_component = func.min(func.coalesce(models.RiskScore.risk_score, 0), 100.0) * 0.55
@@ -171,7 +177,7 @@ def audit_priority_score_sql():
         1.0,
     ) * 15.0
     gap_component = case(
-        (func.coalesce(models.Project.expenditure, 0) == 0, case(
+        (linked_exp == 0, case(
             (func.coalesce(models.Project.completion_percentage, 0) == 0, 10.0), else_=0.0)),
         (func.coalesce(models.Project.completion_percentage, 0) == 0, 5.0),
         else_=0.0,
@@ -227,10 +233,18 @@ def priority_breakdown(
     risk_score: float,
     audit_score: Optional[float] = None,
     risk_level: Optional[str] = None,
+    linked_expenditure: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Return the composite score, its components and a plain-language explanation."""
+    """Return the composite score, its components and a plain-language explanation.
+
+    `linked_expenditure` is the authoritative per-project spend from the
+    payment ledger (project_rec_info.linked_expenditure). The catalog's
+    per-project `expenditure` column is a zeroed legacy stamp and must not
+    drive scoring; when the override is absent, spend-derived components
+    treat expenditure as 0 (evidence-gap behaviour), never as fabricated.
+    """
     sanctioned = _num(project.sanctioned_amount)
-    expenditure = _num(project.expenditure)
+    expenditure = _num(linked_expenditure) if linked_expenditure is not None else 0.0
     completion = _num(project.completion_percentage)
     utilization = (expenditure / sanctioned * 100.0) if sanctioned > 0 else 0.0
 
@@ -298,16 +312,20 @@ def priority_breakdown(
     }
 
 
-def financial_exposure(project) -> Dict[str, Any]:
+def financial_exposure(
+    project, linked_expenditure: Optional[float] = None
+) -> Dict[str, Any]:
     """
     Financial exposure indicators.
 
     `funds_under_review` is the sanctioned amount of a flagged work (a
     definition, not a claim of loss). `overspend` and `unverified_spend` are
     arithmetic on actual recorded values and are labelled as calculated.
+    `linked_expenditure` (payment ledger) is the authoritative spend; the
+    catalog column is a zeroed legacy stamp.
     """
     sanctioned = _num(project.sanctioned_amount)
-    expenditure = _num(project.expenditure)
+    expenditure = _num(linked_expenditure) if linked_expenditure is not None else 0.0
     completion = _num(project.completion_percentage)
 
     overspend = (expenditure - sanctioned) if (sanctioned > 0 and expenditure > sanctioned) else 0.0
@@ -653,9 +671,18 @@ def peer_benchmark(
     `scope`: constituency | state | national
     `project_type`: explicit type, or "all" to ignore the category.
     `band`: narrow (0.7–1.4×) | default (0.3–3.0×) | all
+
+    Expenditure everywhere is the authoritative linked payment-ledger total
+    (project_rec_info.linked_expenditure); the catalog column is a zeroed
+    legacy stamp.
     """
     sanctioned = _num(project.sanctioned_amount)
-    expenditure = _num(project.expenditure)
+    _rec_row = (
+        db.query(models.ProjectRecInfo)
+        .filter(models.ProjectRecInfo.project_id == project.id)
+        .first()
+    )
+    expenditure = _num(_rec_row.linked_expenditure) if _rec_row is not None and _rec_row.linked_expenditure is not None else 0.0
     completion = _num(project.completion_percentage)
 
     scope_norm = (scope or "state").strip().lower()
@@ -693,30 +720,54 @@ def peer_benchmark(
     if status_filter and status_filter.strip() and status_filter.lower() != "all":
         base = base.filter(models.Project.status == status_filter.strip())
 
-    # Exact aggregates over the full peer group (SQL).
-    agg = base.with_entities(
-        func.count(models.Project.id).label("n"),
-        func.avg(models.Project.expenditure * 100.0 / models.Project.sanctioned_amount).label("avg_util"),
-        func.avg(models.Project.completion_percentage).label("avg_completion"),
-        func.avg(models.Project.expenditure).label("avg_expenditure"),
-        func.avg(models.Project.sanctioned_amount).label("avg_sanctioned"),
-        func.avg(models.RiskScore.risk_score).label("avg_risk"),
-    ).one()
+    # Per-project spend from the payment ledger (project_rec_info linkage);
+    # the catalog's expenditure column is a zeroed legacy stamp. Peers with
+    # no linked spend count as zero (no expenditure recorded). One joined
+    # query of light tuples, ordered by id so the median slice is the same
+    # deterministic bounded sample as before.
+    _peer_rows = (
+        base.with_entities(
+            models.Project.id,
+            models.Project.completion_percentage,
+            models.Project.sanctioned_amount,
+            models.RiskScore.risk_score,
+            models.ProjectRecInfo.linked_expenditure,
+        )
+        .outerjoin(models.ProjectRecInfo, models.ProjectRecInfo.project_id == models.Project.id)
+        .order_by(models.Project.id.asc())
+        .all()
+    )
+    _n = len(_peer_rows)
+    _util_list, _comp_list, _exp_list, _sanc_list, _risk_list = [], [], [], [], []
+    for _pid, _c, _s, _r, _le in _peer_rows:
+        _exp = _num(_le) if _le is not None else 0.0
+        _sanc = _num(_s)
+        if _sanc > 0:
+            _util_list.append(_exp * 100.0 / _sanc)
+        _comp_list.append(_num(_c))
+        _exp_list.append(_exp)
+        _sanc_list.append(_sanc)
+        if _r is not None:
+            _risk_list.append(_num(_r))
+    agg = type("Agg", (), {
+        "n": _n,
+        "avg_util": (sum(_util_list) / _n) if _n else 0.0,
+        "avg_completion": (sum(_comp_list) / _n) if _n else 0.0,
+        "avg_expenditure": (sum(_exp_list) / _n) if _n else 0.0,
+        "avg_sanctioned": (sum(_sanc_list) / _n) if _n else 0.0,
+        "avg_risk": (sum(_risk_list) / len(_risk_list)) if _risk_list else 0.0,
+    })()
 
     peer_count = int(agg.n or 0)
 
     # Deterministic bounded sample for the median (documented in the response).
-    sample = base.order_by(models.Project.id.asc()).limit(PEER_MEDIAN_SAMPLE).all()
-    util_vals, comp_vals, exp_vals, sanc_vals, risk_vals = [], [], [], [], []
-    for p, r in sample:
-        s = _num(p.sanctioned_amount)
-        if s > 0:
-            util_vals.append(_num(p.expenditure) * 100.0 / s)
-        comp_vals.append(_num(p.completion_percentage))
-        exp_vals.append(_num(p.expenditure))
-        sanc_vals.append(s)
-        if r is not None:
-            risk_vals.append(_num(r.risk_score))
+    util_vals = _util_list[:PEER_MEDIAN_SAMPLE]
+    comp_vals = _comp_list[:PEER_MEDIAN_SAMPLE]
+    exp_vals = _exp_list[:PEER_MEDIAN_SAMPLE]
+    sanc_vals = _sanc_list[:PEER_MEDIAN_SAMPLE]
+    risk_vals = _risk_list[:PEER_MEDIAN_SAMPLE]
+
+    median_util = _median(util_vals)
 
     median_util = _median(util_vals)
     median_comp = _median(comp_vals)
@@ -826,6 +877,9 @@ def peer_benchmark(
             )
 
     # Comparable projects for display (closest sanctioned amounts).
+    # Linked-spend lookup for the displayed rows (authoritative per-project
+    # spend from the ledger; the catalog column is a zeroed legacy stamp).
+    _linked_by_id = {row[0]: (row[4] if row[4] is not None else 0.0) for row in _peer_rows}
     comparable = []
     if sanctioned > 0:
         closest = (
@@ -835,9 +889,15 @@ def peer_benchmark(
             .all()
         )
     else:
-        closest = sample[:PEER_TABLE_LIMIT]
+        closest = (
+            base.with_entities(models.Project, models.RiskScore)
+            .order_by(models.Project.id.asc())
+            .limit(PEER_TABLE_LIMIT)
+            .all()
+        )
     for p, r in closest:
         s = _num(p.sanctioned_amount)
+        _pexp = float(_linked_by_id.get(p.id, 0.0))
         comparable.append({
             "id": p.id,
             "project_name": p.project_name,
@@ -846,9 +906,9 @@ def peer_benchmark(
             "project_type": p.project_type,
             "status": p.status,
             "sanctioned_amount": s,
-            "expenditure": _num(p.expenditure),
+            "expenditure": _pexp,
             "completion_percentage": _num(p.completion_percentage),
-            "utilization_pct": round(_num(p.expenditure) / s * 100, 1) if s > 0 else None,
+            "utilization_pct": round(_pexp / s * 100, 1) if s > 0 else None,
             "risk_score": r.risk_score if r else None,
             "risk_level": r.risk_level if r else None,
         })
@@ -858,7 +918,7 @@ def peer_benchmark(
         "peer_count": peer_count,
         "reliability": reliability,
         "zero_expenditure_share": zero_share,
-        "sample_size_for_median": len(sample),
+        "sample_size_for_median": min(peer_count, PEER_MEDIAN_SAMPLE),
         "filters": {
             "scope": scope_norm,
             "project_type": type_filter or "all (same category not applied)",
@@ -872,7 +932,7 @@ def peer_benchmark(
         "methodology": (
             "Peer group = projects excluding this one, filtered by the selected scope, category, sanction band "
             f"and status. Averages are computed in SQL across all {peer_count} peer project(s); the median is computed "
-            f"over a deterministic sample of up to {PEER_MEDIAN_SAMPLE} peer rows ({len(sample)} rows used). "
+            f"over a deterministic sample of up to {PEER_MEDIAN_SAMPLE} peer rows ({min(peer_count, PEER_MEDIAN_SAMPLE)} rows used). "
             "Comparison is statistical only and is not a finding of wrongdoing."
         ),
         "labels": {
@@ -1133,13 +1193,18 @@ def anomaly_explorer(project, db: Session, peer: Optional[dict] = None) -> Dict[
 
 # ═══════════════ investigation checklist ═══════════════
 
-def build_checklist(project, reasons: Optional[List[str]] = None, stale_flag: str = "NORMAL") -> List[Dict[str, Any]]:
+def build_checklist(
+    project, reasons: Optional[List[str]] = None, stale_flag: str = "NORMAL",
+    linked_expenditure: Optional[float] = None,
+) -> List[Dict[str, Any]]:
     """
     Build the evidence checklist from the anomalies actually present.
     Every item is a recommended verification action, never a claim.
+    `linked_expenditure` is the authoritative per-project spend from the
+    payment ledger (the catalog column is a zeroed legacy stamp).
     """
     sanctioned = _num(project.sanctioned_amount)
-    expenditure = _num(project.expenditure)
+    expenditure = _num(linked_expenditure) if linked_expenditure is not None else 0.0
     completion = _num(project.completion_percentage)
     status_str = (project.status or "").strip().lower()
     utilization = (expenditure / sanctioned * 100.0) if sanctioned > 0 else 0.0
@@ -1427,17 +1492,27 @@ def build_audit_case(project, db: Session, investigation: Optional[dict] = None)
     explorer = anomaly_explorer(project, db, peer=peer)
     evidence = evidence_gaps(project)
 
+    # Authoritative per-project spend from the payment ledger (project_rec_info);
+    # the catalog column is a zeroed legacy stamp.
+    _rec_row = (
+        db.query(models.ProjectRecInfo)
+        .filter(models.ProjectRecInfo.project_id == project.id)
+        .first()
+    )
+    linked_exp = _num(_rec_row.linked_expenditure) if _rec_row is not None and _rec_row.linked_expenditure is not None else 0.0
+
     sanctioned = _num(project.sanctioned_amount)
-    expenditure = _num(project.expenditure)
+    expenditure = linked_exp
     completion = _num(project.completion_percentage)
     utilization = (expenditure / sanctioned * 100.0) if sanctioned > 0 else None
     overspend = sanctioned > 0 and expenditure > sanctioned
 
     priority = priority_breakdown(
         project, risk["risk_score"], risk_level=risk.get("risk_level"),
+        linked_expenditure=linked_exp,
     )
-    exposure = financial_exposure(project)
-    checklist = build_checklist(project, risk["reasons"], evidence_stale_flag(project))
+    exposure = financial_exposure(project, linked_expenditure=linked_exp)
+    checklist = build_checklist(project, risk["reasons"], evidence_stale_flag(project), linked_expenditure=linked_exp)
     level = review_level(project, int(risk["risk_score"] or 0), overspend)
 
     triggered = [d for d in explorer["dimensions"] if d["status"] == "flagged"]
@@ -1662,7 +1737,13 @@ def _sync_checklist(db: Session, project, investigation: models.AuditInvestigati
     """Create any missing checklist items, preserving the status of existing ones."""
     risk_row = db.query(models.RiskScore).filter(models.RiskScore.project_id == project.id).first()
     reasons = [r.strip() for r in (risk_row.reasons or "").split(",")] if risk_row else []
-    checklist = build_checklist(project, reasons, evidence_stale_flag(project))
+    _rec_row = (
+        db.query(models.ProjectRecInfo)
+        .filter(models.ProjectRecInfo.project_id == project.id)
+        .first()
+    )
+    linked_exp = _num(_rec_row.linked_expenditure) if _rec_row is not None and _rec_row.linked_expenditure is not None else 0.0
+    checklist = build_checklist(project, reasons, evidence_stale_flag(project), linked_expenditure=linked_exp)
 
     existing = {
         c.item_key: c
@@ -1699,6 +1780,12 @@ def start_investigation(db: Session, project) -> Dict[str, Any]:
         .filter(models.AuditInvestigation.project_id == project.id)
         .first()
     )
+    _rec_row = (
+        db.query(models.ProjectRecInfo)
+        .filter(models.ProjectRecInfo.project_id == project.id)
+        .first()
+    )
+    linked_exp = _num(_rec_row.linked_expenditure) if _rec_row is not None and _rec_row.linked_expenditure is not None else 0.0
     now = _now_iso()
     if not investigation:
         risk_row = db.query(models.RiskScore).filter(models.RiskScore.project_id == project.id).first()
@@ -1706,6 +1793,7 @@ def start_investigation(db: Session, project) -> Dict[str, Any]:
         tier = priority_breakdown(
             project, risk_score,
             risk_level=(risk_row.risk_level if risk_row else None),
+            linked_expenditure=linked_exp,
         )
         investigation = models.AuditInvestigation(
             project_id=project.id,

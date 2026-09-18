@@ -71,8 +71,17 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
           setEarlyWarning(ewRes.value)
         }
 
-        if (healthRes.status === "rejected" || (ovRes.status === "rejected" && statesRes.status === "rejected")) {
-          setDataReady(false)
+        // Connectivity failure is NOT a missing dataset. The "Audit dataset
+        // unavailable" card must appear only when the backend itself reports
+        // an empty database (Git-LFS pointer checked out instead of the file).
+        // A sleeping/waking Render instance gets the retry banner on the normal
+        // page instead — a cold start must never be labelled a deployment fault.
+        const datasetMissing = healthRes.status === "fulfilled" && !hasData
+        if (
+          (healthRes.status === "rejected" ||
+            (ovRes.status === "rejected" && statesRes.status === "rejected")) &&
+          !datasetMissing
+        ) {
           setBackendConnected(false)
           setError(
             "Backend is unreachable right now. On the free hosting tier the server sleeps when idle and takes about a minute to wake — please retry in a moment. If this keeps happening, the backend URL may be down or misconfigured."
@@ -267,8 +276,8 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
                             <td className="py-1.5 pr-3 text-right">{t.projects.toLocaleString("en-IN")}</td>
                             <td className="py-1.5 pr-3 text-right">₹{formatCrore(t.sanctioned)} Cr</td>
                             <td className="py-1.5 pr-3 text-right">₹{formatCrore(t.expenditure)} Cr</td>
-                            <td className={`py-1.5 pr-3 text-right font-bold ${t.sanctioned > 0 && t.expenditure / t.sanctioned > 0.9 ? "text-amber-600 dark:text-amber-400" : "text-blue-600 dark:text-blue-400"}`}>
-                              {t.sanctioned > 0 ? `${((t.expenditure / t.sanctioned) * 100).toFixed(1)}%` : "—"}
+                            <td className={`py-1.5 pr-3 text-right font-bold ${t.utilization_percentage != null && t.utilization_percentage > 90 ? "text-amber-600 dark:text-amber-400" : "text-blue-600 dark:text-blue-400"}`}>
+                              {t.utilization_percentage != null ? `${Number(t.utilization_percentage).toFixed(1)}%` : "—"}
                             </td>
                             <td className="py-1.5 pr-3 text-right">{t.completed.toLocaleString("en-IN")}</td>
                             <td className={`py-1.5 text-right font-bold ${t.avg_risk >= 60 ? "text-red-500" : t.avg_risk >= 30 ? "text-amber-500" : "text-green-600"}`}>
@@ -392,7 +401,7 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
           </div>
           <div className="mt-4 pt-3 border-t border-gray-100 dark:border-gray-700/50">
             <p className={`text-xs ${mutedText}`}>
-              <span className="font-bold text-blue-600 dark:text-blue-400">{utilization}%</span> Fund utilization
+              <span className="font-bold text-blue-600 dark:text-blue-400">{Number(utilization).toFixed(1)}%</span> Fund utilization
             </p>
           </div>
         </div>

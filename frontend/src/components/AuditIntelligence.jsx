@@ -9,7 +9,6 @@ import {
   startInvestigation,
   updateInvestigation,
   updateEvidenceItem,
-  verifyProjectLookup,
 } from "../services/api"
 import { formatMoney } from "../utils/format"
 import { parseReasons } from "../utils/reasons"
@@ -556,90 +555,19 @@ export function InvestigationWorkspace({ projectId, onWorkspaceChange }) {
 
 /* ═══════════════ 4. Anomaly explorer ═══════════════ */
 
-/* ═══════════════ Predictive insights + compliance checklist ═══════════════
+/* ═══════════════ Predictive insights ═══════════════
    Derived ONLY from the project's recorded values and the existing risk
    engine outputs. Every estimate is labelled as an analytical indication,
-   never a confirmed fact. Compliance checks map 1:1 to available fields. */
-
-const _COMPLIANCE = {
-  passed: { icon: "✓", cls: "bg-green-100 text-green-700 dark:bg-green-950/60 dark:text-green-300" },
-  review: { icon: "⚠", cls: "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300" },
-  failed: { icon: "✕", cls: "bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300" },
-  unavailable: { icon: "—", cls: "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400" },
-}
+   never a confirmed fact. */
 
 export function PredictiveInsightsPanel({ detail }) {
   const proj = detail?.project
   const risk = detail?.risk
-  const projectId = proj?.id
-  // Ground-evidence count is fetched lazily so the checklist "Ground
-  // verification" row reflects the real review queue for this project.
-  const [evidenceCount, setEvidenceCount] = useState(null)
-  useEffect(() => {
-    let alive = true
-    if (!projectId) return
-    verifyProjectLookup(projectId)
-      .then((d) => alive && setEvidenceCount(d?.recent_reports?.length ?? 0))
-      .catch(() => alive && setEvidenceCount(null))
-    return () => { alive = false }
-  }, [projectId])
   const sanctioned = Number(proj.sanctioned_amount || 0)
   const expenditure = Number(proj.expenditure || 0)
   const completion = Number(proj.completion_percentage || 0)
   const utilization = sanctioned > 0 ? (expenditure / sanctioned) * 100 : 0
   const status = (proj.status || "").toLowerCase()
-
-  // ── Compliance checklist (1:1 with available fields) ──
-  const checks = [
-    {
-      label: "Financial consistency",
-      state: sanctioned > 0 && expenditure > sanctioned ? "failed"
-        : sanctioned > 0 ? "passed" : "unavailable",
-      why: sanctioned > 0 && expenditure > sanctioned
-        ? `Expenditure exceeds sanction by ₹${formatMoney(expenditure - sanctioned)}`
-        : sanctioned > 0 ? "Expenditure within sanctioned amount" : "Sanctioned amount not recorded",
-    },
-    {
-      label: "Progress consistency",
-      state: expenditure > 0 && completion === 0 ? "failed"
-        : utilization >= 80 && completion < 50 ? "review"
-        : status === "completed" && completion < 90 ? "review"
-        : "passed",
-      why: expenditure > 0 && completion === 0
-        ? `${formatMoney(expenditure)} recorded with 0% physical progress`
-        : status === "completed" && completion < 90
-          ? `Marked completed but progress is ${completion}%`
-          : "Expenditure and progress are broadly consistent",
-    },
-    {
-      label: "Status consistency",
-      state: status === "completed" && completion < 90 ? "review"
-        : status ? "passed" : "unavailable",
-      why: status === "completed" && completion < 90
-        ? "Completed status conflicts with sub-90% physical progress"
-        : status ? "Status aligns with recorded progress" : "Status not recorded",
-    },
-    {
-      label: "Location fields",
-      state: proj.state && (proj.district || proj.constituency) ? "passed"
-        : proj.state ? "review" : "unavailable",
-      why: proj.state && (proj.district || proj.constituency)
-        ? `State + ${proj.district ? "district" : "constituency"} recorded`
-        : proj.state ? "State recorded but district/constituency missing" : "No location recorded",
-    },
-    {
-      label: "Ground verification",
-      state: evidenceCount > 0 ? "passed" : evidenceCount === null ? "unavailable" : "review",
-      why: evidenceCount > 0
-        ? `${evidenceCount} ground evidence report(s) on record`
-        : evidenceCount === null
-          ? "Evidence status could not be loaded"
-          : "No field evidence submitted yet — request ground verification",
-    },
-  ]
-  const passed = checks.filter((c) => c.state === "passed").length
-  const review = checks.filter((c) => c.state === "review").length
-  const failed = checks.filter((c) => c.state === "failed").length
 
   // ── Predictive estimates (analytical only) ──
   const predictions = []
@@ -684,30 +612,6 @@ export function PredictiveInsightsPanel({ detail }) {
 
   return (
     <div className="space-y-3">
-      {/* Compliance checklist */}
-      <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#0a0a0c]">
-        <div className="mb-3 flex items-center justify-between">
-          <h4 className="text-xs font-bold uppercase tracking-wider text-gray-400">Compliance Checklist</h4>
-          <span className="font-mono text-[0.6875rem] font-bold">
-            <span className="text-green-600">{passed} ✓</span> · <span className="text-amber-600">{review} ⚠</span> · <span className="text-red-500">{failed} ✕</span>
-          </span>
-        </div>
-        <div className="space-y-1.5">
-          {checks.map((c) => {
-            const st = _COMPLIANCE[c.state]
-            return (
-              <div key={c.label} className="flex items-start gap-2.5 rounded-lg bg-white px-3 py-2 dark:bg-[#17181c]">
-                <span className={`mt-0.5 flex h-4.5 w-4.5 flex-none items-center justify-center rounded text-[0.625rem] font-bold ${st.cls}`}>{st.icon}</span>
-                <div className="min-w-0">
-                  <p className="text-xs font-bold">{c.label}</p>
-                  <p className="text-[0.6875rem] text-gray-500 dark:text-gray-400">{c.why}</p>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      </div>
-
       {/* Predictive / early-warning estimates */}
       <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#0a0a0c]">
         <h4 className="mb-1 text-xs font-bold uppercase tracking-wider text-gray-400">Predictive Insights</h4>
