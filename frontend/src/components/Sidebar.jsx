@@ -123,6 +123,7 @@ function Sidebar({
     { name: "Risk Center", href: "Risk Center", icon: "⚠" },
     { name: "State Intelligence", href: "State Intelligence", icon: "map-pin" },
     { name: "Reports", href: "Reports", icon: "▣" },
+    { name: "Leaderboard", href: "Leaderboard", icon: "map-pin" },
     { name: "Compare Projects", href: "Compare Projects", icon: "⚖" },
   ]
   // Audit + vendor sections are ANALYST-tier features — hidden from the

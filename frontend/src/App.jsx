@@ -27,6 +27,7 @@ const Landing = lazy(() => import("./pages/Landing"))
 
 // Lazy-load page components — only the active page is loaded
 const Overview = lazy(() => import("./pages/Overview"))
+const Leaderboard = lazy(() => import("./pages/Leaderboard"))
 const Projects = lazy(() => import("./pages/Projects"))
 const RiskCenter = lazy(() => import("./pages/RiskCenter"))
 const Reports = lazy(() => import("./pages/Reports"))
@@ -282,6 +283,7 @@ function AppShell() {
       { key: "Vendor Network", el: <VendorNetwork /> },
       { key: "Ground Truth Verification", el: <VerifyPortal /> },
       { key: "Reports", el: <Reports fy={selectedFY} /> },
+      { key: "Leaderboard", el: <Leaderboard darkMode={darkMode} /> },
       { key: "State Intelligence", el: <StateIntelligence onNavigateToProjects={(state) => handleDrillDown("Projects", { state })} fy={selectedFY} /> },
       { key: "Audit Priority", el: <AuditPriority fy={selectedFY} /> },
       { key: "Compare Projects", el: <CompareProjects fy={selectedFY} /> },
