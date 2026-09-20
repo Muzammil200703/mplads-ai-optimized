@@ -5,6 +5,7 @@ import {
   getDashboardStates,
   getAnomaliesSummary,
   getEarlyWarning,
+  healthCheck,
 } from "../services/api"
 import { formatCrore, formatNumber } from "../utils/format"
 
@@ -18,15 +19,19 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const [backendConnected, setBackendConnected] = useState(false)
+  const [dataReady, setDataReady] = useState(true)
+  const [overviewMissing, setOverviewMissing] = useState(false)
 
   useEffect(() => {
     async function loadData() {
       try {
         setLoading(true)
         setError("")
+        setOverviewMissing(false)
 
         const fyParams = fy ? { fy } : {}
-        const [ovRes, narrRes, statesRes, anomRes, ewRes] = await Promise.allSettled([
+        const [healthRes, ovRes, narrRes, statesRes, anomRes, ewRes] = await Promise.allSettled([
+          healthCheck(),
           getDashboardOverview(fyParams),
           getAINarrativeInsights(fyParams),
           getDashboardStates(fyParams),
@@ -34,9 +39,43 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
           getEarlyWarning(fyParams),
         ])
 
-        if (ovRes.status === "fulfilled") {
-          setOverview(ovRes.value)
+        const projectCount = healthRes.status === "fulfilled"
+          ? Number(healthRes.value?.total_projects || 0)
+          : 0
+        const hasData = healthRes.status === "fulfilled" && healthRes.value?.data_ready !== false && projectCount > 0
+        const datasetMissing = healthRes.status === "fulfilled" && !hasData
+
+        if (datasetMissing) {
+          setDataReady(false)
+          setBackendConnected(false)
+          setOverview(null)
+          setError(
+            "Audit data is not loaded in this deployment. Results are intentionally withheld so an empty database is never mistaken for a clean audit outcome."
+          )
+        } else if (healthRes.status === "fulfilled") {
+          // Health answered — the backend is reachable and its dataset is
+          // loaded. Connectivity must not depend on the overview call.
           setBackendConnected(true)
+          setDataReady(true)
+        }
+
+        // The overview payload is consumed independently of /health so a
+        // transient failure of this single request cannot silently zero the
+        // portfolio cards while sibling sections (states, anomalies, early
+        // warning) keep rendering. An empty payload is treated exactly like a
+        // rejected request and is surfaced by the summary banner below.
+        const ovPayload = ovRes.status === "fulfilled" ? ovRes.value : null
+        if (ovPayload && ovPayload.total_projects != null) {
+          setOverview(ovPayload)
+          setOverviewMissing(false)
+        } else if (!datasetMissing && healthRes.status === "fulfilled") {
+          // Rejected request, null body, or a payload missing the one field
+          // every card consumes — surface it, never render it as zero.
+          // The previous payload is cleared too: keeping FY-A values visible
+          // while the user asked for FY-B would present stale figures as if
+          // they were current. Zero + banner is the honest state.
+          setOverview(null)
+          setOverviewMissing(true)
         }
 
         if (narrRes.status === "fulfilled" && narrRes.value?.insights) {
@@ -55,7 +94,17 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
           setEarlyWarning(ewRes.value)
         }
 
-        if (ovRes.status === "rejected" && statesRes.status === "rejected") {
+        // Connectivity failure is NOT a missing dataset. The "Audit dataset
+        // unavailable" card must appear only when the backend itself reports
+        // an empty database (Git-LFS pointer checked out instead of the file).
+        // A sleeping/waking Render instance gets the retry banner on the normal
+        // page instead — a cold start must never be labelled a deployment fault.
+        // (datasetMissing is derived from the same health result above.)
+        if (
+          (healthRes.status === "rejected" ||
+            (ovRes.status === "rejected" && statesRes.status === "rejected")) &&
+          !datasetMissing
+        ) {
           setBackendConnected(false)
           setError(
             "Backend is unreachable right now. On the free hosting tier the server sleeps when idle and takes about a minute to wake — please retry in a moment. If this keeps happening, the backend URL may be down or misconfigured."
@@ -71,6 +120,37 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
     }
 
     loadData()
+  }, [fy])
+
+  // Assistant control plane: "refresh data" replays the page's own load
+  // cycle — no parallel fetch path.
+  useEffect(() => {
+    const handler = () => {
+      async function reload() {
+        try {
+          setLoading(true)
+          const fyParams = fy ? { fy } : {}
+          const ovRes = await getDashboardOverview(fyParams)
+          if (ovRes && ovRes.total_projects != null) {
+            setOverview(ovRes)
+            setOverviewMissing(false)
+          }
+          const statesRes = await getDashboardStates(fyParams)
+          if (Array.isArray(statesRes)) setStateData(statesRes)
+          const anomRes = await getAnomaliesSummary(fyParams)
+          if (anomRes) setAnomaliesSummary(anomRes)
+          const ewRes = await getEarlyWarning(fyParams)
+          if (ewRes) setEarlyWarning(ewRes)
+        } catch {
+          // Failures surface through the normal error banners on next load.
+        } finally {
+          setLoading(false)
+        }
+      }
+      reload()
+    }
+    window.addEventListener("assistant:refresh-data", handler)
+    return () => window.removeEventListener("assistant:refresh-data", handler)
   }, [fy])
 
   const pageClasses = darkMode
@@ -107,6 +187,25 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
     )
   }
 
+  if (!dataReady) {
+    return (
+      <div className={`min-h-full p-4 sm:p-6 ${pageClasses}`}>
+        <h1 className="text-xl sm:text-2xl md:text-3xl font-bold">Executive Overview</h1>
+        <section className={`mt-6 max-w-3xl rounded-xl border p-6 sm:p-8 ${cardClasses}`}>
+          <p className="text-2xl" aria-hidden>⚠️</p>
+          <h2 className="mt-3 text-lg font-bold">Audit dataset unavailable</h2>
+          <p className={`mt-2 text-sm leading-6 ${mutedText}`}>
+            No project-level audit results are displayed because this deployment has not loaded its MPLADS dataset.
+            This safeguard prevents an empty database from being presented as “zero risk.”
+          </p>
+          <p className={`mt-3 text-xs leading-5 ${mutedText}`}>
+            For deployment: ensure the Git-LFS dataset is fetched before the API starts, then reload this page.
+          </p>
+        </section>
+      </div>
+    )
+  }
+
   return (
     <div className={`min-h-full p-4 sm:p-6 transition-colors duration-200 ${pageClasses}`}>
       {/* HEADER */}
@@ -135,6 +234,19 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
       {error && (
         <div className="mb-6 rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm font-semibold text-red-600 dark:text-red-400">
           ⚠ {error}
+        </div>
+      )}
+
+      {/* PARTIAL-LOAD NOTICE — overview request failed but the backend is up.
+          The cards must never quietly present zero as the portfolio truth. */}
+      {overviewMissing && (
+        <div className="mb-6 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-amber-800 dark:text-amber-300">
+          <p className="text-sm font-semibold">Portfolio summary could not be loaded.</p>
+          <p className={`mt-1 text-xs leading-relaxed ${mutedText}`}>
+            The backend is reachable, but the portfolio aggregation did not complete, so the summary cards below are
+            showing zero rather than a misleading partial figure. Other sections on this page are served by separate
+            requests and may still show live data. Retry in a moment and the cards will repopulate from the backend.
+          </p>
         </div>
       )}
 
@@ -356,7 +468,7 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
           </div>
           <div className="mt-4 pt-3 border-t border-gray-100 dark:border-gray-700/50">
             <p className={`text-xs ${mutedText}`}>
-              <span className="font-bold text-blue-600 dark:text-blue-400">{utilization}%</span> Fund utilization
+              <span className="font-bold text-blue-600 dark:text-blue-400">{Number(utilization).toFixed(1)}%</span> Fund utilization
             </p>
           </div>
         </div>

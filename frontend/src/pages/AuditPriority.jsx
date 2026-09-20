@@ -63,7 +63,7 @@ function money(v) {
 }
 
 /* ═══════════════ MAIN COMPONENT ═══════════════ */
-const AuditPriority = memo(function AuditPriority({ fy }) {
+const AuditPriority = memo(function AuditPriority({ fy, drillDownParams, onClearDrillDown }) {
   const [priorities, setPriorities] = useState([])
   const [totalCount, setTotalCount] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -145,8 +145,27 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
     setCurrentPage(1)
   }
 
+  // Assistant control plane: tier/severity/state drill-down and clear-filters.
+  useEffect(() => {
+    if (drillDownParams) {
+      if (drillDownParams.tier) setFilterTier(drillDownParams.tier)
+      if (drillDownParams.severity) setFilterSeverity(drillDownParams.severity)
+      if (drillDownParams.state) setFilterState(drillDownParams.state)
+      setCurrentPage(1)
+      if (onClearDrillDown) onClearDrillDown()
+    }
+  }, [drillDownParams, onClearDrillDown])
+
+  useEffect(() => {
+    const handler = () => handleReset()
+    window.addEventListener("assistant:clear-filters", handler)
+    return () => window.removeEventListener("assistant:clear-filters", handler)
+  }, [])
+
   const handleOpenDetail = async (item) => {
     setSelectedProject(item)
+    // Assistant project-context: the shared assistant hears which project is open.
+    window.dispatchEvent(new CustomEvent("assistant-project-context", { detail: { projectId: item.project_id, projectName: item.project_name || null } }))
     setDetailRisk(null)
     setLoadingDetail(true)
     try {
@@ -562,7 +581,7 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
         const barColor = p.risk_score >= 60 ? "bg-red-500" : p.risk_score >= 30 ? "bg-amber-500" : "bg-blue-500"
 
         return (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 sm:p-4 backdrop-blur-2xs" onClick={() => setSelectedProject(null)}>
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 sm:p-4 backdrop-blur-2xs" onClick={() => { setSelectedProject(null); window.dispatchEvent(new CustomEvent("assistant-project-context", { detail: { projectId: null } })) }}>
           <div onClick={(e) => e.stopPropagation()} className="flex max-h-[90vh] sm:max-h-[85vh] w-full sm:max-w-2xl flex-col rounded-t-2xl sm:rounded-2xl border border-gray-200 bg-white shadow-soft-lg dark:border-gray-700 dark:bg-[#17181c]">
             {/* Header */}
             <div className="flex items-start justify-between border-b border-gray-200 p-5 dark:border-gray-700">
@@ -587,7 +606,7 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
                 <h3 className="mt-2 text-lg font-bold text-gray-900 dark:text-white leading-tight">{p.project_name}</h3>
                 <p className="text-xs text-gray-500 mt-0.5">📍 {p.state || "N/A"} — {p.constituency || "N/A"}</p>
               </div>
-              <button onClick={() => setSelectedProject(null)} className="ml-3 flex-shrink-0 rounded p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">✕</button>
+              <button onClick={() => { setSelectedProject(null); window.dispatchEvent(new CustomEvent("assistant-project-context", { detail: { projectId: null } })) }} className="ml-3 flex-shrink-0 rounded p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">✕</button>
             </div>
 
             <div className="flex-1 overflow-y-auto p-5 space-y-4">
@@ -729,11 +748,11 @@ const AuditPriority = memo(function AuditPriority({ fy }) {
 
             {/* Footer */}
             <div className="border-t border-gray-200 p-4 flex justify-between dark:border-gray-700">
-              <button onClick={() => setSelectedProject(null)} className="rounded-lg border border-gray-300 px-4 py-2 text-xs font-bold text-gray-700 dark:border-gray-600 dark:text-gray-200">Close</button>
+              <button onClick={() => { setSelectedProject(null); window.dispatchEvent(new CustomEvent("assistant-project-context", { detail: { projectId: null } })) }} className="rounded-lg border border-gray-300 px-4 py-2 text-xs font-bold text-gray-700 dark:border-gray-600 dark:text-gray-200">Close</button>
               <button
                 onClick={() => {
                   window.dispatchEvent(new CustomEvent("navigate-to-project", { detail: { query: String(p.project_id) } }))
-                  setSelectedProject(null)
+                  setSelectedProject(null); window.dispatchEvent(new CustomEvent("assistant-project-context", { detail: { projectId: null } }))
                 }}
                 className="rounded-lg bg-[#031632] px-4 py-2 text-xs font-bold text-white dark:bg-blue-600">
                 View Full Project →

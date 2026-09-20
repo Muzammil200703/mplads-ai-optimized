@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends, HTTPException, Query, Path, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, distinct, case, text, or_
 import io
@@ -599,9 +599,28 @@ def health_check(db: Session = Depends(get_db)):
     try:
         # Quick ping to DB
         count = db.query(func.count(models.Project.id)).scalar()
+        # A schema-only SQLite file is not a usable audit deployment. This
+        # happens when a host checks out the Git-LFS pointer for mplads.db
+        # instead of the dataset itself. Returning a degraded response keeps
+        # dashboards from presenting empty results as a legitimate finding.
+        if not count:
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={
+                    "status": "degraded",
+                    "database": "connected",
+                    "data_ready": False,
+                    "total_projects": 0,
+                    "detail": (
+                        "No MPLADS project records are loaded. Verify that the "
+                        "deployment fetched the Git-LFS dataset before serving audit results."
+                    ),
+                },
+            )
         return {
             "status": "healthy",
             "database": "connected",
+            "data_ready": True,
             "total_projects": count
         }
     except Exception as e:

@@ -200,6 +200,21 @@ table td:first-child, table td:nth-child(2) {
    Scoped to the sidebar's scroll containers (.sidebar-scroll). The
    track space is always reserved (no layout shift) — only the thumb's
    color fades in while scrolling and back out ~900ms after it stops. */
+/* Assistant composer: kill the native textarea scrollbar chrome (on
+   Windows Chrome/Edge a visible vertical scrollbar renders with up/down
+   arrow buttons — the "four-arrow" control inside the message input).
+   Scrolling long pasted text still works via mouse wheel, keyboard and
+   touch; only the visual bar is hidden, so layout is unchanged. */
+textarea.assistant-input,
+textarea.assistant-input::-webkit-scrollbar,
+.assistant-scroll {
+  scrollbar-width: none;      /* Firefox */
+  -ms-overflow-style: none;   /* legacy Edge */
+}
+.assistant-scroll::-webkit-scrollbar,
+textarea.assistant-input::-webkit-scrollbar {
+  display: none;              /* Chromium/Safari */
+}
 .sidebar-scroll {
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
@@ -373,5 +388,20 @@ table td:first-child, table td:nth-child(2) {
 @media (prefers-reduced-motion: reduce) {
   .detail-loading-shimmer {
     animation: none;
+  }
+}
+
+/* Project Details ↔ AI Assistant side-by-side: while the assistant panel is
+   open (≥lg), the modal overlay reserves room on the right for it
+   (380px panel + 20px right offset + 16px gap = 416px) and the card centers
+   in the remaining space — modal shifts left, never overlaps, nothing hardcoded
+   against a specific viewport. Below lg the assistant stays a plain overlay
+   and the modal keeps its normal centering. */
+.modal-shift-transition {
+  transition: padding-right 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+@media (min-width: 1024px) {
+  .modal-share-with-assistant {
+    padding-right: 416px !important;
   }
 }

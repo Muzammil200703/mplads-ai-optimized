@@ -82,8 +82,6 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
   const [sortDir, setSortDir] = useState("desc")
   const [currentPage, setCurrentPage] = useState(1)
   const [detailProjectId, setDetailProjectId] = useState(null)
-  const [compareIds, setCompareIds] = useState([])
-  const [showComparison, setShowComparison] = useState(false)
   const [projectSearchApplied, setProjectSearchApplied] = useState(false)
   const rowsPerPage = 15
 
@@ -122,6 +120,23 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
       if (onClearDrillDown) onClearDrillDown()
     }
   }, [drillDownParams, onClearDrillDown])
+
+  // Assistant control plane: "clear all filters" resets THIS page's own
+  // existing filter state — no parallel filter system.
+  useEffect(() => {
+    const handler = () => {
+      setKeyword("")
+      setState("")
+      setConstituency("")
+      setStatus("")
+      setSortBy("")
+      setSortDir("desc")
+      setCurrentPage(1)
+      setProjectSearchApplied(false)
+    }
+    window.addEventListener("assistant:clear-filters", handler)
+    return () => window.removeEventListener("assistant:clear-filters", handler)
+  }, [])
 
   useEffect(() => {
     async function loadStatesList() {
@@ -220,15 +235,6 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
     // search/filter/pagination state is intact on close.
     setDetailProjectId(proj.id)
     window.dispatchEvent(new CustomEvent("open-project", { detail: { projectId: proj.id } }))
-  }
-
-  const handleToggleCompare = (e, projId) => {
-    e.stopPropagation()
-    setCompareIds((prev) => {
-      if (prev.includes(projId)) return prev.filter((id) => id !== projId)
-      if (prev.length >= 3) return prev
-      return [...prev, projId]
-    })
   }
 
   const totalPages = Math.max(1, Math.ceil(totalCount / rowsPerPage))
@@ -466,7 +472,6 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
                 <table className="w-full min-w-[900px]">
                   <thead>
                     <tr className="border-b-2 border-gray-200 bg-gray-50 text-left text-[0.625rem] font-bold uppercase tracking-widest text-gray-500 dark:border-gray-700 dark:bg-[#141418] dark:text-gray-400">
-                      <th className="px-3 py-3 w-10"></th>
                       <th className="px-3 py-3 w-20">ID</th>
                       <th className="px-3 py-3">Work Name & Category</th>
                       <th className="px-3 py-3 w-36">Location</th>
@@ -491,15 +496,6 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
                           onClick={() => handleOpenDetail(proj)}
                           className="cursor-pointer transition-colors duration-100 hover:bg-blue-50/60 dark:hover:bg-[#253247]/80"
                         >
-                          <td className="px-3 py-2.5">
-                            <input
-                              type="checkbox"
-                              checked={compareIds.includes(proj.id)}
-                              onChange={(e) => handleToggleCompare(e, proj.id)}
-                              onClick={(e) => e.stopPropagation()}
-                              className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                            />
-                          </td>
                           <td className="px-3 py-2.5 font-mono text-[0.6875rem] font-bold text-gray-500 dark:text-gray-400">
                             #{proj.id}
                           </td>
@@ -606,15 +602,6 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
                               {proj.constituency || ""}{proj.constituency && proj.state ? ", " : ""}{proj.state || "N/A"} • {proj.project_type || "General"}
                             </p>
                           </div>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <input
-                              type="checkbox"
-                              checked={compareIds.includes(proj.id)}
-                              onChange={(e) => handleToggleCompare(e, proj.id)}
-                              onClick={(e) => e.stopPropagation()}
-                              className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                            />
-                          </div>
                         </div>
                         <div className="mt-2.5 grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
                           <div className="flex items-center justify-between rounded-md bg-gray-50 dark:bg-gray-700/40 px-2.5 py-1.5">
@@ -646,22 +633,6 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
                   Showing <strong>{totalCount === 0 ? 0 : (currentPage - 1) * rowsPerPage + 1}</strong> to{" "}
                   <strong>{Math.min(currentPage * rowsPerPage, totalCount)}</strong> of <strong>{totalCount.toLocaleString("en-IN")}</strong> records
                   </span>
-                  {compareIds.length >= 2 && (
-                    <button
-                      onClick={() => setShowComparison(true)}
-                      className="rounded-lg bg-blue-600 px-3 py-1.5 text-[0.625rem] font-bold text-white transition hover:bg-blue-700"
-                    >
-                      Compare {compareIds.length} Projects
-                    </button>
-                  )}
-                  {compareIds.length > 0 && (
-                    <button
-                      onClick={() => setCompareIds([])}
-                      className="rounded-lg border border-gray-300 px-2 py-1 text-[0.625rem] font-bold text-gray-500 hover:text-gray-700 dark:border-gray-600 dark:hover:text-gray-200"
-                    >
-                      Clear ({compareIds.length})
-                    </button>
-                  )}
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -702,104 +673,8 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
           />
         </Suspense>
       )}
-
-      {/* Comparison Modal */}
-      {showComparison && compareIds.length >= 2 && (
-        <ComparisonModal projectIds={compareIds} onClose={() => setShowComparison(false)} onRemove={(id) => setCompareIds((prev) => prev.filter((i) => i !== id))} />
-      )}
     </div>
   )
 })
-
-/* Comparison Modal Component */
-function ComparisonModal({ projectIds, onClose, onRemove }) {
-  const [projects, setProjects] = useState([])
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    setLoading(true)
-    Promise.all(projectIds.map((id) => getProjectDetail(id).catch(() => null)))
-      .then((results) => setProjects(results.filter(Boolean).map((r) => ({ ...r.project, risk: r.risk }))))
-      .finally(() => setLoading(false))
-  }, [projectIds])
-
-  function fmtMoney(v) {
-    const n = Number(v || 0)
-    if (n >= 10000000) return `₹${(n / 10000000).toFixed(2)} Cr`
-    if (n >= 100000) return `₹${(n / 100000).toFixed(2)} L`
-    return `₹${n.toLocaleString("en-IN")}`
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 sm:p-4 backdrop-blur-2xs" onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} className="flex max-h-[90vh] sm:max-h-[85vh] w-full sm:max-w-4xl flex-col rounded-t-2xl sm:rounded-2xl border border-gray-200 bg-white shadow-soft-lg dark:border-gray-700 dark:bg-[#17181c]">
-        <div className="flex items-start justify-between border-b border-gray-200 p-5 dark:border-gray-700">
-          <div>
-            <h3 className="text-lg font-bold text-gray-900 dark:text-white">Project Comparison</h3>
-            <p className="text-xs text-gray-500">Comparing {projects.length} projects side by side</p>
-          </div>
-          <button onClick={onClose} className="rounded p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">✕</button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-5">
-          {loading ? (
-            <div className="p-8 text-center">
-              <div className="inline-block h-6 w-6 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent" />
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="border-b border-gray-200 dark:border-gray-700">
-                    <th className="p-3 text-[0.625rem] font-bold uppercase text-gray-400">Metric</th>
-                    {projects.map((p) => (
-                      <th key={p.id} className="p-3">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono font-bold text-gray-400">#{p.id}</span>
-                          <button onClick={() => onRemove(p.id)} className="text-gray-400 hover:text-red-500">✕</button>
-                        </div>
-                        <p className="mt-0.5 font-semibold text-gray-900 dark:text-white" title={p.project_name}>{(p.project_name || "Unnamed").substring(0, 40)}</p>
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100 dark:divide-gray-700/60">
-                  {[
-                    { label: "State", key: "state" },
-                    { label: "Constituency", key: "constituency" },
-                    { label: "Category", key: "project_type" },
-                    { label: "Status", key: "status" },
-                    { label: "Sanctioned", key: "sanctioned_amount", money: true },
-                    { label: "Expenditure", key: "expenditure", money: true },
-                    { label: "Utilization", fn: (p) => `${(p.sanctioned_amount > 0 ? (p.expenditure / p.sanctioned_amount * 100) : 0).toFixed(1)}%` },
-                    { label: "Physical Progress", key: "completion_percentage", pct: true },
-                    { label: "Risk Score", fn: (p) => p.risk ? `${p.risk.risk_score}/100` : "N/A" },
-                    { label: "Risk Level", fn: (p) => p.risk?.risk_level || "None" },
-                    { label: "ML Anomaly", fn: (p) => p.risk?.ml_anomaly ? "Yes" : "No" },
-                  ].map((row) => (
-                    <tr key={row.label}>
-                      <td className="p-3 font-bold text-gray-500">{row.label}</td>
-                      {projects.map((p) => {
-                        let val = row.fn ? row.fn(p) : (row.money ? fmtMoney(p[row.key]) : row.pct ? `${p[row.key] || 0}%` : p[row.key] || "N/A")
-                        // Highlight differences
-                        const vals = projects.map((pp) => row.fn ? row.fn(pp) : (row.money ? fmtMoney(pp[row.key]) : row.pct ? `${pp[row.key] || 0}%` : pp[row.key] || "N/A"))
-                        const allSame = vals.every((v) => v === vals[0])
-                        return (
-                          <td key={p.id} className={`p-3 font-mono ${!allSame ? "font-bold text-blue-700 dark:text-blue-300" : "text-gray-600 dark:text-gray-300"}`}>{val}</td>
-                        )
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-        <div className="border-t border-gray-200 p-4 text-right dark:border-gray-700">
-          <button onClick={onClose} className="rounded-lg bg-[#031632] px-5 py-2 text-xs font-bold text-white dark:bg-blue-600">Close</button>
-        </div>
-      </div>
-    </div>
-  )
-}
 
 export default Projects

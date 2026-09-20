@@ -5,22 +5,23 @@ import { askAssistant, getAssistantSuggestions, getAssistantContextHelp } from "
 /* ═══════════════════════════════════════════════════════════════════
    MPLADS AI ASSISTANT — universal role-aware widget (floating panel)
    One assistant for every role: general MPLADS help + app guidance +
-   role-gated data answers. Role enforcement lives on the server; the
-   widget only controls which starter suggestions it shows.
+   role-gated data answers. Role enforcement lives on the server.
+   Now with persistent multi-conversation history (localStorage), a
+   New Chat reset that never deletes history, and a clean composer.
    ═══════════════════════════════════════════════════════════════════ */
 
 const ROLE_SUGGESTIONS = {
   guest: [
     "What is MPLADS?",
-    "What is the purpose of this website?",
-    "How does Ground Verification work?",
+    "Open Projects",
+    "What is Ground Verification?",
     "How do I search for a project?",
   ],
   citizen: [
     "How do I submit project evidence?",
     "What happens after I upload a photo?",
     "What is a risk score?",
-    "How many projects are in the portfolio?",
+    "Open Ground Verification",
   ],
   field_verifier: [
     "Show my submissions",
@@ -35,15 +36,15 @@ const ROLE_SUGGESTIONS = {
     "How do I search for a project?",
   ],
   analyst: [
+    "Show high-risk projects",
     "Which states have the most projects?",
-    "Which projects have high risk?",
-    "How many projects are in Karnataka?",
+    "Show projects in Telangana",
     "What is a risk score?",
   ],
   auditor: [
-    "What should I investigate today?",
-    "Which projects have high risk?",
-    "Find unusual spending.",
+    "Open Audit Priority",
+    "Show high-risk projects",
+    "Open AI Audit Center",
     "What does P1 mean?",
   ],
   admin: [
@@ -54,7 +55,43 @@ const ROLE_SUGGESTIONS = {
   ],
 }
 
-/** Renders **bold**, bullet lines and plain text from the engine's markdown-lite answers. */
+/* ── Conversation history (localStorage) ────────────────────────────
+   Bounded to 25 conversations × 60 messages each. Stores messages,
+   timestamps, the project context in play, and executed-action results
+   so reopening restores a faithful, useful transcript. */
+const HIST_KEY = "mplads_assistant_history_v1"
+const HIST_MAX_CONVS = 25
+const HIST_MAX_MSGS = 60
+
+/** Module-scope so event handlers stay free of impure-in-render lint. */
+const newSessionId = () =>
+  `asst-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+
+function loadHistory() {
+  try {
+    const raw = localStorage.getItem(HIST_KEY)
+    const arr = raw ? JSON.parse(raw) : []
+    return Array.isArray(arr) ? arr.slice(0, HIST_MAX_CONVS) : []
+  } catch {
+    return []
+  }
+}
+function persistHistory(convs) {
+  try {
+    localStorage.setItem(HIST_KEY, JSON.stringify(convs.slice(0, HIST_MAX_CONVS)))
+  } catch { /* storage full/unavailable — history is best-effort */ }
+}
+function convTitle(conv) {
+  const proj = conv.projectId ? ` — Project #${conv.projectId}` : ""
+  const firstUser = (conv.messages || []).find((m) => m.role === "user")
+  if (firstUser) {
+    const t = firstUser.text.replace(/\s+/g, " ").trim()
+    if (t) return (t.length > 42 ? t.slice(0, 42) + "…" : t) + proj
+  }
+  return `Conversation — ${new Date(conv.ts).toLocaleDateString()}${proj}`
+}
+
+/** Renders **bold** and bullet lines from the engine's markdown-lite answers. */
 function AnswerBody({ text }) {
   const lines = String(text || "").split("\n")
   return (
@@ -75,42 +112,144 @@ function AnswerBody({ text }) {
   )
 }
 
-export default function AssistantWidget({ currentPage, contextProjectId, onNavigate, onOpenProject }) {
+export default function AssistantWidget({ currentPage, contextProjectId, contextProjectName, onNavigate, onOpenProject, onExecuteAction }) {
   const { user } = useAuth()
   const [open, setOpen] = useState(false)
-  const [messages, setMessages] = useState([]) // {role: 'user'|'assistant', text, actions?}
+  const [messages, setMessages] = useState([]) // {role, text, actions?, exec?, ts}
   const [input, setInput] = useState("")
   const [busy, setBusy] = useState(false)
   const [suggestions, setSuggestions] = useState([])
-  const [contextHelp, setContextHelp] = useState(null) // page blurb for the 'About this page' chip
+  const [contextHelp, setContextHelp] = useState(null)
+  const [showHistory, setShowHistory] = useState(false)
+  const [history, setHistory] = useState(loadHistory)
   const scrollRef = useRef(null)
   const inputRef = useRef(null)
-  // Stable per-conversation session id — lets the server resolve pronoun
-  // follow-ups ("why is it risky?" → "open it") to the last-discussed project.
   const sessionRef = useRef(null)
-  // Last project the conversation produced (server also remembers it; this
-  // mirrors it client-side so the header can show the active context).
   const [lastProjectId, setLastProjectId] = useState(null)
+
+  /* ── Modal height sync ── when a Project Details modal is open, stretch the
+     panel to exactly the modal card's height and align its bottom edge, so the
+     two read as one side-by-side pair (assistant content scrolls internally).
+     Inline style only while synced — closing the modal restores the stock 520px
+     bottom-anchored panel. Reacts to content growth/shrink via ResizeObserver,
+     overlay scrolling, and window resize; the poll catches the card mounting
+     after the panel is already open. */
+  const [modalSync, setModalSync] = useState(null) // {top, height} | null
+  const [modalPresent, setModalPresent] = useState(false) // project modal on screen (raises FAB + panel above its overlay)
+  useEffect(() => {
+    const measure = () => {
+      const card = document.querySelector("[data-mplads-modal-card]")
+      setModalPresent(!!card)
+      if (!card) { setModalSync(null); return }
+      const r = card.getBoundingClientRect()
+      const m = 12
+      const top = Math.max(r.top, m)
+      const bottom = Math.min(r.bottom, window.innerHeight - m)
+      const h = bottom - top
+      if (h < 200) { setModalSync(null); return }
+      setModalSync({ top: Math.round(top), height: Math.round(h) })
+    }
+    measure()
+    const card = document.querySelector("[data-mplads-modal-card]")
+    const ro = card ? new ResizeObserver(measure) : null
+    if (card) ro.observe(card)
+    window.addEventListener("resize", measure)
+    window.addEventListener("scroll", measure, true)
+    const t = setInterval(measure, 400)
+    return () => { if (ro) ro.disconnect(); window.removeEventListener("resize", measure); window.removeEventListener("scroll", measure, true); clearInterval(t) }
+  }, [open, lastProjectId, modalPresent])
+
+  /* ── Side-by-side signal ── Project Details shifts left only while this
+     panel is open (desktop widths, enforced by CSS media query). Exposed
+     as a class on <html> (initial state for late-mounted modals) and an
+     event (live toggle). */
+  useEffect(() => {
+    document.documentElement.classList.toggle("assistant-panel-open", open)
+    window.dispatchEvent(new CustomEvent("assistant-panel", { detail: { open } }))
+    return () => {
+      document.documentElement.classList.remove("assistant-panel-open")
+      window.dispatchEvent(new CustomEvent("assistant-panel", { detail: { open: false } }))
+    }
+  }, [open])
 
   const roleKey = !user ? "guest" : (user.role in ROLE_SUGGESTIONS ? user.role : "guest")
 
-  // Fresh conversation per opened session; suggestions follow role + page.
+  /* ── Persistence ── the current transcript is saved whenever it changes
+     and on panel close, keyed by the conversation record created on open. */
+  const convMetaRef = useRef(null) // {ts, projectId}
+  const messagesRef = useRef(messages)
+  useEffect(() => { messagesRef.current = messages }, [messages])
+
+  const saveNow = () => {
+    const msgs = messagesRef.current
+    if (!convMetaRef.current || msgs.length === 0) return
+    const meta = convMetaRef.current
+    setHistory((prev) => {
+      const entry = { ts: meta.ts, projectId: meta.projectId || null, messages: msgs.slice(-HIST_MAX_MSGS) }
+      const rest = prev.filter((c) => c.ts !== meta.ts)
+      const next = [entry, ...rest].slice(0, HIST_MAX_CONVS)
+      persistHistory(next)
+      return next
+    })
+  }
+
+  // "✦ Ask AI" inside the Project Details modal (and any other surface that
+  // broadcasts assistant:open) opens this panel; the project context itself
+  // arrives through App via the assistant-project-context event.
   useEffect(() => {
-    if (open) {
+    const openit = () => setOpen(true)
+    window.addEventListener("assistant:open", openit)
+    return () => window.removeEventListener("assistant:open", openit)
+  }, [])
+
+  // A project modal opened while this panel is already up: re-seed to the NEW
+  // project context (same path as the open-effect, without closing). A subtle
+  // system note records the switch so the transcript stays coherent.
+  const ctxSwitchRef = useRef(null)
+  useEffect(() => {
+    if (!open || !contextProjectId) {
+      ctxSwitchRef.current = null
+      return
+    }
+    const prev = ctxSwitchRef.current
+    const switched = prev !== null && prev !== contextProjectId
+    ctxSwitchRef.current = contextProjectId
+    saveNow()
+    setMessages([])
+    setSuggestions(ROLE_SUGGESTIONS[roleKey] || ROLE_SUGGESTIONS.guest)
+    setContextHelp(null)
+    setShowHistory(false)
+    sessionRef.current = newSessionId()
+    setLastProjectId(contextProjectId)
+    convMetaRef.current = { ts: Date.now(), projectId: contextProjectId }
+    if (switched) {
+      setMessages([{ role: "system", text: `Project context updated: ${contextProjectName || `#${contextProjectId}`}` }])
+    }
+    const page = `project:${contextProjectId}`
+    getAssistantSuggestions(page)
+      .then((d) => { if (d?.general?.length) setSuggestions(d.general.slice(0, 5)) })
+      .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contextProjectId])
+
+  // Fresh conversation per opened session; suggestions follow role + page.
+  // Runs after paint (setTimeout 0) so the open-transition renders first.
+  useEffect(() => {
+    if (!open) return
+    const t = setTimeout(() => {
+      saveNow()
       setMessages([])
       setSuggestions(ROLE_SUGGESTIONS[roleKey] || ROLE_SUGGESTIONS.guest)
       setContextHelp(null)
-      sessionRef.current = `asst-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      setShowHistory(false)
+      sessionRef.current = newSessionId()
       setLastProjectId(contextProjectId || null)
-      setTimeout(() => inputRef.current?.focus(), 100)
-      // Page-aware suggestions + context blurb, best-effort (falls back to
-      // the role defaults above if the network/backend is unavailable).
+      convMetaRef.current = { ts: Date.now(), projectId: contextProjectId || null }
+      inputRef.current?.focus()
       const page = contextProjectId ? `project:${contextProjectId}` : currentPage
       if (page) {
         getAssistantSuggestions(page)
-          .then((d) => {
-            if (d?.general?.length) setSuggestions(d.general.slice(0, 5))
-          })
+          .then((d) => { if (d?.general?.length) setSuggestions(d.general.slice(0, 5)) })
           .catch(() => {})
         if (!page.startsWith("project:")) {
           getAssistantContextHelp(page)
@@ -120,35 +259,69 @@ export default function AssistantWidget({ currentPage, contextProjectId, onNavig
           setContextHelp(null)
         }
       }
-    }
+    }, 0)
+    return () => clearTimeout(t)
+    // deps intentionally: re-running on currentPage/contextProjectId re-seeds
+    // suggestions for the new context; saveNow/roleKey are stable-enough refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, roleKey, currentPage, contextProjectId])
 
   useEffect(() => {
     if (open && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
-  }, [messages, busy])
+  }, [open, messages, busy, showHistory])
 
   const send = async (questionRaw) => {
     const question = String(questionRaw || input).trim()
     if (!question || busy) return
     setInput("")
     setSuggestions([])
-    setMessages((m) => [...m, { role: "user", text: question }])
+    setMessages((m) => [...m, { role: "user", text: question, ts: Date.now() }])
     setBusy(true)
     try {
-      const page = contextProjectId ? `project:${contextProjectId}` : currentPage
+      // Project context: live drawer first, then the conversation's own
+      // project (restored history keeps asking about the same project).
+      const ctxPid = contextProjectId || lastProjectId
+      const page = ctxPid ? `project:${ctxPid}` : currentPage
       const res = await askAssistant(question, page, sessionRef.current)
-      if (res.project_id) setLastProjectId(res.project_id)
-      setMessages((m) => [...m, { role: "assistant", text: res.answer, actions: res.actions || [] }])
-    } catch (e) {
-      setMessages((m) => [...m, { role: "assistant", text: "The assistant is temporarily unavailable. Please try again in a moment." }])
+      if (res.project_id) {
+        setLastProjectId(res.project_id)
+        if (convMetaRef.current && !convMetaRef.current.projectId) {
+          convMetaRef.current = { ...convMetaRef.current, projectId: res.project_id }
+        }
+      }
+
+      const exec = []
+      for (const a of res.actions || []) {
+        if (!a.auto || !onExecuteAction) continue
+        const status = onExecuteAction(a)
+        exec.push({ label: a.label, status })
+      }
+      setMessages((m) => [...m, { role: "assistant", text: res.answer, actions: res.actions || [], exec, ts: Date.now() }])
+      if (exec.some((e) => e.status === "ok")) {
+        setTimeout(() => setOpen(false), 900)
+      }
+    } catch {
+      setMessages((m) => [...m, { role: "assistant", text: "The assistant is temporarily unavailable. Please try again in a moment.", ts: Date.now() }])
     } finally {
       setBusy(false)
+      // Persist once the exchange completes (covers quick close-after-send).
+      setTimeout(saveNow, 50)
     }
   }
 
   const runAction = (a) => {
+    // Manual chips (auto:false suggestions, or repeat-after-close) go through
+    // the same validated executor — never ad-hoc handling.
+    if (onExecuteAction) {
+      const status = onExecuteAction(a)
+      if (status === "ok") {
+        setOpen(false)
+        return
+      }
+    }
+    // Fallbacks preserve the pre-existing behaviors if no executor is wired.
     if (a.action === "open_project" && onOpenProject) {
       onOpenProject(parseInt(a.target, 10))
       setOpen(false)
@@ -158,6 +331,45 @@ export default function AssistantWidget({ currentPage, contextProjectId, onNavig
     }
   }
 
+  const startNewChat = () => {
+    saveNow()                       // current transcript → history first
+    setMessages([])
+    setSuggestions(ROLE_SUGGESTIONS[roleKey] || ROLE_SUGGESTIONS.guest)
+    sessionRef.current = newSessionId()
+    convMetaRef.current = { ts: Date.now(), projectId: contextProjectId || null }
+    setLastProjectId(contextProjectId || null)
+    setShowHistory(false)
+    setInput("")
+    setTimeout(() => inputRef.current?.focus(), 60)
+  }
+
+  const openConversation = (conv) => {
+    setMessages((conv.messages || []).map((m) => ({ ...m })))
+    sessionRef.current = newSessionId()
+    convMetaRef.current = { ts: conv.ts, projectId: conv.projectId || null }
+    setLastProjectId(conv.projectId || null)
+    setShowHistory(false)
+    setTimeout(() => inputRef.current?.focus(), 60)
+  }
+
+  const clearHistory = () => {
+    if (!window.confirm("Delete ALL saved assistant conversations? This cannot be undone.")) return
+    setHistory([])
+    persistHistory([])
+    setShowHistory(false)
+  }
+
+  // Auto-grow composer up to 4 rows, never beyond (and no resize grip).
+  const autoGrow = (el) => {
+    if (!el) return
+    el.style.height = "auto"
+    el.style.height = Math.min(el.scrollHeight, 96) + "px"
+  }
+
+  const ph = contextProjectId
+    ? "Ask anything about this project…"
+    : "Ask anything about MPLADS…"
+
   return (
     <>
       {/* Launcher */}
@@ -165,7 +377,7 @@ export default function AssistantWidget({ currentPage, contextProjectId, onNavig
         onClick={() => setOpen((o) => !o)}
         aria-label="MPLADS AI Assistant"
         title="MPLADS AI Assistant"
-        className="fixed bottom-5 right-5 z-[70] flex h-13 w-13 items-center justify-center rounded-full bg-[#031632] text-xl text-white shadow-soft transition-transform duration-200 hover:scale-105 hover:bg-[#0a2545] active:scale-95 dark:bg-blue-600 dark:hover:bg-blue-500"
+        className={`fixed bottom-5 right-5 z-[70] flex h-13 w-13 items-center justify-center rounded-full bg-[#031632] text-xl text-white shadow-soft transition-[transform,opacity] duration-200 hover:scale-105 hover:bg-[#0a2545] active:scale-95 dark:bg-blue-600 dark:hover:bg-blue-500 ${modalPresent ? "!z-[85]" : ""} ${open ? "pointer-events-none opacity-0" : ""}`}
         style={{ height: 52, width: 52 }}
       >
         {open ? "✕" : "✦"}
@@ -173,36 +385,95 @@ export default function AssistantWidget({ currentPage, contextProjectId, onNavig
 
       {/* Panel */}
       {open && (
-        <div className="pop-in-up fixed bottom-20 right-5 z-[70] flex h-[520px] max-h-[calc(100vh-6rem)] w-[380px] max-w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-2xl border border-[#dcdde4] bg-white shadow-soft-lg dark:border-[#2e2e33] dark:bg-[#0a0a0c]" style={{ transformOrigin: "bottom right" }}>
+        <div        className="pop-in-up fixed bottom-20 right-5 z-[70] flex h-[520px] max-h-[calc(100vh-6rem)] w-[380px] max-w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-2xl border border-[#dcdde4] bg-white shadow-soft-lg dark:border-[#2e2e33] dark:bg-[#0a0a0c]" style={{ transformOrigin: "bottom right", ...(modalSync ? { top: modalSync.top, bottom: "auto", height: modalSync.height, maxHeight: "none" } : {}), ...(modalPresent ? { zIndex: 85 } : {}) }}>
           {/* Header */}
-          <div className="flex flex-none items-center gap-2.5 border-b border-[#dcdde4] bg-[#f9f9ff] px-5 py-4 dark:border-[#2e2e33] dark:bg-[#0d0d10]">
+          <div className="flex flex-none items-center gap-2.5 border-b border-[#dcdde4] bg-[#f9f9ff] px-4 py-3 dark:border-[#2e2e33] dark:bg-[#0d0d10]">
             <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#031632] text-sm text-white dark:bg-blue-600">✦</span>
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-bold text-[#031632] dark:text-[#f3f4f6]">MPLADS AI Assistant</p>
-              <p className="text-[0.6875rem] text-[#44474d] dark:text-[#9ca3af]">
+              <p className="truncate text-sm font-bold text-[#031632] dark:text-[#f3f4f6]">MPLADS AI Assistant</p>
+              <p className="truncate text-[0.6875rem] text-[#44474d] dark:text-[#9ca3af]">
                 {lastProjectId
-                  ? `Discussing project #${lastProjectId}`
+                  ? `Project: ${contextProjectName || `#${lastProjectId}`}`
                   : user
                     ? `For: ${user.name.split(" ")[0]} (${user.role.replace("_", " ")})`
                     : "Public help — sign in for more"}
               </p>
             </div>
+            <button
+              onClick={startNewChat}
+              title="New Chat (keeps history)"
+              aria-label="New Chat"
+              className="flex h-8 w-8 items-center justify-center rounded-full text-[#44474d] transition hover:bg-black/5 dark:text-[#9ca3af] dark:hover:bg-white/10"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
+            <button
+              onClick={() => setShowHistory((s) => !s)}
+              title="History"
+              aria-label="History"
+              className={`flex h-8 w-8 items-center justify-center rounded-full transition hover:bg-black/5 dark:hover:bg-white/10 ${showHistory ? "bg-black/5 text-[#031632] dark:bg-white/10 dark:text-[#f3f4f6]" : "text-[#44474d] dark:text-[#9ca3af]"}`}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            </button>
+            <button
+              onClick={() => setOpen(false)}
+              title="Close assistant"
+              aria-label="Close assistant"
+              className="flex h-8 w-8 items-center justify-center rounded-full text-[#44474d] transition hover:bg-black/5 dark:text-[#9ca3af] dark:hover:bg-white/10"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            </button>
           </div>
 
+          {/* History drawer */}
+          {showHistory && (
+            <div className="flex flex-none flex-col overflow-hidden border-b border-[#dcdde4] bg-[#f9f9ff] dark:border-[#2e2e33] dark:bg-[#0d0d10]" style={{ maxHeight: "55%" }}>
+              <div className="flex items-center justify-between px-4 pb-1.5 pt-2.5">
+                <p className="text-[0.6875rem] font-bold uppercase tracking-wide text-[#44474d] dark:text-[#9ca3af]">Past conversations</p>
+                {history.length > 0 && (
+                  <button onClick={clearHistory} className="rounded px-1.5 py-0.5 text-[0.6875rem] font-semibold text-red-600 transition hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/40">
+                    Clear all
+                  </button>
+                )}
+            </div>
+              <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+                {history.length === 0 ? (
+                  <p className="px-2 py-3 text-[0.75rem] text-[#44474d] dark:text-[#9ca3af]">
+                    No saved conversations yet. Chats are saved here automatically as you talk.
+                  </p>
+                ) : (
+                  history.map((c) => (
+                    <button
+                      key={c.ts}
+                      onClick={() => openConversation(c)}
+                      className="mb-1 block w-full rounded-lg px-2.5 py-2 text-left transition hover:bg-black/5 dark:hover:bg-white/5"
+                    >
+                      <p className="truncate text-[0.78rem] font-semibold text-[#151c27] dark:text-gray-100">{convTitle(c)}</p>
+                      <p className="text-[0.6563rem] text-[#44474d] dark:text-[#9ca3af]">
+                        {new Date(c.ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                        {c.projectId ? ` · Project #${c.projectId}` : ""}
+                        {` · ${c.messages?.length || 0} messages`}
+                      </p>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Messages */}
-          <div ref={scrollRef} className="min-h-0 flex-1 space-y-3.5 overflow-y-auto px-4 py-4">
-            {messages.length === 0 && (
+          <div ref={scrollRef} className="assistant-scroll min-h-0 flex-1 space-y-3.5 overflow-y-auto px-4 py-4">
+            {messages.length === 0 && !showHistory && (
               <div className="rounded-xl bg-[#f0f3ff] p-4 text-[0.8125rem] leading-snug text-[#031632] dark:bg-[#17181c] dark:text-[#f3f4f6]">
-                Namaste 🙏 I can answer questions about MPLADS, guide you through this portal, and — depending
-                on your role — pull up live project, risk, vendor and verification data. All answers come from
-                real portal data; nothing is invented.
+                {contextProjectId
+                  ? `Project context loaded (#${contextProjectId}). Ask me anything about this project — its risk, spending, timeline, vendor or peers.`
+                  : "Namaste 🙏 I can answer questions about MPLADS, guide you through this portal, and — depending on your role — pull up live project, risk, vendor and verification data. All answers come from real portal data; nothing is invented."}
               </div>
             )}
-            {messages.length === 0 && contextHelp && (
+            {messages.length === 0 && !showHistory && contextHelp && (
               <button
                 onClick={() => send("What does this page show?")}
-                className="w-full rounded-xl border border-[#dcdde4] bg-white p-3 text-left transition hover:bg-[#f0f3ff] dark:border-[#2e2e33] dark:bg-[#0a0a0c] dark:hover:bg-[#17181c]"
-              >
+                className="w-full rounded-xl border border-[#dcdde4] bg-white p-3 text-left transition hover:bg-[#f0f3ff] dark:border-[#2e2e33] dark:bg-[#0a0a0c] dark:hover:bg-[#17181c]">
                 <p className="text-[0.6875rem] font-bold uppercase tracking-wide text-[#44474d] dark:text-[#9ca3af]">
                   📍 About this page
                 </p>
@@ -211,8 +482,12 @@ export default function AssistantWidget({ currentPage, contextProjectId, onNavig
                 </p>
               </button>
             )}
-            {messages.map((m, i) =>
-              m.role === "user" ? (
+            {messages.map((m, i) => (
+              m.role === "system" ? (
+                <p key={i} className="rise-in text-center text-[0.6875rem] font-semibold uppercase tracking-wide text-[#44474d] dark:text-[#9ca3af]">
+                  {m.text}
+                </p>
+              ) : m.role === "user" ? (
                 <div key={i} className="flex justify-end">
                   <p className="rise-in max-w-[85%] rounded-2xl rounded-br-md bg-[#031632] px-3.5 py-2.5 text-[0.8125rem] text-white dark:bg-blue-600">
                     {m.text}
@@ -224,21 +499,28 @@ export default function AssistantWidget({ currentPage, contextProjectId, onNavig
                     <AnswerBody text={m.text} />
                     {m.actions?.length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-1.5 border-t border-[#dcdde4] pt-2 dark:border-[#2e2e33]">
-                        {m.actions.map((a, j) => (
-                          <button
-                            key={j}
-                            onClick={() => runAction(a)}
-                            className="rounded-full bg-[#031632] px-2.5 py-1 text-[0.6875rem] font-bold text-white transition hover:bg-[#0a2545] dark:bg-blue-600 dark:hover:bg-blue-500"
-                          >
-                            {a.action === "open_project" ? "🗂 " : "→ "}{a.label}
-                          </button>
-                        ))}
+                        {m.actions.map((a, j) => {
+                          const ex = m.exec?.[j]
+                          const done = ex && ex.status === "ok"
+                          const failed = ex && ex.status && ex.status !== "ok" && ex.status !== "rejected"
+                          return (
+                            <button
+                              key={j}
+                              onClick={() => runAction(a)}
+                              className={done
+                                ? "flex items-center gap-1 rounded-full bg-green-600/10 px-2.5 py-1 text-[0.6875rem] font-bold text-green-700 dark:text-green-300"
+                                : "rounded-full bg-[#031632] px-2.5 py-1 text-[0.6875rem] font-bold text-white transition hover:bg-[#0a2545] dark:bg-blue-600 dark:hover:bg-blue-500"}
+                            >
+                              {done ? "✓ " : failed ? "⚠ " : a.action === "open_project" ? "🗂 " : "→ "}{a.label}
+                            </button>
+                          )
+                        })}
                       </div>
                     )}
                   </div>
                 </div>
               )
-            )}
+            ))}
             {busy && (
               <div className="flex justify-start">
                 <div className="flex items-center gap-1.5 rounded-2xl border border-[#dcdde4] bg-[#f9f9ff] px-3 py-2.5 dark:border-[#2e2e33] dark:bg-[#17181c]">
@@ -251,7 +533,7 @@ export default function AssistantWidget({ currentPage, contextProjectId, onNavig
           </div>
 
           {/* Suggestions */}
-          {suggestions.length > 0 && !busy && (
+          {suggestions.length > 0 && !busy && !showHistory && (
             <div className="flex flex-none flex-wrap gap-1.5 border-t border-[#dcdde4] px-3 pt-2.5 dark:border-[#2e2e33]">
               {suggestions.slice(0, 5).map((s, i) => (
                 <button
@@ -265,16 +547,22 @@ export default function AssistantWidget({ currentPage, contextProjectId, onNavig
             </div>
           )}
 
-          {/* Input */}
-          <div className="flex flex-none items-center gap-2 p-3">
-            <input
-              ref={inputRef}
+          {/* Input — Enter sends, Shift+Enter newline; no resize grip */}
+          <div className="flex flex-none items-end gap-2 p-3">
+            <textarea
+              ref={(el) => { inputRef.current = el; autoGrow(el) }}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && send()}
-              placeholder="Ask about MPLADS, projects, evidence…"
+              onChange={(e) => { setInput(e.target.value); autoGrow(e.target) }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault()
+                  send()
+                }
+              }}
+              rows={1}
+              placeholder={ph}
               maxLength={500}
-              className="min-w-0 flex-1 rounded-full border border-[#dcdde4] bg-white px-3.5 py-2 text-[0.8125rem] outline-none focus:border-[#031632] dark:border-[#2e2e33] dark:bg-[#17181c] dark:text-gray-100 dark:focus:border-blue-500"
+              className="assistant-input min-w-0 flex-1 resize-none overflow-y-auto rounded-2xl border border-[#dcdde4] bg-white px-3.5 py-2.5 text-[0.8125rem] outline-none focus:border-[#031632] dark:border-[#2e2e33] dark:bg-[#17181c] dark:text-gray-100 dark:focus:border-blue-500"
             />
             <button
               onClick={() => send()}
@@ -284,6 +572,7 @@ export default function AssistantWidget({ currentPage, contextProjectId, onNavig
             >
               ➤
             </button>
+            {busy && <span className="sr-only">Loading…</span>}
           </div>
         </div>
       )}

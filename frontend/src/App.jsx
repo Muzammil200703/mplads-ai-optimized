@@ -4,6 +4,8 @@ import AssistantWidget from "./components/AssistantWidget"
 import TopBar from "./components/TopBar"
 import { PageSkeleton } from "./components/Skeleton"
 import { AuthProvider, useAuth } from "./context/AuthContext"
+import { executeAssistantAction } from "./utils/executeActions"
+import { invalidateAPICache } from "./services/api"
 
 /* Application shell — single scroll-owner architecture:
    html/body never scroll; <main> is the only page-level scroll container
@@ -21,6 +23,9 @@ const MyDistrictPage = lazy(() => import("./pages/MyDistrict"))
 const InquiriesPage = lazy(() => import("./pages/Inquiries"))
 const VerificationQueuePage = lazy(() => import("./pages/VerificationQueue"))
 const SettingsPage = lazy(() => import("./pages/Settings"))
+
+// Branch addition: public landing pitch page before entering the app
+const Landing = lazy(() => import("./pages/Landing"))
 
 // Lazy-load page components — only the active page is loaded
 const Overview = lazy(() => import("./pages/Overview"))
@@ -164,8 +169,9 @@ function AppShell() {
   ScrollManager()
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [darkMode, setDarkMode] = useState(false)
+  // Branch flow: land on the public Landing page; #signin deep-links to sign-in
   const [currentPage, setCurrentPage] = useState(
-    () => (typeof window !== "undefined" && window.location.hash === "#signin" ? "Sign in" : "Overview")
+    () => (typeof window !== "undefined" && window.location.hash === "#signin" ? "Sign in" : "Landing")
   )
   // Global search — independent from project search
   const [globalSearchQuery, setGlobalSearchQuery] = useState("")
@@ -175,7 +181,9 @@ function AppShell() {
   const [selectedFY, setSelectedFY] = useState("")
 
   const isMobile = useIsMobile()
-  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(true)
+  // Start closed: the drawer must never cover page content on load — it opens
+  // via the menu button (or Ctrl+B) and closes on navigate/backdrop.
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false)
 
   const handleNavigate = (page) => {
     setCurrentPage(page)
@@ -246,15 +254,71 @@ function AppShell() {
 
   // Context for the AI Assistant: which project the user is looking at
   // ("project:<id>" page tag) so "why is this risky?" resolves correctly.
+  // Sources: Projects' drawer (open-project), Risk Center / Audit Priority /
+  // Compare Projects / Project Detail modals (assistant-project-context).
+  // Context clears when the details surface close (explicit null events) or
+  // the page changes. Names ride along for display; ids stay authoritative.
   const [assistantProjectId, setAssistantProjectId] = useState(null)
   useEffect(() => {
-    const handler = (e) => setAssistantProjectId(e.detail?.projectId || null)
-    window.addEventListener("open-project", handler)
-    return () => window.removeEventListener("open-project", handler)
+    const fromProjects = (e) => setAssistantProjectId(e.detail?.projectId || null)
+    const fromDetailModals = (e) => setAssistantProjectId(e.detail?.projectId || null)
+    window.addEventListener("open-project", fromProjects)
+    window.addEventListener("assistant-project-context", fromDetailModals)
+    return () => {
+      window.removeEventListener("open-project", fromProjects)
+      window.removeEventListener("assistant-project-context", fromDetailModals)
+    }
   }, [])
   useEffect(() => {
     if (currentPage !== "Projects") setAssistantProjectId(null)
   }, [currentPage])
+
+  // Display names for the assistant's project-context indicator. Ids remain
+  // the only authoritative key (backend re-resolves everything); this map is
+  // purely cosmetic and bounded.
+  const [assistantProjectNames, setAssistantProjectNames] = useState({})
+  useEffect(() => {
+    const remember = (e) => {
+      const { projectId, projectName } = e.detail || {}
+      if (projectId && projectName) {
+        setAssistantProjectNames((prev) => (prev[projectId] === projectName ? prev : { ...prev, [projectId]: projectName }))
+      }
+    }
+    window.addEventListener("assistant-project-context", remember)
+    return () => window.removeEventListener("assistant-project-context", remember)
+  }, [])
+  const getAssistantProjectName = (pid) => (pid ? assistantProjectNames[pid] || null : null)
+
+  // ── Assistant action execution (JARVIS control plane) ────────────────
+  // The assistant returns structured, backend-validated actions; they are
+  // executed here through the app's EXISTING mechanisms (handleNavigate /
+  // handleDrillDown / openProjectFromWorkspace) — no second router.
+  // clear_filters / refresh_data are broadcast as events; filter pages
+  // reset their OWN existing filter state on "assistant:clear-filters"
+  // and re-run their existing loads on "assistant:refresh".
+  const executeAssistant = (action) => {
+    return executeAssistantAction(action, {
+      navigate: handleNavigate,
+      drillDown: handleDrillDown,
+      openProject: openProjectFromWorkspace,
+      clearFilters: () => window.dispatchEvent(new CustomEvent("assistant:clear-filters")),
+      refreshData: () => {
+        invalidateAPICache("")
+        window.dispatchEvent(new CustomEvent("assistant:refresh"))
+      },
+      hasPermission: (page) => {
+        // Defense-in-depth only — the backend already role-gates every
+        // action. Guests never reach workspace-only pages.
+        const GUEST_PAGES = new Set([
+          "Overview", "Projects", "Risk Center", "AI Audit Center", "Vendor Network",
+          "Ground Truth Verification", "Reports", "State Intelligence", "Audit Priority",
+          "Compare Projects", "FAQ", "Vendor Intelligence", "Settings",
+        ])
+        if (user) return true
+        return GUEST_PAGES.has(page)
+      },
+    })
+  }
 
   // Page state preservation: track which pages have been visited so we keep them mounted
   const visitedPages = useRef(new Set(["Overview"]))
@@ -277,7 +341,7 @@ function AppShell() {
       { key: "Ground Truth Verification", el: <VerifyPortal /> },
       { key: "Reports", el: <Reports fy={selectedFY} /> },
       { key: "State Intelligence", el: <StateIntelligence onNavigateToProjects={(state) => handleDrillDown("Projects", { state })} fy={selectedFY} /> },
-      { key: "Audit Priority", el: <AuditPriority fy={selectedFY} /> },
+      { key: "Audit Priority", el: <AuditPriority fy={selectedFY} drillDownParams={drillDownParams} onClearDrillDown={() => setDrillDownParams(null)} /> },
       { key: "Compare Projects", el: <CompareProjects fy={selectedFY} /> },
       { key: "FAQ", el: <FAQ /> },
       { key: "Vendor Intelligence", el: <VendorIntelligence onOpenProject={openProjectFromWorkspace} /> },
@@ -322,6 +386,16 @@ function AppShell() {
   const getMainMargin = () => {
     if (isMobile) return "ml-0"
     return sidebarCollapsed ? "ml-16" : "ml-60"
+  }
+
+  // Branch flow: the public Landing page renders standalone (no app chrome)
+  if (currentPage === "Landing") {
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-slate-900 flex items-center justify-center text-slate-400">Loading...</div>}>
+        <Landing onLaunch={() => setCurrentPage("Overview")} />
+        <AssistantWidget currentPage={currentPage} />
+      </Suspense>
+    )
   }
 
   return (
@@ -371,8 +445,10 @@ function AppShell() {
       <AssistantWidget
         currentPage={currentPage}
         contextProjectId={assistantProjectId}
+        contextProjectName={getAssistantProjectName(assistantProjectId)}
         onNavigate={handleNavigate}
         onOpenProject={openProjectFromWorkspace}
+        onExecuteAction={executeAssistant}
       />
     </div>
   )

@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: mplads-ai-api
+    runtime: python
+    plan: free
+    buildCommand: git lfs pull && pip install -r backend/requirements.txt
+    startCommand: cd backend && sh start.sh
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
