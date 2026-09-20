@@ -299,6 +299,13 @@ const StateIntelligence = memo(function StateIntelligence({ onNavigateToProjects
                   <div className="flex justify-between"><span className="text-gray-500">Utilization</span><span className="font-mono font-bold">{s.utilization_percentage}%</span></div>
                   <div className="flex justify-between"><span className="text-gray-500">Avg Progress</span><span className="font-mono">{s.average_completion_percentage}%</span></div>
                 </div>
+                {/* Attribution disclosure: how much of the state's recorded spend
+                    is verifiably linked to individual catalog projects. */}
+                {typeof s.work_verified_expenditure === "number" && s.work_verified_expenditure > 0 && (
+                  <p className="mt-1.5 text-[0.625rem] leading-snug text-gray-400">
+                    ₹{formatMoney(s.work_verified_expenditure).replace(/^[^\d]*/, "")} of this is verifiably matched to catalog works ({s.linked_work_keys ?? 0} keys), of which ₹{formatMoney(s.project_linked_expenditure ?? 0).replace(/^[^\d]*/, "")} is uniquely attributable; the rest cannot be matched to catalog records.
+                  </p>
+                )}
               </div>
             ))}
           </div>

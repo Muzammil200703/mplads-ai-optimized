@@ -172,6 +172,11 @@ def _project_or_404(db: Session, project_id: int) -> models.Project:
     project = db.query(models.Project).filter(models.Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
+    # Attach the authoritative per-project spend (payment ledger via
+    # project_rec_info) so audit-intel analyses never read the zeroed
+    # catalog stamp.
+    import main as _main_mod
+    _main_mod._apply_authoritative_expenditure([project], db)
     return project
 
 

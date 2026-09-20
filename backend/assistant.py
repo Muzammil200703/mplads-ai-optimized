@@ -1263,6 +1263,19 @@ def _intent_project_context(q: str, ql: str, ctx_project_id: Optional[int],
         if (comp or 0) > 0 and exp <= 0:
             parts.append(f"• Physical progress is recorded as {comp:.0f}% while no expenditure is recorded — "
                          "a money/progress inconsistency worth reviewing.")
+        # Distinguish verified ₹0 / linked / shared-work ambiguity / no records.
+        if exp <= 0 and rec is not None and getattr(rec, "has_expenditure", False):
+            _wk_rows = int(getattr(rec, "work_key_rows", 1) or 1)
+            _wk_exp = float(getattr(rec, "work_key_expenditure", 0.0) or 0.0)
+            if _wk_rows > 1 and _wk_exp > 0:
+                parts.append(f"• Payments totalling {_fmt_money(_wk_exp)} are recorded for this work's "
+                             f"description, but {_wk_rows} catalog rows share that description, so the "
+                             "amount cannot be attributed to this specific project — treat its "
+                             "individual spend as unknown.")
+        elif exp <= 0:
+            parts.append("• No ledger payment could be verifiably linked to this work "
+                         "(normalized work key + MP + implementing-district authority), "
+                         "so the spend is currently *unknown — not confirmed zero*.")
         parts.append("")
         parts.append("The dataset records the amounts but contains no recorded reason for the missing payments — "
                      "the cause is not known from this data and should be verified against "

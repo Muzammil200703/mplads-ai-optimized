@@ -243,6 +243,48 @@ def _explain_shap_value(feature_name, shap_val, feature_val):
     return None
 
 
+# ═══ Authoritative expenditure supply ═══════════════════════════════
+# The risk engine must score the SAME spend number every other feature
+# uses: the MP+IDA-verified payment-ledger total persisted in
+# project_rec_info.linked_expenditure (metrics.resolve_project_expenditure).
+# The catalog's projects.expenditure column is a zeroed legacy stamp —
+# scoring it would score ₹0 for every project. Callers attach real values
+# before calling predict_risk; _eff_expenditure() falls back to the catalog
+# column only when nothing was attached (keeps ad-hoc/synthetic objects
+# working, e.g. simulations that deliberately carry their own values).
+
+
+def attach_authoritative_expenditure(projects, db) -> dict:
+    """Attach the authoritative linked expenditure to each project object.
+
+    One indexed read of the (tiny) linked rows from project_rec_info; sets
+    the private `_authoritative_expenditure` attribute on the projects it
+    covers. Returns the {project_id: amount} map for reuse.
+    """
+    from models import ProjectRecInfo
+    rows = (
+        db.query(ProjectRecInfo.project_id, ProjectRecInfo.linked_expenditure)
+        .filter(ProjectRecInfo.linked_expenditure > 0)
+        .all()
+    )
+    amounts = {int(pid): float(amt or 0.0) for pid, amt in rows}
+    for p in projects:
+        pid = getattr(p, "id", None)
+        if pid is not None and pid in amounts:
+            p._authoritative_expenditure = amounts[pid]
+    return amounts
+
+
+def _eff_expenditure(project) -> float:
+    """Effective expenditure for scoring: the attached authoritative value
+    when present, else the catalog column (legacy stamp → 0 for almost all
+    real rows; never a fabricated number)."""
+    attached = getattr(project, "_authoritative_expenditure", None)
+    if attached is not None:
+        return float(attached or 0)
+    return float(getattr(project, "expenditure", 0) or 0)
+
+
 def _compute_feature_contributions(project):
     """
     Compute per-feature contributions using SHAP values.
@@ -250,7 +292,7 @@ def _compute_feature_contributions(project):
     sorted by absolute SHAP contribution (most anomalous first).
     """
     sanctioned = float(getattr(project, "sanctioned_amount", 0) or 0)
-    expenditure = float(getattr(project, "expenditure", 0) or 0)
+    expenditure = _eff_expenditure(project)
     completion = float(getattr(project, "completion_percentage", 0) or 0)
     state = getattr(project, "state", "")
     project_type = getattr(project, "project_type", "")
@@ -369,7 +411,7 @@ def _clean_feature_vector(feat: dict) -> list:
 def create_project_features(project):
     """Create features for a single project, using peer stats if available."""
     sanctioned = float(getattr(project, "sanctioned_amount", 0) or 0)
-    expenditure = float(getattr(project, "expenditure", 0) or 0)
+    expenditure = _eff_expenditure(project)
     completion = float(getattr(project, "completion_percentage", 0) or 0)
 
     if peer_stats:
@@ -484,7 +526,10 @@ def predict_risk(project, batch_mode=False):
         explanation: dict (full explanation with contributing factors, skipped in batch_mode)
     """
     sanctioned = float(getattr(project, "sanctioned_amount", 0) or 0)
-    expenditure = float(getattr(project, "expenditure", 0) or 0)
+    # Authoritative per-project spend (payment ledger, MP+IDA-verified link)
+    # attached by callers via attach_authoritative_expenditure(); the catalog
+    # column is a zeroed legacy stamp and must not drive the rules.
+    expenditure = _eff_expenditure(project)
     completion = float(getattr(project, "completion_percentage", 0) or 0)
     status_str = str(getattr(project, "status", "") or "").lower()
 

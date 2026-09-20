@@ -34,6 +34,12 @@ def generate_scores():
         db.commit()
 
 
+        print("Attaching authoritative expenditure (payment ledger via project_rec_info)...")
+
+        from ml.predictor import attach_authoritative_expenditure
+
+        attach_authoritative_expenditure(projects, db)
+
         print("Generating risk scores...")
 
 

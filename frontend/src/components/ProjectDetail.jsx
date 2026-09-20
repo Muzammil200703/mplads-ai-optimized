@@ -552,6 +552,19 @@ function ProjectDetail({ projectId, onClose }) {
                 <MetricCard label="Remaining" value={formatMoney(remaining)} color="green" />
                 <MetricCard label="Utilization" value={`${utilization.toFixed(1)}%`} color={utilization > 100 ? "red" : "blue"} />
               </div>
+              {/* Data-quality disclosures: unlinked/ambiguous expenditure is UNKNOWN, not a verified ₹0. */}
+              {proj.expenditure_status === "no_linked_records" && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
+                  <span className="font-bold">No verifiably linked expenditure records.</span>{" "}
+                  The payment ledger could not be reliably matched to this work (by normalized work key + MP + implementing-district authority), so the recorded spend is <span className="font-bold">unknown — not confirmed ₹0</span>. Utilization cannot be computed from the available data.
+                </div>
+              )}
+              {proj.expenditure_status === "ambiguous_shared_work" && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
+                  <span className="font-bold">Shared work description — per-project spend unknown.</span>{" "}
+                  Payments of ₹{Number(proj.work_key_expenditure || 0).toLocaleString("en-IN")} are recorded for this work description, but {proj.work_key_rows || "multiple"} catalog rows share it, so the total cannot be attributed to any single project. Per-project utilization is not computable without double-counting.
+                </div>
+              )}
               {/* Utilization Bar */}
               <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-[#0a0a0c]">
                 <div className="flex items-center justify-between text-xs">

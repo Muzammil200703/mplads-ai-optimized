@@ -39,9 +39,9 @@ All functions take a SQLAlchemy Session and are SQL-aggregated
 (constant memory; nothing is materialized in Python).
 """
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import func, case
+from sqlalchemy import func, case, text
 from sqlalchemy import Integer, Text as SqlText
 from sqlalchemy.orm import Session
 
@@ -200,41 +200,239 @@ def portfolio_stats(
     }
 
 
+def resolve_project_expenditure(db: Session, project) -> float:
+    """THE authoritative per-project expenditure resolver.
+
+    Every consumer that needs "this project's spend" must go through this
+    function (or project_expenditure_map / _rec_info_map which read the
+    SAME derived rows): the payment-ledger total linked to the project's
+    work key via the conservative MP+IDA-verified linkage, persisted in
+    project_rec_info.linked_expenditure by rec_info.rebuild().
+
+    The catalog's projects.expenditure column is a zeroed legacy stamp and
+    must NEVER be read for spend. Returns 0.0 when no ledger records are
+    linked (an "unlinked / no record" case, not a verified ₹0 — callers
+    that need the distinction use expenditure_linkage_summary).
+    """
+    row = (
+        db.query(models.ProjectRecInfo.linked_expenditure)
+        .filter(models.ProjectRecInfo.project_id == project.id)
+        .one_or_none()
+    )
+    return float(row[0] or 0.0) if row else 0.0
+
+
 def project_expenditure_map(db: Session) -> Dict[int, float]:
     """project_id -> SUM(expenditure_amount) for ledger rows linked to the
-    project's work key via the SAME conservative linkage as the timeline
-    (normalized work key + MP + IDA-prefix, computed fully inside SQLite).
+    project via the conservative MP+IDA-verified linkage.
 
-    Bounded by the catalog: only the ~328 work keys shared between the
-    payment ledger and the recommended-works catalog can match, so this
-    stays small (an ID dict), not a dataset copy.
+    Reads the SAME persisted rows as resolve_project_expenditure
+    (project_rec_info.linked_expenditure) — one indexed table scan instead
+    of recomputing the normkey join over 106k ledger rows per request.
+    If the derived table has not been built yet (brand-new database), one
+    rebuild is attempted first so the map is never silently empty.
+
+    Bounded by the catalog: only work keys shared between the payment
+    ledger and the recommended-works catalog can match (~300 projects in
+    this dataset), so this stays a small ID dict, not a dataset copy.
 
     The catalog's per-project `expenditure` column is a legacy stamp that
     was zeroed by a documented startup repair after it was proven to be
     group-aggregate duplication of this same ledger — never aggregate it.
     """
-    import rec_info as _recinfo
-    conn = db.connection().connection  # raw sqlite3 connection
-    conn.create_function("normkey", 1, _recinfo._normkey, deterministic=True)
-    conn.create_function("idapfx", 1, _recinfo._idapfx_sql, deterministic=True)
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT p.id, COALESCE(SUM(e.expenditure_amount), 0)
-        FROM projects p
-        JOIN recommended_works rw
-          ON normkey(rw.work_description) = normkey(p.project_name)
-         AND normkey(rw.constituency)    = normkey(p.constituency)
-         AND normkey(rw.state)           = normkey(p.state)
-        JOIN expenditures e
-          ON normkey(e.work_description) = normkey(rw.work_description)
-         AND normkey(e.constituency)     = normkey(rw.constituency)
-         AND normkey(e.state)            = normkey(rw.state)
-         AND normkey(e.mp_name)          = normkey(rw.mp_name)
-         AND idapfx(e.ida)               = idapfx(rw.ida)
-        GROUP BY p.id
-        HAVING SUM(e.expenditure_amount) > 0
-    """)
-    return {int(pid): float(amt) for pid, amt in cur.fetchall()}
+    rows = db.query(
+        models.ProjectRecInfo.project_id,
+        models.ProjectRecInfo.linked_expenditure,
+    ).filter(models.ProjectRecInfo.linked_expenditure > 0).all()
+    if not rows:
+        try:
+            import rec_info as _recinfo
+            if _recinfo.rebuild(db).get("ok"):
+                rows = (
+                    db.query(
+                        models.ProjectRecInfo.project_id,
+                        models.ProjectRecInfo.linked_expenditure,
+                    )
+                    .filter(models.ProjectRecInfo.linked_expenditure > 0)
+                    .all()
+                )
+        except Exception:
+            pass  # derived table unavailable; empty map is the honest result
+    return {int(pid): float(amt or 0.0) for pid, amt in rows if (amt or 0.0) > 0}
+
+
+def expenditure_linkage_summary(
+    db: Session, project_ids: List[int]
+) -> Dict[int, Dict[str, Any]]:
+    """project_id -> {linked, transactions, first/latest date, total}.
+
+    Reads the SAME derived rows as resolve_project_expenditure —
+    project_rec_info persists the tx count and first/latest payment dates
+    of the MP+IDA-verified linkage, so this is one indexed query per page
+    with no recomputation. `linked` False means no ledger payments passed
+    the conservative verification for this project's work key — the honest
+    status is "no verifiably-linked expenditure records", never a claimed
+    ₹0 spend.
+    """
+    out: Dict[int, Dict[str, Any]] = {}
+    if not project_ids:
+        return out
+    rows = (
+        db.query(
+            models.ProjectRecInfo.project_id,
+            models.ProjectRecInfo.has_expenditure,
+            models.ProjectRecInfo.linked_expenditure,
+            models.ProjectRecInfo.linked_tx_count,
+            models.ProjectRecInfo.first_expenditure_date,
+            models.ProjectRecInfo.latest_expenditure_date,
+            models.ProjectRecInfo.work_key_expenditure,
+            models.ProjectRecInfo.work_key_rows,
+        )
+        .filter(models.ProjectRecInfo.project_id.in_(project_ids))
+        .all()
+    )
+    for r in rows:
+        tx = int(r.linked_tx_count or 0)
+        wk_rows = int(r.work_key_rows or 1)
+        linked_amt = float(r.linked_expenditure or 0.0)
+        if linked_amt > 0:
+            status = "linked"
+        elif r.has_expenditure and tx > 0 and wk_rows > 1:
+            status = "ambiguous_shared_work"
+        else:
+            status = "no_linked_records"
+        out[r.project_id] = {
+            "linked": status == "linked",
+            "status": status,
+            "transactions": tx,
+            "first_expenditure_date": r.first_expenditure_date or None,
+            "latest_expenditure_date": r.latest_expenditure_date or None,
+            "total": linked_amt,
+            "work_key_expenditure": float(r.work_key_expenditure or 0.0),
+            "work_key_rows": wk_rows,
+        }
+    # projects with no rec row at all (derived table not yet built)
+    for pid in project_ids:
+        out.setdefault(
+            pid,
+            {"linked": False, "status": "no_linked_records", "transactions": 0,
+             "first_expenditure_date": None, "latest_expenditure_date": None,
+             "total": 0.0, "work_key_expenditure": 0.0, "work_key_rows": 1},
+        )
+    return out
+
+
+def state_linked_map(db: Session, fy: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+    """state -> verified project-side expenditure, aggregated per WORK KEY.
+
+    Two tiers, both deduplicated by work key (several catalog rows can
+    describe the same work — summing rows would double-count):
+      • linked_total          — attributable: unique-key works only
+                               (one catalog row per work key)
+      • work_verified_total   — all MP+IDA-verified work keys, including
+                               shared ones whose per-row split is ambiguous
+    Each key's state comes from its first catalog row.
+    """
+    params: Dict[str, Any] = {}
+    fy_join = ""
+    if fy:
+        fy_join = " JOIN projects pf ON pf.id = pid AND pf.fy = :fy"
+        params["fy"] = fy
+    sql = f"""
+        SELECT p.state AS st,
+               SUM(kd.amt)      AS linked_total,
+               SUM(kd.wamt)     AS work_verified_total,
+               SUM(kd.rows_)    AS linked_rows,
+               COUNT(*)         AS linked_keys,
+               SUM(CASE WHEN kd.rows_ = 1 THEN 1 ELSE 0 END) AS unique_keys
+        FROM (
+            SELECT pri.work_key AS k,
+                   MAX(pri.linked_expenditure)    AS amt,
+                   MAX(pri.work_key_expenditure)  AS wamt,
+                   COUNT(*) AS rows_,
+                   MIN(pri.project_id) AS pid
+            FROM project_rec_info pri
+            WHERE pri.work_key_expenditure > 0
+            GROUP BY pri.work_key
+        ) kd
+        JOIN projects p ON p.id = kd.pid{fy_join}
+        GROUP BY p.state
+    """
+    out: Dict[str, Dict[str, Any]] = {}
+    for r in db.execute(text(sql), params).fetchall():
+        out[r.st or "Unknown"] = {
+            "linked_total": float(r.linked_total or 0),
+            "work_verified_total": float(r.work_verified_total or 0),
+            "linked_rows": int(r.linked_rows or 0),
+            "linked_keys": int(r.linked_keys or 0),
+            "unique_keys": int(r.unique_keys or 0),
+        }
+    return out
+
+
+def state_expenditure_reconciliation(db: Session, fy: Optional[str] = None) -> Dict[str, Any]:
+    """Reconcile State Intelligence's per-state ledger totals against the
+    SUM of per-project resolved (MP+IDA-verified linked) expenditure.
+
+    These are DIFFERENT quantities by dataset design and must never be
+    forced equal:
+      • ledger side    — every payment row whose state column says X
+      • project side   — only payments whose work key + MP + IDA verifiably
+                         match a catalog project of state X
+    The gap is unattributable spend (generic work descriptions that do not
+    match any catalog row, or verification anchors that fail). This endpoint
+    reports the gap so the UI can disclose it instead of hiding it.
+    """
+    led = state_ledger_map(db, fy=fy)
+    linked = state_linked_map(db, fy=fy)
+    proj_q = db.query(
+        models.Project.state,
+        func.count(models.Project.id),
+    ).group_by(models.Project.state)
+    if fy:
+        proj_q = proj_q.filter(models.Project.fy == fy)
+    per_state = {
+        (s or "Unknown"): {"catalog_projects": int(c or 0)}
+        for s, c in proj_q.all()
+    }
+    states = sorted(set(led.keys()) | set(per_state.keys()) | set(linked.keys()))
+    rows = []
+    for st in states:
+        ledger_total = float(led.get(st, {}).get("expenditure", 0.0))
+        lk = linked.get(st, {"linked_total": 0.0, "work_verified_total": 0.0,
+                             "linked_rows": 0, "linked_keys": 0, "unique_keys": 0})
+        rows.append({
+            "state": st,
+            "ledger_expenditure": ledger_total,
+            "ledger_transactions": int(led.get(st, {}).get("transactions", 0)),
+            "project_linked_expenditure": lk["linked_total"],
+            "work_verified_expenditure": lk["work_verified_total"],
+            "linked_work_keys": lk["linked_keys"],
+            "unique_work_keys": lk["unique_keys"],
+            "catalog_rows_with_linked_expenditure": lk["linked_rows"],
+            "catalog_projects": per_state.get(st, {}).get("catalog_projects", 0),
+            "unattributed_expenditure": round(ledger_total - lk["work_verified_total"], 2),
+            "ambiguous_shared_work_expenditure": round(lk["work_verified_total"] - lk["linked_total"], 2),
+        })
+    return {
+        "scope": fy or "all",
+        "method": (
+            "ledger_expenditure = payment ledger grouped by its own state column; "
+            "work_verified_expenditure = MP+IDA-verified ledger payments whose work "
+            "key matches catalog projects (deduplicated by work key); "
+            "project_linked_expenditure = the attributable subset (unique-key works "
+            "only). The remainder is spend that cannot be verifiably attributed to "
+            "individual catalog projects — a dataset linkage limitation, reported "
+            "honestly rather than redistributed."
+        ),
+        "totals": {
+            "ledger_expenditure": round(sum(r["ledger_expenditure"] for r in rows), 2),
+            "work_verified_expenditure": round(sum(r["work_verified_expenditure"] for r in rows), 2),
+            "project_linked_expenditure": round(sum(r["project_linked_expenditure"] for r in rows), 2),
+            "unattributed_expenditure": round(sum(r["unattributed_expenditure"] for r in rows), 2),
+        },
+        "states": rows,
+    }
 
 
 def state_ledger_map(db: Session, fy: Optional[str] = None) -> Dict[str, Dict[str, Any]]:

@@ -470,6 +470,21 @@ class ProjectRecInfo(Base):
     # work key (same conservative linkage). The authoritative per-project
     # spend; the catalog's `expenditure` column is a zeroed legacy stamp.
     linked_expenditure = Column(Float)
+    # Linkage detail (all from the same MP+IDA-verified ledger join):
+    linked_tx_count = Column(Integer)          # number of linked payment records
+    first_expenditure_date = Column(String)    # earliest linked payment date
+    latest_expenditure_date = Column(String)   # most recent linked payment date
+    # normalized work key ('name|constituency|state') — lets consumers detect
+    # catalog rows sharing one work key (assignment ambiguity) and lets
+    # state reconciliation group by actual work instead of duplicating rows.
+    work_key = Column(String)
+    # MP+IDA-verified work-level payment total regardless of key uniqueness,
+    # and the number of catalog rows sharing the key. When work_key_rows > 1
+    # the total cannot be split per row: linked_expenditure stays 0 and the
+    # status is 'ambiguous_shared_work' (never assign every row the full
+    # work total).
+    work_key_expenditure = Column(Float)
+    work_key_rows = Column(Integer)
 
     __table_args__ = (
         Index("idx_rec_info_project", "project_id", unique=True),

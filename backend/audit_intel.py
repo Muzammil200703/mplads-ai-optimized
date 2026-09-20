@@ -371,10 +371,25 @@ def _evidence_item(key, label, status, value=None, source=None, note=None) -> Di
     }
 
 
+def _eff_exp(project) -> float:
+    """Authoritative per-project spend for analysis text.
+
+    Reads the value attached by callers (_authoritative_expenditure — the
+    MP+IDA-verified payment-ledger total from project_rec_info); falls back
+    to the catalog column, which is a zeroed legacy stamp for almost all
+    rows. Never fabricates: an unlinked project simply yields 0 and the
+    evidence/status text treats it as "no linked records".
+    """
+    attached = getattr(project, "_authoritative_expenditure", None)
+    if attached is not None:
+        return float(attached or 0)
+    return _num(project.expenditure)
+
+
 def _core_evidence_items(project) -> List[Dict[str, Any]]:
     """Evidence items that come from the project record columns only."""
     sanctioned = _num(project.sanctioned_amount)
-    expenditure = _num(project.expenditure)
+    expenditure = _eff_exp(project)
     completion = _num(project.completion_percentage)
     status_str = (project.status or "").strip()
 
@@ -393,8 +408,8 @@ def _core_evidence_items(project) -> List[Dict[str, Any]]:
         _evidence_item(
             "expenditure", "Recorded expenditure",
             "available" if expenditure > 0 else "reported_zero",
-            value=rupees(expenditure), source="projects.expenditure",
-            note=None if expenditure > 0 else "Recorded as ₹0 — expenditure records may not have been updated.",
+            value=rupees(expenditure), source="payment ledger (MP+IDA-linked)",
+            note=None if expenditure > 0 else "No verifiably linked expenditure records — spend cannot be confirmed from the current dataset.",
         ),
         _evidence_item(
             "physical_progress", "Reported physical progress",
@@ -491,7 +506,7 @@ def evidence_gaps(project, timeline: Optional[dict] = None, activity: Optional[d
         activity = get_expenditure_activity(project)
 
     sanctioned = _num(project.sanctioned_amount)
-    expenditure = _num(project.expenditure)
+    expenditure = _eff_exp(project)
     completion = _num(project.completion_percentage)
     status_str = (project.status or "").strip()
     matched = (timeline or {}).get("meta", {}).get("matching", {}) or {}
@@ -958,7 +973,7 @@ def anomaly_explorer(project, db: Session, peer: Optional[dict] = None) -> Dict[
         peer = peer_benchmark(project, db)
 
     sanctioned = _num(project.sanctioned_amount)
-    expenditure = _num(project.expenditure)
+    expenditure = _eff_exp(project)
     completion = _num(project.completion_percentage)
     status_str = (project.status or "").strip()
     utilization = (expenditure / sanctioned * 100.0) if sanctioned > 0 else 0.0
@@ -1359,7 +1374,7 @@ def simulate(
     labelled as a simulation.
     """
     cur_sanctioned = _num(project.sanctioned_amount)
-    cur_expenditure = _num(project.expenditure)
+    cur_expenditure = _eff_exp(project)
     cur_completion = _num(project.completion_percentage)
 
     sim_sanctioned = cur_sanctioned if sanctioned_amount is None else max(0.0, float(sanctioned_amount))
@@ -1587,7 +1602,7 @@ def build_audit_case(project, db: Session, investigation: Optional[dict] = None)
 def evidence_stale_flag(project) -> str:
     """Mirror of the data-quality heuristic in main.py (single rule, reused)."""
     sanctioned = _num(project.sanctioned_amount)
-    expenditure = _num(project.expenditure)
+    expenditure = _eff_exp(project)
     completion = _num(project.completion_percentage)
     if sanctioned >= STALE_PROGRESS_AMOUNT_THRESHOLD and expenditure == 0 and completion == 0:
         return "POSSIBLY_STALE"

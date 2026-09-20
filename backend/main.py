@@ -92,6 +92,8 @@ try:
                 .all()
             )
             _rescored = 0
+            from ml.predictor import attach_authoritative_expenditure as _attach_exp
+            _attach_exp(_rows, _db)
             for _p in _rows:
                 _risk = _predict_risk(_p, batch_mode=True)
                 _rs = (
@@ -456,11 +458,40 @@ _SORT_COLUMNS = {
     "constituency": models.Project.constituency,
     "project_type": models.Project.project_type,
     "sanctioned_amount": models.Project.sanctioned_amount,
-    "expenditure": models.Project.expenditure,
+    # Authoritative per-project spend (payment ledger, MP+IDA-verified via
+    # project_rec_info); unlinked projects coalesce to 0 — same value the
+    # API rows display.
+    "expenditure": func.coalesce(models.ProjectRecInfo.linked_expenditure, 0.0),
     "completion_percentage": models.Project.completion_percentage,
     "status": models.Project.status,
     "fy": models.Project.fy,
 }
+
+
+def _authoritative_expenditure_map(db: Session) -> Dict[int, float]:
+    """project_id -> authoritative linked expenditure (payment ledger,
+    MP+IDA-verified) for every linked project. Single shared read used by
+    the scoring paths; ~300 rows in this dataset."""
+    return metrics_svc.project_expenditure_map(db)
+
+
+def _apply_authoritative_expenditure(projects, db) -> None:
+    """Attach authoritative expenditure to project objects (in place) so
+    downstream risk scoring reads real spend, not the zeroed catalog stamp.
+    Values land on the same `_authoritative_expenditure` attribute the
+    predictor reads."""
+    if not projects:
+        return
+    amounts = _authoritative_expenditure_map(db)
+    for p in projects:
+        pid = getattr(p, "id", None)
+        if pid is not None and pid in amounts:
+            p._authoritative_expenditure = amounts[pid]
+
+
+def _eff_exp_of(project, db) -> float:
+    """Authoritative expenditure for one project (0.0 when unlinked)."""
+    return metrics_svc.resolve_project_expenditure(db, project)
 
 
 def _rec_info_map(db: Session, project_ids: List[int]) -> Dict[int, Any]:
@@ -482,6 +513,11 @@ def _rec_info_map(db: Session, project_ids: List[int]) -> Dict[int, Any]:
                 "has_expenditure": bool(r.has_expenditure),
                 "start_status": r.start_status or "no_expenditure",
                 "linked_expenditure": float(r.linked_expenditure or 0.0),
+                # Work-level verification detail (shared works keep their
+                # verified total even though per-project attribution is
+                # ambiguous).
+                "work_key_expenditure": float(getattr(r, "work_key_expenditure", 0.0) or 0.0),
+                "work_key_rows": int(getattr(r, "work_key_rows", 1) or 1),
             }
             for r in rows
         }
@@ -500,6 +536,8 @@ def _rec_item(rec: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         "has_expenditure": rec.get("has_expenditure", False),
         "start_status": rec.get("start_status") or "no_expenditure",
         "linked_expenditure": float(rec.get("linked_expenditure") or 0.0),
+        "work_key_expenditure": float(rec.get("work_key_expenditure") or 0.0),
+        "work_key_rows": int(rec.get("work_key_rows") or 1),
     }
 
 
@@ -555,7 +593,17 @@ def _enrich_projects_with_risk(projects, db, include_rec: bool = True):
         risk = risk_map.get(p.id)
         # Authoritative per-project spend: linked payment-ledger total from
         # the same project_rec_info batch (catalog column is a zeroed stamp).
-        _linked = float((rec_map.get(p.id) or {}).get("linked_expenditure") or 0.0)
+        _rec = rec_map.get(p.id) or {}
+        _linked = float(_rec.get("linked_expenditure") or 0.0)
+        _wk_rows = int(_rec.get("work_key_rows") or 1)
+        if _linked > 0:
+            _exp_status = "linked"
+        elif _rec.get("has_expenditure") and _wk_rows > 1:
+            # Verified payments exist for this work key, but the key is shared
+            # by multiple catalog rows — the total can't be split per row.
+            _exp_status = "ambiguous_shared_work"
+        else:
+            _exp_status = "no_linked_records"
         item = {
             "id": p.id,
             "project_name": p.project_name,
@@ -565,6 +613,12 @@ def _enrich_projects_with_risk(projects, db, include_rec: bool = True):
             "project_type": p.project_type,
             "sanctioned_amount": p.sanctioned_amount or 0.0,
             "expenditure": _linked,
+            # 'linked' = verified payments attributed 1:1; 'ambiguous_shared_work'
+            # = payments exist at work level but the work key is shared;
+            # 'no_linked_records' = spend unknown (NOT a confirmed ₹0).
+            "expenditure_status": _exp_status,
+            "work_key_expenditure": float(_rec.get("work_key_expenditure") or 0.0),
+            "work_key_rows": _wk_rows,
             "completion_percentage": p.completion_percentage or 0.0,
             "status": p.status,
             "fy": p.fy,
@@ -791,11 +845,25 @@ def get_projects(
     db: Session = Depends(get_db)
 ):
     needs_risk_join = risk_level or min_risk_score is not None or max_risk_score is not None
-    if needs_risk_join:
+    needs_exp_join = (
+        min_expenditure is not None
+        or max_expenditure is not None
+        or sort_by == "expenditure"
+    )
+    if needs_risk_join or needs_exp_join:
         query = (
             db.query(models.Project)
-            .join(models.RiskScore, models.Project.id == models.RiskScore.project_id, isouter=True)
+            .outerjoin(
+                models.ProjectRecInfo,
+                models.ProjectRecInfo.project_id == models.Project.id,
+            )
         )
+        if needs_risk_join:
+            query = query.join(
+                models.RiskScore,
+                models.Project.id == models.RiskScore.project_id,
+                isouter=True,
+            )
     else:
         query = db.query(models.Project)
 
@@ -822,9 +890,13 @@ def get_projects(
     if max_sanctioned_amount is not None:
         query = query.filter(models.Project.sanctioned_amount <= max_sanctioned_amount)
     if min_expenditure is not None:
-        query = query.filter(models.Project.expenditure >= min_expenditure)
+        query = query.filter(
+            func.coalesce(models.ProjectRecInfo.linked_expenditure, 0.0) >= min_expenditure
+        )
     if max_expenditure is not None:
-        query = query.filter(models.Project.expenditure <= max_expenditure)
+        query = query.filter(
+            func.coalesce(models.ProjectRecInfo.linked_expenditure, 0.0) <= max_expenditure
+        )
     if min_completion is not None:
         query = query.filter(models.Project.completion_percentage >= min_completion)
     if max_completion is not None:
@@ -896,9 +968,9 @@ def search_projects(
                     return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
                 if max_sanctioned_amount is not None and (project.sanctioned_amount or 0) > max_sanctioned_amount:
                     return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
-                if min_expenditure is not None and (project.expenditure or 0) < min_expenditure:
+                if min_expenditure is not None and metrics_svc.resolve_project_expenditure(db, project) < min_expenditure:
                     return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
-                if max_expenditure is not None and (project.expenditure or 0) > max_expenditure:
+                if max_expenditure is not None and metrics_svc.resolve_project_expenditure(db, project) > max_expenditure:
                     return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
                 if min_completion is not None and (project.completion_percentage or 0) < min_completion:
                     return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
@@ -924,11 +996,25 @@ def search_projects(
     # BUILD MAIN QUERY
     # ---------------------------------------------------------------
     needs_risk_join = risk_level or min_risk_score is not None or max_risk_score is not None
-    if needs_risk_join:
+    needs_exp_join = (
+        min_expenditure is not None
+        or max_expenditure is not None
+        or sort_by == "expenditure"
+    )
+    if needs_risk_join or needs_exp_join:
         query = (
             db.query(models.Project)
-            .join(models.RiskScore, models.Project.id == models.RiskScore.project_id, isouter=True)
+            .outerjoin(
+                models.ProjectRecInfo,
+                models.ProjectRecInfo.project_id == models.Project.id,
+            )
         )
+        if needs_risk_join:
+            query = query.join(
+                models.RiskScore,
+                models.Project.id == models.RiskScore.project_id,
+                isouter=True,
+            )
     else:
         query = db.query(models.Project)
 
@@ -983,9 +1069,13 @@ def search_projects(
     if max_sanctioned_amount is not None:
         query = query.filter(models.Project.sanctioned_amount <= max_sanctioned_amount)
     if min_expenditure is not None:
-        query = query.filter(models.Project.expenditure >= min_expenditure)
+        query = query.filter(
+            func.coalesce(models.ProjectRecInfo.linked_expenditure, 0.0) >= min_expenditure
+        )
     if max_expenditure is not None:
-        query = query.filter(models.Project.expenditure <= max_expenditure)
+        query = query.filter(
+            func.coalesce(models.ProjectRecInfo.linked_expenditure, 0.0) <= max_expenditure
+        )
     if min_completion is not None:
         query = query.filter(models.Project.completion_percentage >= min_completion)
     if max_completion is not None:
@@ -1048,6 +1138,15 @@ def get_project(
     _rec_facts = _rec_item(_rec_info_map(db, [project.id]).get(project.id))
     _linked_exp = float((_rec_facts or {}).get("linked_expenditure") or 0.0)
     stale_check = _check_stale_progress(project, linked_expenditure=_linked_exp)
+    _wk_exp = float((_rec_facts or {}).get("work_key_expenditure") or 0.0)
+    _wk_rows = int((_rec_facts or {}).get("work_key_rows") or 1)
+    _linkage = metrics_svc.expenditure_linkage_summary(db, [project.id]).get(project.id, {})
+    if _linked_exp > 0:
+        _linkage_status = "linked"
+    elif (_rec_facts or {}).get("has_expenditure") and _wk_rows > 1:
+        _linkage_status = "ambiguous_shared_work"
+    else:
+        _linkage_status = "no_linked_records"
 
     return {
         "project": {
@@ -1062,6 +1161,36 @@ def get_project(
             # Authoritative per-project spend: linked payment-ledger total
             # (project_rec_info). The catalog's column is a zeroed legacy stamp.
             "expenditure": _linked_exp,
+            # Status distinction: 'linked' = verified payments attributed 1:1
+            # (unique work key); 'ambiguous_shared_work' = verified payments
+            # exist at work level but the work key is shared by multiple
+            # catalog rows, so the total cannot be split per row;
+            # 'no_linked_records' = no ledger payment passed verification —
+            # NOT a confirmed ₹0 spend.
+            "expenditure_status": _linkage_status,
+            "work_key_expenditure": _wk_exp,
+            "work_key_rows": _wk_rows,
+            "expenditure_linkage": {
+                "status": _linkage_status,
+                "transactions": int(_linkage.get("transactions", 0) or 0),
+                "first_expenditure_date": _linkage.get("first_expenditure_date"),
+                "latest_expenditure_date": _linkage.get("latest_expenditure_date"),
+                "work_key_expenditure": _wk_exp,
+                "work_key_rows": _wk_rows,
+                "note": (
+                    "Spend comes from payment-ledger records verifiably linked to "
+                    "this work (normalized work key + MP + IDA anchor)."
+                    if _linkage_status == "linked"
+                    else (
+                        f"Payments totalling ₹{_wk_exp / 100000:.2f} L are recorded for this "
+                        f"shared work description, but {_wk_rows} catalog rows share it, so the "
+                        "total cannot be attributed to any single row."
+                    )
+                    if _linkage_status == "ambiguous_shared_work"
+                    else "No ledger payment could be verifiably linked to this work, "
+                    "so recorded spend is unknown — not confirmed zero."
+                ),
+            },
             "completion_percentage": project.completion_percentage or 0.0,
             "data_quality_flag": stale_check["flag"],
             "data_quality_reason": stale_check["reason"],
@@ -1222,6 +1351,10 @@ def dashboard_states(
     # Authoritative expenditure: payment ledger grouped by its own state column
     # (state labels verified to match the project catalog 1:1).
     ledger_by_state = metrics_svc.state_ledger_map(db, fy=fy)
+    # MP+IDA-verified project linkage, deduplicated by work key — the
+    # attributable subset of the ledger (the remainder cannot be verifiably
+    # joined to catalog projects; surfaced so the UI can disclose the gap).
+    linked_by_state = metrics_svc.state_linked_map(db, fy=fy)
 
     result = []
     for row in rows:
@@ -1229,6 +1362,9 @@ def dashboard_states(
         led = ledger_by_state.get(row.state, {})
         spent = float(led.get("expenditure", 0.0))
         utilization = (spent / sanctioned * 100) if sanctioned > 0 else 0.0
+        lk = linked_by_state.get(row.state, {})
+        linked_total = float(lk.get("linked_total", 0.0))
+        work_verified = float(lk.get("work_verified_total", 0.0))
 
         result.append({
             "state": row.state,
@@ -1238,7 +1374,13 @@ def dashboard_states(
             "total_sanctioned_amount": sanctioned,
             "total_expenditure": spent,
             "utilization_percentage": round(utilization, 2),
-            "average_completion_percentage": round(float(row.avg_completion), 2)
+            "average_completion_percentage": round(float(row.avg_completion), 2),
+            "project_linked_expenditure": linked_total,
+            "work_verified_expenditure": work_verified,
+            "projects_with_linked_expenditure": int(lk.get("linked_rows", 0)),
+            "linked_work_keys": int(lk.get("linked_keys", 0)),
+            "unique_work_keys": int(lk.get("unique_keys", 0)),
+            "unattributed_expenditure": round(spent - work_verified, 2),
         })
 
     set_cached(cache_key, result)
@@ -1326,17 +1468,27 @@ def anomalies_summary(
     if fy:
         base_q = base_q.filter(models.Project.fy == fy)
 
-    # Single pass with CASE WHEN to count all categories at once
-    stats = base_q.with_entities(
-        func.count(models.Project.id).label("total"),
-        func.sum(case((
-            (models.Project.expenditure > models.Project.sanctioned_amount) |
-            ((models.Project.sanctioned_amount >= 1000000) & (models.Project.completion_percentage < 25)),
-            1), else_=0)).label("high"),
-        func.sum(case((
-            (models.Project.expenditure > 0) & (models.Project.completion_percentage == 0),
-            1), else_=0)).label("medium"),
-    ).one()
+    # Single pass with CASE WHEN to count all categories at once.
+    # Spend conditions use the authoritative linked expenditure
+    # (project_rec_info); the catalog's expenditure column is a zeroed
+    # legacy stamp and would never trigger these rules.
+    stats = (
+        base_q.outerjoin(
+            models.ProjectRecInfo,
+            models.ProjectRecInfo.project_id == models.Project.id,
+        )
+        .with_entities(
+            func.count(models.Project.id).label("total"),
+            func.sum(case((
+                (func.coalesce(models.ProjectRecInfo.linked_expenditure, 0.0) > models.Project.sanctioned_amount) |
+                ((models.Project.sanctioned_amount >= 1000000) & (models.Project.completion_percentage < 25)),
+                1), else_=0)).label("high"),
+            func.sum(case((
+                (func.coalesce(models.ProjectRecInfo.linked_expenditure, 0.0) > 0) & (models.Project.completion_percentage == 0),
+                1), else_=0)).label("medium"),
+        )
+        .one()
+    )
 
     total_projects = int(stats.total or 0)
     high_risk = int(stats.high or 0)
@@ -1923,7 +2075,8 @@ def _build_vendor_intelligence_payload(db: Session):
     linked = db.execute(text("""
         SELECT ve.vk, ve.wk, ve.ck, ve.sk,
                p.id, p.project_name, p.state, p.district, p.constituency,
-               p.project_type, p.sanctioned_amount, p.expenditure,
+               p.project_type, p.sanctioned_amount,
+               COALESCE(pri.linked_expenditure, 0) AS expenditure,
                p.completion_percentage, p.status,
                rs.risk_score, rs.risk_level
         FROM (
@@ -1941,6 +2094,7 @@ def _build_vendor_intelligence_payload(db: Session):
           ON normkey(p.project_name) = ve.wk
          AND normkey(p.constituency) = ve.ck
          AND normkey(p.state) = ve.sk
+        LEFT JOIN project_rec_info pri ON pri.project_id = p.id
         LEFT JOIN risk_scores rs ON rs.project_id = p.id
     """)).fetchall()
     linked_by_vendor: Dict[str, Dict[int, dict]] = {}
@@ -2155,7 +2309,8 @@ def _vendor_profile_payload(db: Session, vendor_key: str):
     linked = db.execute(text("""
         SELECT ve.wk, ve.ck, ve.sk,
                p.id, p.project_name, p.state, p.district, p.constituency,
-               p.project_type, p.sanctioned_amount, p.expenditure,
+               p.project_type, p.sanctioned_amount,
+               COALESCE(pri.linked_expenditure, 0) AS expenditure,
                p.completion_percentage, p.status,
                rs.risk_score, rs.risk_level
         FROM (
@@ -2172,6 +2327,7 @@ def _vendor_profile_payload(db: Session, vendor_key: str):
           ON normkey(p.project_name) = ve.wk
          AND normkey(p.constituency) = ve.ck
          AND normkey(p.state) = ve.sk
+        LEFT JOIN project_rec_info pri ON pri.project_id = p.id
         LEFT JOIN risk_scores rs ON rs.project_id = p.id
     """), {"k": vendor_key}).fetchall()
 
@@ -2360,6 +2516,10 @@ def detect_anomalies(
         query = (
             db.query(models.RiskScore, models.Project)
             .join(models.Project, models.RiskScore.project_id == models.Project.id)
+            .outerjoin(
+                models.ProjectRecInfo,
+                models.ProjectRecInfo.project_id == models.Project.id,
+            )
         )
         if state:
             query = query.filter(models.Project.state == state)
@@ -2389,7 +2549,9 @@ def detect_anomalies(
             anomaly_sort_map = {
                 "risk_score": (models.RiskScore.risk_score, None),
                 "sanctioned_amount": (models.Project.sanctioned_amount, None),
-                "expenditure": (models.Project.expenditure, None),
+                # Authoritative linked spend (project_rec_info) — the catalog
+                # column is a zeroed legacy stamp.
+                "expenditure": (func.coalesce(models.ProjectRecInfo.linked_expenditure, 0.0), None),
                 "completion_percentage": (models.Project.completion_percentage, None),
                 "project_name": (models.Project.project_name, None),
                 "state": (models.Project.state, None),
@@ -2457,11 +2619,19 @@ def detect_anomalies(
     if state:
         query = query.filter(models.Project.state == state)
 
-    # Focus candidate scan on projects with potential anomalies
+    # Focus candidate scan on projects with potential anomalies.
+    # Spend conditions use the authoritative linked expenditure
+    # (project_rec_info); the catalog's expenditure column is a zeroed
+    # legacy stamp and would never trigger these rules.
+    query = query.outerjoin(
+        models.ProjectRecInfo,
+        models.ProjectRecInfo.project_id == models.Project.id,
+    )
+    _linked_exp = func.coalesce(models.ProjectRecInfo.linked_expenditure, 0.0)
     candidate_query = query.filter(
-        (models.Project.expenditure > models.Project.sanctioned_amount) |
+        (_linked_exp > models.Project.sanctioned_amount) |
         ((models.Project.sanctioned_amount >= 1000000) & (models.Project.completion_percentage < 25)) |
-        ((models.Project.expenditure > 0) & (models.Project.completion_percentage == 0)) |
+        ((_linked_exp > 0) & (models.Project.completion_percentage == 0)) |
         (models.Project.status.ilike("completed") & (models.Project.completion_percentage < 90))
     )
 
@@ -2472,6 +2642,10 @@ def detect_anomalies(
     from activity import get_expenditure_span
     rec_map_fallback = _rec_info_map(db, [p.id for p in projects])
     for proj in projects:
+        # Attach authoritative spend before scoring (predictor reads it).
+        _rec0 = rec_map_fallback.get(proj.id) or {}
+        if _rec0.get("linked_expenditure"):
+            proj._authoritative_expenditure = float(_rec0["linked_expenditure"])
         risk_info = predict_risk(proj)
         if risk_info["is_anomaly"]:
             if risk_level and risk_info["risk_level"].lower() != risk_level.lower():
@@ -2526,6 +2700,11 @@ def get_project_risk(
             detail=f"Project {project_id} not found"
         )
 
+    # Score with the authoritative per-project spend (payment ledger via
+    # project_rec_info) — never the catalog's zeroed legacy stamp.
+    from ml.predictor import attach_authoritative_expenditure
+    attach_authoritative_expenditure([project], db)
+    _linked = _eff_exp_of(project, db)
     risk_info = predict_risk(project)
     return {
         "project": {
@@ -2534,7 +2713,7 @@ def get_project_risk(
             "state": project.state,
             "district": project.district,
             "sanctioned_amount": project.sanctioned_amount,
-            "expenditure": project.expenditure,
+            "expenditure": _linked,
             "completion_percentage": project.completion_percentage,
             "status": project.status
         },
@@ -2559,6 +2738,7 @@ def get_risky_projects(
             .all()
         )
         projects = []
+        _exp_map = _authoritative_expenditure_map(db)
         for risk, project in risks:
             projects.append({
                 "id": project.id,
@@ -2566,7 +2746,7 @@ def get_risky_projects(
                 "state": project.state,
                 "district": project.district,
                 "sanctioned_amount": project.sanctioned_amount,
-                "expenditure": project.expenditure,
+                "expenditure": float(_exp_map.get(project.id, 0.0)),
                 "completion_percentage": project.completion_percentage,
                 "risk_score": risk.risk_score,
                 "risk_level": risk.risk_level,
@@ -2581,11 +2761,16 @@ def get_risky_projects(
             "projects": projects
         }
 
-    # Fallback to candidate evaluation
+    # Fallback to candidate evaluation (authoritative linked spend, not the
+    # catalog's zeroed legacy stamp)
     candidates = (
         db.query(models.Project)
+        .outerjoin(
+            models.ProjectRecInfo,
+            models.ProjectRecInfo.project_id == models.Project.id,
+        )
         .filter(
-            (models.Project.expenditure > models.Project.sanctioned_amount) |
+            (func.coalesce(models.ProjectRecInfo.linked_expenditure, 0.0) > models.Project.sanctioned_amount) |
             ((models.Project.sanctioned_amount >= 1000000) & (models.Project.completion_percentage < 25))
         )
         .limit(limit * 2)
@@ -2599,13 +2784,12 @@ def get_risky_projects(
             "id": p.id,
             "project_name": p.project_name,
             "state": p.state,
-            "district": p.district,
-            "sanctioned_amount": p.sanctioned_amount,
-            "expenditure": p.expenditure,
-            "completion_percentage": p.completion_percentage,
-            "risk_score": r["risk_score"],
-            "risk_level": r["risk_level"],
-            "ml_anomaly": r["ml_anomaly"],
+            "district": p.district,                "sanctioned_amount": p.sanctioned_amount,
+                "expenditure": float(metrics_svc.resolve_project_expenditure(db, p)),
+                "completion_percentage": p.completion_percentage,
+                "risk_score": r["risk_score"],
+                "risk_level": r["risk_level"],
+                "ml_anomaly": r["ml_anomaly"],
             "reasons": r["reasons"]
         })
 
@@ -2640,9 +2824,18 @@ def get_ai_insights(db: Session = Depends(get_db)):
     ).scalar() or 0
 
     if high_risk_projects == 0 and total_projects > 0:
-        high_risk_projects = db.query(func.count(models.Project.id)).filter(
-            models.Project.expenditure > models.Project.sanctioned_amount
-        ).scalar() or 0
+        high_risk_projects = (
+            db.query(func.count(models.Project.id))
+            .outerjoin(
+                models.ProjectRecInfo,
+                models.ProjectRecInfo.project_id == models.Project.id,
+            )
+            .filter(
+                func.coalesce(models.ProjectRecInfo.linked_expenditure, 0.0)
+                > models.Project.sanctioned_amount
+            )
+            .scalar() or 0
+        )
 
     top_states = (
         db.query(models.Project.state, func.count(models.Project.id).label("projects"))
@@ -2710,9 +2903,17 @@ def narrative_insights(
     high_risk = risk_q.scalar() or 0
 
     if high_risk == 0 and total_projects > 0:
-        high_risk = base_q.filter(
-            models.Project.expenditure > models.Project.sanctioned_amount
-        ).count() or 0
+        high_risk = (
+            base_q.outerjoin(
+                models.ProjectRecInfo,
+                models.ProjectRecInfo.project_id == models.Project.id,
+            )
+            .filter(
+                func.coalesce(models.ProjectRecInfo.linked_expenditure, 0.0)
+                > models.Project.sanctioned_amount
+            )
+            .count() or 0
+        )
 
     if total_projects > 0:
         pct = (high_risk / total_projects) * 100
@@ -2897,6 +3098,10 @@ def state_intelligence(
     # Authoritative expenditure: payment ledger grouped by its own state column
     # (state labels verified to match the project catalog 1:1).
     ledger_by_state = metrics_svc.state_ledger_map(db, fy=fy)
+    # MP+IDA-verified project linkage, deduplicated by work key — disclosed
+    # alongside so the state total is never confused with the project-attributable
+    # subset (the gap is a dataset linkage limitation, not hidden data).
+    linked_by_state = metrics_svc.state_linked_map(db, fy=fy)
 
     result = []
     for row in rows:
@@ -2904,6 +3109,9 @@ def state_intelligence(
         spent = float(ledger_by_state.get(row.state, {}).get("expenditure", 0.0))
         utilization = (spent / sanctioned * 100) if sanctioned > 0 else 0.0
         risk = risk_map.get(row.state)
+        lk = linked_by_state.get(row.state, {})
+        linked_total = float(lk.get("linked_total", 0.0))
+        work_verified = float(lk.get("work_verified_total", 0.0))
         result.append({
             "state": row.state,
             "total_projects": int(row.total_projects),
@@ -2916,8 +3124,42 @@ def state_intelligence(
             "high_risk_projects": int(risk.high_count) if risk else 0,
             "medium_risk_projects": int(risk.medium_count) if risk else 0,
             "ml_anomaly_projects": int(risk.ml_anomaly_count) if risk else 0,
+            "project_linked_expenditure": linked_total,
+            "work_verified_expenditure": work_verified,
+            "projects_with_linked_expenditure": int(lk.get("linked_rows", 0)),
+            "linked_work_keys": int(lk.get("linked_keys", 0)),
+            "unique_work_keys": int(lk.get("unique_keys", 0)),
+            "unattributed_expenditure": round(spent - work_verified, 2),
+            "expenditure_scope_note": (
+                "total_expenditure is every recorded payment in the state; "
+                "work_verified_expenditure is the subset verifiably matched to "
+                "catalog works; project_linked_expenditure is the uniquely "
+                "attributable subset."
+            ),
         })
 
+    set_cached(cache_key, result)
+    return result
+
+
+@app.get("/dashboard/expenditure-reconciliation", tags=["Dashboard"])
+def expenditure_reconciliation(
+    fy: Optional[str] = Query(None, description="Filter by financial year"),
+    db: Session = Depends(get_db),
+):
+    """Reconcile state-level ledger totals against project-level linked spend.
+
+    Both sides come from the SAME payment ledger; they differ because the
+    per-project attribution (normalized work key + MP + IDA verification)
+    covers only the subset of ledger payments whose work key verifiably
+    matches a catalog project. The unattributed remainder is disclosed per
+    state — never redistributed or forced to match.
+    """
+    cache_key = f"exp_reconciliation_{fy or 'all'}"
+    cached = get_cached(cache_key, ttl_seconds=300)
+    if cached is not None:
+        return cached
+    result = metrics_svc.state_expenditure_reconciliation(db, fy=fy)
     set_cached(cache_key, result)
     return result
 
@@ -3056,7 +3298,7 @@ def audit_priority(
             "audit_score": score_expr,
             "risk_score": models.RiskScore.risk_score,
             "sanctioned_amount": models.Project.sanctioned_amount,
-            "expenditure": models.Project.expenditure,
+            "expenditure": func.coalesce(models.ProjectRecInfo.linked_expenditure, 0.0),
             "completion_percentage": models.Project.completion_percentage,
             "project_name": models.Project.project_name,
             "state": models.Project.state,
@@ -3215,6 +3457,10 @@ def _project_or_404(db: Session, project_id: int):
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Project with ID {project_id} not found",
         )
+    # Attach the authoritative per-project spend (payment ledger via
+    # project_rec_info) so audit-intel analyses never read the zeroed
+    # catalog stamp.
+    _apply_authoritative_expenditure([project], db)
     return project
 
 
@@ -3861,6 +4107,9 @@ def export_report(
 
         rows = query.order_by(models.RiskScore.risk_score.desc()).all()
 
+        # Export the authoritative linked spend, not the zeroed catalog stamp.
+        _exp_map = _authoritative_expenditure_map(db)
+
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow([
@@ -3877,7 +4126,7 @@ def export_report(
                 proj.constituency or "",
                 proj.project_type or "",
                 proj.sanctioned_amount or 0,
-                proj.expenditure or 0,
+                _exp_map.get(proj.id, 0.0),
                 proj.completion_percentage or 0,
                 proj.status or "",
                 risk.risk_score,
@@ -3903,6 +4152,9 @@ def export_report(
         query = query.order_by(models.Project.id.asc())
     rows = query.all()
 
+    # Export the authoritative linked spend, not the zeroed catalog stamp.
+    _exp_map = _authoritative_expenditure_map(db)
+
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
@@ -3918,7 +4170,7 @@ def export_report(
             proj.constituency or "",
             proj.project_type or "",
             proj.sanctioned_amount or 0,
-            proj.expenditure or 0,
+            _exp_map.get(proj.id, 0.0),
             proj.completion_percentage or 0,
             proj.status or ""
         ])
@@ -4340,9 +4592,11 @@ def get_risk_explanation(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    from ml.predictor import attach_authoritative_expenditure as _attach
+    _attach([project], db)
     risk_info = predict_risk(project)
     sanctioned = float(project.sanctioned_amount or 0)
-    expenditure = float(project.expenditure or 0)
+    expenditure = float(metrics_svc.resolve_project_expenditure(db, project))
     completion = float(project.completion_percentage or 0)
     utilization = (expenditure / sanctioned * 100) if sanctioned > 0 else 0
     status_str = str(project.status or "").lower()
@@ -4521,9 +4775,11 @@ def get_anomaly_explanation(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    from ml.predictor import attach_authoritative_expenditure as _attach
+    _attach([project], db)
     risk_info = predict_risk(project)
     sanctioned = float(project.sanctioned_amount or 0)
-    expenditure = float(project.expenditure or 0)
+    expenditure = float(metrics_svc.resolve_project_expenditure(db, project))
     completion = float(project.completion_percentage or 0)
     utilization = (expenditure / sanctioned * 100) if sanctioned > 0 else 0
 

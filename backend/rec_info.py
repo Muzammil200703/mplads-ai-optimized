@@ -13,6 +13,29 @@ One derived, rebuildable table answering, per project:
     or a data anomaly, never a real project start)
   • start_status        — 'valid' | 'pre_recommendation' | 'no_expenditure'
   • has_expenditure     — whether any linked expenditure exists at all
+  • linked_expenditure  — SUM of the MP+IDA-verified linked payments,
+    attributed to the project ONLY when its work key maps to exactly ONE
+    catalog row (see work_key_rows below). The AUTHORITATIVE per-project
+    spend; the catalog's projects.expenditure column is a zeroed legacy
+    stamp — never aggregate it.
+  • linked_tx_count / first_expenditure_date / latest_expenditure_date —
+    count and date span of the linked payments (powers the "no linked
+    records vs ₹0 recorded" distinction in the UI)
+  • work_key            — the normalized name|constituency|state key, kept
+    so consumers can detect multiple catalog rows sharing one work key
+  • work_key_expenditure / work_key_rows — the verified work-key payment
+    total regardless of uniqueness, and how many catalog rows share the
+    key. When work_key_rows > 1 the ledger total CANNOT be split among the
+    sharing catalog rows (same generic description, same district, several
+    sanctioned works), so per-project spend is AMBIGUOUS: linked_expenditure
+    is 0 and the UI reports "shared work — attribution unknown" instead of
+    assigning every row the full work total (which would fabricate
+    utilization figures of thousands of percent).
+
+UNIQUENESS RULE (data integrity): per-project attribution requires a
+one-to-one work-key ↔ catalog-row relationship. Shared keys keep their
+verified payment totals at the work level (work_key_expenditure) for state
+reconciliation, but never fabricate per-project values.
 
 Linkage (strongest reliable identifier available in this dataset):
   The normalized (name, constituency, state) work key via SQL normkey()
@@ -95,26 +118,31 @@ def rebuild(db, force: bool = False) -> dict:
         t0 = time.time()
         cur = conn.cursor()
         try:
-            # Idempotent schema upgrade for deployments with the pre-validation
-            # table shape (adds the start_status discriminator column).
-            try:
-                cur.execute("ALTER TABLE project_rec_info ADD COLUMN start_status TEXT")
-            except Exception:
-                pass  # column already exists
-
-            # Idempotent schema upgrade for deployments with the earlier
-            # table shape (adds the linked-expenditure column).
-            try:
-                cur.execute("ALTER TABLE project_rec_info ADD COLUMN linked_expenditure REAL")
-            except Exception:
-                pass  # column already exists
+            # Idempotent schema upgrades for deployments with earlier table
+            # shapes (each is a no-op once the column exists).
+            for _stmt in (
+                "ALTER TABLE project_rec_info ADD COLUMN start_status TEXT",
+                "ALTER TABLE project_rec_info ADD COLUMN linked_expenditure REAL",
+                "ALTER TABLE project_rec_info ADD COLUMN linked_tx_count INTEGER",
+                "ALTER TABLE project_rec_info ADD COLUMN first_expenditure_date TEXT",
+                "ALTER TABLE project_rec_info ADD COLUMN latest_expenditure_date TEXT",
+                "ALTER TABLE project_rec_info ADD COLUMN work_key TEXT",
+                "ALTER TABLE project_rec_info ADD COLUMN work_key_expenditure REAL",
+                "ALTER TABLE project_rec_info ADD COLUMN work_key_rows INTEGER",
+            ):
+                try:
+                    cur.execute(_stmt)
+                except Exception:
+                    pass  # column already exists
 
             cur.execute("DELETE FROM project_rec_info")
             cur.execute("""
                 INSERT INTO project_rec_info
                     (project_id, recommendation_date, recommended_by,
                      approx_start_date, has_expenditure, start_status,
-                     linked_expenditure)
+                     linked_expenditure, linked_tx_count,
+                     first_expenditure_date, latest_expenditure_date, work_key,
+                     work_key_expenditure, work_key_rows)
                 WITH
                 -- Earliest recommendation per work key (date, MP, IDA)
                 rec_agg AS (
@@ -150,6 +178,8 @@ def rebuild(db, force: bool = False) -> dict:
                                     AND normdate(e.expenditure_date) >= ra.rec_date
                                    THEN normdate(e.expenditure_date)
                                END) AS first_valid,
+                           MAX(NULLIF(normdate(e.expenditure_date), '')) AS latest_exp,
+                           COUNT(e.id) AS tx_count,
                            SUM(e.expenditure_amount) AS linked_amount
                     FROM expenditures e
                     JOIN rec_agg ra
@@ -170,6 +200,16 @@ def rebuild(db, force: bool = False) -> dict:
                            normkey(e.state)             AS sk,
                            MIN(NULLIF(normdate(e.expenditure_date), '')) AS any_first
                     FROM expenditures e
+                    GROUP BY dk, ck, sk
+                ),
+                -- How many catalog rows share each work key: per-project
+                -- attribution is only possible when this is exactly 1.
+                cat_agg AS (
+                    SELECT normkey(project_name) AS dk,
+                           normkey(constituency)  AS ck,
+                           normkey(state)         AS sk,
+                           COUNT(*)               AS nrows
+                    FROM projects
                     GROUP BY dk, ck, sk
                 )
                 SELECT p.id,
@@ -197,13 +237,31 @@ def rebuild(db, force: bool = False) -> dict:
                                THEN 'valid'
                            ELSE 'no_expenditure'
                        END,
+                       -- Attributable spend: only when the work key maps to
+                       -- exactly ONE catalog row (uniqueness rule).
+                       CASE WHEN ca.nrows = 1
+                                 AND ra.mpk IS NOT NULL
+                                 AND ev.linked_amount IS NOT NULL
+                            THEN ev.linked_amount ELSE 0.0 END,
+                       CASE WHEN ra.mpk IS NOT NULL AND ev.tx_count IS NOT NULL
+                            THEN ev.tx_count ELSE 0 END,
+                       CASE WHEN ra.mpk IS NOT NULL THEN ev.first_exp END,
+                       CASE WHEN ra.mpk IS NOT NULL THEN ev.latest_exp END,
+                       ra.dk || '|' || ra.ck || '|' || ra.sk,
+                       -- Work-level verified total (regardless of uniqueness)
+                       -- + how many catalog rows share the key.
                        CASE WHEN ra.mpk IS NOT NULL AND ev.linked_amount IS NOT NULL
-                            THEN ev.linked_amount ELSE 0.0 END
+                            THEN ev.linked_amount ELSE 0.0 END,
+                       COALESCE(ca.nrows, 1)
                 FROM projects p
                 LEFT JOIN rec_agg ra
                        ON ra.dk = normkey(p.project_name)
                       AND ra.ck = normkey(p.constituency)
                       AND ra.sk = normkey(p.state)
+                LEFT JOIN cat_agg ca
+                       ON ca.dk = normkey(p.project_name)
+                      AND ca.ck = normkey(p.constituency)
+                      AND ca.sk = normkey(p.state)
                 LEFT JOIN exp_verified ev
                        ON ev.dk = normkey(p.project_name)
                       AND ev.ck = normkey(p.constituency)
@@ -225,6 +283,9 @@ def rebuild(db, force: bool = False) -> dict:
             linked_sum = cur.execute(
                 "SELECT COALESCE(SUM(linked_expenditure), 0) FROM project_rec_info"
             ).fetchone()[0]
+            linked_keys = cur.execute(
+                "SELECT COUNT(DISTINCT work_key) FROM project_rec_info WHERE linked_tx_count > 0"
+            ).fetchone()[0]
             _last_build.update(ok=True, rows=rows, at=time.time(), error=None)
             return {
                 "ok": True,
@@ -232,6 +293,7 @@ def rebuild(db, force: bool = False) -> dict:
                 "with_recommendation_date": dated,
                 "with_expenditure": with_exp,
                 "linked_expenditure_total": float(linked_sum or 0),
+                "linked_work_keys": int(linked_keys),
                 "seconds": round(time.time() - t0, 2),
             }
         except Exception as exc:
