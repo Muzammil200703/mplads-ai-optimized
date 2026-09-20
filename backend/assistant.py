@@ -961,8 +961,6 @@ def _linked_expenditure(db, project) -> float:
     return float(row.linked_expenditure or 0.0) if row is not None else 0.0
 
 
-<<<<<<< HEAD
-=======
 # ═══════════════════════════════════════════════════════════════════
 # Project-context intelligence — answers WHY/HOW/WHERE/WHO/WHEN/WHAT
 # questions about the project currently open in the details drawer,
@@ -1497,7 +1495,6 @@ def _intent_project_context(q: str, ql: str, ctx_project_id: Optional[int],
     return None
 
 
->>>>>>> zaib-frontend-updates
 def _project_profile_answer(p, risk, linked_expenditure: float = None) -> Tuple[str, List[ActionOut]]:
     """Full project profile composed ONLY from the real record + risk row.
 
