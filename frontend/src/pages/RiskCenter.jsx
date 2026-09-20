@@ -291,9 +291,18 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
     setSortBy("risk_score"); setSortDir("desc"); setSearchQuery(""); setCurrentPage(1)
   }
 
+  // Assistant control plane: "clear filters" reuses the existing reset path.
+  useEffect(() => {
+    const handler = () => handleReset()
+    window.addEventListener("assistant:clear-filters", handler)
+    return () => window.removeEventListener("assistant:clear-filters", handler)
+  }, [])
+
   // Open detail panel
   const handleOpenDetail = async (anomaly) => {
     setSelectedAnomaly(anomaly)
+    // Assistant project-context: the shared assistant hears which project is open.
+    window.dispatchEvent(new CustomEvent("assistant-project-context", { detail: { projectId: anomaly.project_id, projectName: anomaly.project_name || null } }))
     setDetailRisk(null)
     setDetailRec(null)
     setRiskExplanation(null)
@@ -698,7 +707,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
         }
 
         return (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 sm:p-4 backdrop-blur-2xs" onClick={() => setSelectedAnomaly(null)}>
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 sm:p-4 backdrop-blur-2xs" onClick={() => { setSelectedAnomaly(null); window.dispatchEvent(new CustomEvent("assistant-project-context", { detail: { projectId: null } })) }}>
           <div onClick={(e) => e.stopPropagation()} className="flex max-h-[92vh] sm:max-h-[88vh] w-full sm:max-w-3xl flex-col rounded-t-2xl sm:rounded-2xl border border-gray-200 bg-white shadow-soft-lg dark:border-gray-700 dark:bg-[#17181c]">
 
             {/* ── HEADER ── */}
@@ -731,7 +740,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                 <h3 className="mt-2 text-lg font-bold text-gray-900 dark:text-white leading-tight">{s.project_name}</h3>
                 <p className="text-xs text-gray-500 mt-0.5">📍 {s.state || "N/A"} — {s.constituency || "N/A"} {s.project_type ? `· ${s.project_type}` : ""}</p>
               </div>
-              <button onClick={() => setSelectedAnomaly(null)} className="ml-3 flex-shrink-0 rounded p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">✕</button>
+              <button onClick={() => { setSelectedAnomaly(null); window.dispatchEvent(new CustomEvent("assistant-project-context", { detail: { projectId: null } })) }} className="ml-3 flex-shrink-0 rounded p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">✕</button>
             </div>
 
             {/* ── SCROLLABLE BODY ── */}
@@ -971,7 +980,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
 
             {/* ── FOOTER ── */}
             <div className="border-t border-gray-200 p-4 flex flex-wrap items-center justify-between gap-2 dark:border-gray-700">
-              <button onClick={() => setSelectedAnomaly(null)} className="rounded-lg border border-gray-300 px-4 py-2 text-xs font-bold text-gray-700 dark:border-gray-600 dark:text-gray-200">Close</button>
+              <button onClick={() => { setSelectedAnomaly(null); window.dispatchEvent(new CustomEvent("assistant-project-context", { detail: { projectId: null } })) }} className="rounded-lg border border-gray-300 px-4 py-2 text-xs font-bold text-gray-700 dark:border-gray-600 dark:text-gray-200">Close</button>
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => {
@@ -1030,7 +1039,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                 <button
                   onClick={() => {
                     window.dispatchEvent(new CustomEvent("navigate-to-project", { detail: { query: String(s.project_id) } }))
-                    setSelectedAnomaly(null)
+                    setSelectedAnomaly(null); window.dispatchEvent(new CustomEvent("assistant-project-context", { detail: { projectId: null } }))
                   }}
                   className="rounded-lg bg-[#031632] px-4 py-2 text-xs font-bold text-white dark:bg-blue-600">
                   View Full Project →

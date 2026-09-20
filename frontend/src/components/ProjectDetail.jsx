@@ -299,6 +299,23 @@ function ProjectDetail({ projectId, onClose }) {
   // Closing animation: 150ms fade/dip, then unmount (reduced motion → instant)
   const [closing, setClosing] = useState(false)
   const closingRef = useRef(false)
+  // Modal close → hand the assistant back to page-level context (matches the
+  // Risk Center / Audit Priority modal lifecycle).
+  const releaseAssistantContext = () => window.dispatchEvent(new CustomEvent("assistant-project-context", { detail: { projectId: null } }))
+  useEffect(() => () => releaseAssistantContext(), [])
+
+  /* Side-by-side layout: while the floating assistant panel is open the
+     overlay reserves room on the right (desktop only — CSS media query),
+     centering the card in the remaining space so the two never overlap.
+     Closing the assistant removes the reservation and the card re-centers. */
+  const [assistantPanelOpen, setAssistantPanelOpen] = useState(
+    () => document.documentElement.classList.contains("assistant-panel-open")
+  )
+  useEffect(() => {
+    const h = (e) => setAssistantPanelOpen(!!e.detail?.open)
+    window.addEventListener("assistant-panel", h)
+    return () => window.removeEventListener("assistant-panel", h)
+  }, [])
   const requestClose = () => {
     if (closingRef.current) return
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
@@ -318,6 +335,9 @@ function ProjectDetail({ projectId, onClose }) {
     setActiveTab("overview")
     setTimeline(null)
     setActivity(null)
+    // The open global assistant follows this modal: switching projects
+    // (A → B) re-targets the assistant's project context immediately.
+    window.dispatchEvent(new CustomEvent("assistant-project-context", { detail: { projectId } }))
     setInvestigation(null)
     setAuditSection("evidence")
 
@@ -347,6 +367,19 @@ function ProjectDetail({ projectId, onClose }) {
       setLoading(false)
     })
   }, [projectId])
+
+  // Name for the assistant's context indicator (cosmetic; the id is what the
+  // backend resolves). Fires whenever a different project's detail arrives.
+  // NOTE: must stay before the early returns below (Rules of Hooks).
+  const projName = detail?.project?.project_name
+  const projId = detail?.project?.id
+  useEffect(() => {
+    if (projId && projName) {
+      window.dispatchEvent(new CustomEvent("assistant-project-context", {
+        detail: { projectId: projId, projectName: projName },
+      }))
+    }
+  }, [projId, projName])
 
   if (loading) {
     return (
@@ -385,10 +418,10 @@ function ProjectDetail({ projectId, onClose }) {
 
   return (
     <div
-      className={`anim-overlay-in fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto bg-black/50 p-3 backdrop-blur-2xs transition-opacity sm:p-6 ${closing ? "is-closing" : ""}`}
+      className={`anim-overlay-in fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto bg-black/50 p-3 backdrop-blur-2xs transition-opacity modal-shift-transition sm:p-6 ${closing ? "is-closing" : ""} ${assistantPanelOpen ? "modal-share-with-assistant" : ""}`}
       onClick={requestClose}
     >
-      <div className="anim-card-in relative my-auto w-full max-w-3xl rounded-2xl border border-[#dcdde4] bg-white p-5 text-gray-900 shadow-soft-lg sm:p-6 dark:border-[#2e2e33] dark:bg-[#17181c] dark:text-white" onClick={(e) => e.stopPropagation()}>
+      <div data-mplads-modal-card className="anim-card-in relative my-auto w-full max-w-3xl rounded-2xl border border-[#dcdde4] bg-white p-5 text-gray-900 shadow-soft-lg sm:p-6 dark:border-[#2e2e33] dark:bg-[#17181c] dark:text-white" onClick={(e) => e.stopPropagation()}>
 
         {/* Header */}
         <div className="flex items-start justify-between">

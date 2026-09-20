@@ -4,6 +4,8 @@ import AssistantWidget from "./components/AssistantWidget"
 import TopBar from "./components/TopBar"
 import { PageSkeleton } from "./components/Skeleton"
 import { AuthProvider, useAuth } from "./context/AuthContext"
+import { executeAssistantAction } from "./utils/executeActions"
+import { invalidateAPICache } from "./services/api"
 
 /* Application shell — single scroll-owner architecture:
    html/body never scroll; <main> is the only page-level scroll container
@@ -252,15 +254,71 @@ function AppShell() {
 
   // Context for the AI Assistant: which project the user is looking at
   // ("project:<id>" page tag) so "why is this risky?" resolves correctly.
+  // Sources: Projects' drawer (open-project), Risk Center / Audit Priority /
+  // Compare Projects / Project Detail modals (assistant-project-context).
+  // Context clears when the details surface close (explicit null events) or
+  // the page changes. Names ride along for display; ids stay authoritative.
   const [assistantProjectId, setAssistantProjectId] = useState(null)
   useEffect(() => {
-    const handler = (e) => setAssistantProjectId(e.detail?.projectId || null)
-    window.addEventListener("open-project", handler)
-    return () => window.removeEventListener("open-project", handler)
+    const fromProjects = (e) => setAssistantProjectId(e.detail?.projectId || null)
+    const fromDetailModals = (e) => setAssistantProjectId(e.detail?.projectId || null)
+    window.addEventListener("open-project", fromProjects)
+    window.addEventListener("assistant-project-context", fromDetailModals)
+    return () => {
+      window.removeEventListener("open-project", fromProjects)
+      window.removeEventListener("assistant-project-context", fromDetailModals)
+    }
   }, [])
   useEffect(() => {
     if (currentPage !== "Projects") setAssistantProjectId(null)
   }, [currentPage])
+
+  // Display names for the assistant's project-context indicator. Ids remain
+  // the only authoritative key (backend re-resolves everything); this map is
+  // purely cosmetic and bounded.
+  const [assistantProjectNames, setAssistantProjectNames] = useState({})
+  useEffect(() => {
+    const remember = (e) => {
+      const { projectId, projectName } = e.detail || {}
+      if (projectId && projectName) {
+        setAssistantProjectNames((prev) => (prev[projectId] === projectName ? prev : { ...prev, [projectId]: projectName }))
+      }
+    }
+    window.addEventListener("assistant-project-context", remember)
+    return () => window.removeEventListener("assistant-project-context", remember)
+  }, [])
+  const getAssistantProjectName = (pid) => (pid ? assistantProjectNames[pid] || null : null)
+
+  // ── Assistant action execution (JARVIS control plane) ────────────────
+  // The assistant returns structured, backend-validated actions; they are
+  // executed here through the app's EXISTING mechanisms (handleNavigate /
+  // handleDrillDown / openProjectFromWorkspace) — no second router.
+  // clear_filters / refresh_data are broadcast as events; filter pages
+  // reset their OWN existing filter state on "assistant:clear-filters"
+  // and re-run their existing loads on "assistant:refresh".
+  const executeAssistant = (action) => {
+    return executeAssistantAction(action, {
+      navigate: handleNavigate,
+      drillDown: handleDrillDown,
+      openProject: openProjectFromWorkspace,
+      clearFilters: () => window.dispatchEvent(new CustomEvent("assistant:clear-filters")),
+      refreshData: () => {
+        invalidateAPICache("")
+        window.dispatchEvent(new CustomEvent("assistant:refresh"))
+      },
+      hasPermission: (page) => {
+        // Defense-in-depth only — the backend already role-gates every
+        // action. Guests never reach workspace-only pages.
+        const GUEST_PAGES = new Set([
+          "Overview", "Projects", "Risk Center", "AI Audit Center", "Vendor Network",
+          "Ground Truth Verification", "Reports", "State Intelligence", "Audit Priority",
+          "Compare Projects", "FAQ", "Vendor Intelligence", "Settings",
+        ])
+        if (user) return true
+        return GUEST_PAGES.has(page)
+      },
+    })
+  }
 
   // Page state preservation: track which pages have been visited so we keep them mounted
   const visitedPages = useRef(new Set(["Overview"]))
@@ -283,7 +341,7 @@ function AppShell() {
       { key: "Ground Truth Verification", el: <VerifyPortal /> },
       { key: "Reports", el: <Reports fy={selectedFY} /> },
       { key: "State Intelligence", el: <StateIntelligence onNavigateToProjects={(state) => handleDrillDown("Projects", { state })} fy={selectedFY} /> },
-      { key: "Audit Priority", el: <AuditPriority fy={selectedFY} /> },
+      { key: "Audit Priority", el: <AuditPriority fy={selectedFY} drillDownParams={drillDownParams} onClearDrillDown={() => setDrillDownParams(null)} /> },
       { key: "Compare Projects", el: <CompareProjects fy={selectedFY} /> },
       { key: "FAQ", el: <FAQ /> },
       { key: "Vendor Intelligence", el: <VendorIntelligence onOpenProject={openProjectFromWorkspace} /> },
@@ -387,8 +445,10 @@ function AppShell() {
       <AssistantWidget
         currentPage={currentPage}
         contextProjectId={assistantProjectId}
+        contextProjectName={getAssistantProjectName(assistantProjectId)}
         onNavigate={handleNavigate}
         onOpenProject={openProjectFromWorkspace}
+        onExecuteAction={executeAssistant}
       />
     </div>
   )

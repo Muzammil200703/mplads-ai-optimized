@@ -202,6 +202,12 @@ export default function CompareProjects({ fy }) {
     if (selected.length >= MAX_COMPARE) return
     const newSelected = [...selected, proj]
     setSelected(newSelected)
+    // First selected project = the assistant's active project context.
+    if (newSelected.length === 1) {
+      window.dispatchEvent(new CustomEvent("assistant-project-context", {
+        detail: { projectId: proj.id, projectName: proj.project_name || null },
+      }))
+    }
     if (!details[proj.id]) {
       setLoadingDetail(proj.id)
       try {
@@ -223,6 +229,11 @@ export default function CompareProjects({ fy }) {
 
   const handleRemove = (id) => {
     setSelected((prev) => prev.filter((s) => s.id !== id))
+    // Removing the primary (first) project releases the assistant context —
+    // never silently re-anchor it onto another comparison project.
+    if (selected.length > 0 && selected[0].id === id) {
+      window.dispatchEvent(new CustomEvent("assistant-project-context", { detail: { projectId: null } }))
+    }
   }
 
   const handleClearSearch = () => {

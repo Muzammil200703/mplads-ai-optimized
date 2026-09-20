@@ -240,7 +240,12 @@ export async function getCategories() {
 }
 
 export async function getDashboardOverview(params = {}) {
-  return request(`/dashboard/overview${buildQuery(params)}`)
+  // Same success-only cache as the sibling dashboard aggregations (states /
+  // anomalies / early-warning use 2 min): re-mounts serve from cache instead of
+  // re-hitting the backend, and rejected requests are never cached, so a
+  // cold-start blip cannot stick as zeros.
+  return cachedGet(`dash_overview_${buildQuery(params)}`, 120000, () =>
+    request(`/dashboard/overview${buildQuery(params)}`))
 }
 
 export async function getDashboardStates(params = {}) {
