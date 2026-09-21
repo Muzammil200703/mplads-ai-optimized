@@ -3,7 +3,7 @@ import { getStates, getConstituencies } from "../services/api"
 
 const API_URL = import.meta.env.VITE_API_URL !== undefined
   ? import.meta.env.VITE_API_URL
-  : (import.meta.env.PROD ? "" : "http://127.0.0.1:8000")
+  : (import.meta.env.PROD ? "https://mplads-ai-optimized.onrender.com" : "http://127.0.0.1:8000")
 
 function Reports() {
   const [reportType, setReportType] = useState("Project Audit Report")

@@ -33,12 +33,12 @@ function IconFor({ icon }) {
   return icon
 }
 
-function NavRow({ icon, label, href, active, onNavigate, collapsed, badge }) {
+function NavRow({ icon, label, href, active, onNavigate, collapsed, badge, onClick }) {
   return (
     <button
       key={label}
       type="button"
-      onClick={() => href && onNavigate(href)}
+      onClick={onClick || (() => href && onNavigate(href))}
       title={collapsed ? label : ""}
       className={`
         group relative flex h-11 min-h-11 w-full flex-none items-center gap-3 rounded px-3
@@ -96,6 +96,7 @@ function Sidebar({
   isMobile,
   isOpen,
   onClose,
+  onSupportClick,
 }) {
   const { user, hasRole, can } = useAuth()
   // Auto-hiding scrollbar: a container-level class on the scroll element
@@ -206,7 +207,7 @@ function Sidebar({
               </>
             )}
               <div className="mt-2 flex flex-col gap-1 border-t border-[#dcdde4] pt-2 dark:border-[#2e2e33]">
-                {bottomNav.map((item) => <NavRow key={item.label} icon={item.icon} label={item.label} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} collapsed={collapsed} />)}
+                {bottomNav.map((item) => <NavRow key={item.label} icon={item.icon} label={item.label} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} onClick={item.label === "Support" ? onSupportClick : undefined} collapsed={collapsed} />)}
               </div>
             </div>
           </nav>
@@ -238,7 +239,7 @@ function Sidebar({
             </>
           )}
           <div className="mt-2 flex flex-col gap-1 border-t border-[#dcdde4] pt-2 dark:border-[#2e2e33]">
-            {bottomNav.map((item) => <NavRow key={item.label} icon={item.icon} label={item.label} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} collapsed={collapsed} />)}
+            {bottomNav.map((item) => <NavRow key={item.label} icon={item.icon} label={item.label} href={item.href} active={currentPage === item.href} onNavigate={onNavigate} onClick={item.label === "Support" ? onSupportClick : undefined} collapsed={collapsed} />)}
           </div>
         </div>
       </nav>

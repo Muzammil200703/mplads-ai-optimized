@@ -42,7 +42,7 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
           : 0
         const hasData = healthRes.status === "fulfilled" && healthRes.value?.data_ready !== false && projectCount > 0
 
-        if (hasData && ovRes.status === "fulfilled") {
+        if (hasData) {
           setOverview(ovRes.value)
           setBackendConnected(true)
           setDataReady(true)

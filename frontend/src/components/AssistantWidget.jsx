@@ -75,9 +75,30 @@ function AnswerBody({ text }) {
   )
 }
 
-export default function AssistantWidget({ currentPage, contextProjectId, onNavigate, onOpenProject }) {
+export default function AssistantWidget({
+  currentPage,
+  contextProjectId,
+  onNavigate,
+  onOpenProject,
+  open: controlledOpen,
+  onOpenChange,
+}) {
   const { user } = useAuth()
-  const [open, setOpen] = useState(false)
+
+  const [internalOpen, setInternalOpen] = useState(false)
+
+  const open = controlledOpen ?? internalOpen
+
+  const setOpen = (next) => {
+    const value = typeof next === "function" ? next(open) : next
+
+    if (controlledOpen !== undefined) {
+      onOpenChange?.(value)
+    } else {
+      setInternalOpen(value)
+    }
+  }
+
   const [messages, setMessages] = useState([]) // {role: 'user'|'assistant', text, actions?}
   const [input, setInput] = useState("")
   const [busy, setBusy] = useState(false)
