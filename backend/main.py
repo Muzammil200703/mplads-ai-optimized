@@ -348,7 +348,7 @@ async def lifespan(app: FastAPI):
 
             # Warm dashboard_overview (all FY) — same authoritative source as
             # the endpoint (metrics_svc), so warm values match live values.
-            set_cached("dashboard_overview_all", metrics_svc.portfolio_overview(db, fy=None))
+            set_cached("dashboard_overview_all", metrics_svc.portfolio_overview(db, fy=None, house=None))
             # Vendor directory is expensive to derive from the work-level
             # tables, so warm its compact summary once at startup. Subsequent
             # filter/sort/page requests only slice the in-memory result.
@@ -622,6 +622,7 @@ def _enrich_projects_with_risk(projects, db, include_rec: bool = True):
             "completion_percentage": p.completion_percentage or 0.0,
             "status": p.status,
             "fy": p.fy,
+            "house": p.house,
             "risk": {
                 "risk_score": risk.risk_score if risk else None,
                 "risk_level": risk.risk_level if risk else None,
@@ -826,6 +827,7 @@ def get_projects(
     state: Optional[str] = None,
     district: Optional[str] = None,
     constituency: Optional[str] = None,
+    house: Optional[str] = Query(None, description="House: 'Lok Sabha', 'Rajya Sabha', or omitted for All"),
     fy: Optional[str] = Query(None, description="Filter by financial year: 2023-24, 2024-25, 2025-26, 2026-27"),
     project_type: Optional[str] = None,
     status: Optional[str] = None,
@@ -873,6 +875,10 @@ def get_projects(
         query = query.filter(models.Project.district == district)
     if constituency:
         query = query.filter(models.Project.constituency == constituency)
+    # House filter: only exact attributed houses; "All" (omitted) includes
+    # unattributed rows. NULL house is never silently counted into a house.
+    if house in ("Lok Sabha", "Rajya Sabha"):
+        query = query.filter(models.Project.house == house)
     if fy:
         query = query.filter(models.Project.fy == fy)
     if project_type:
@@ -917,6 +923,7 @@ def search_projects(
     state: Optional[str] = None,
     district: Optional[str] = None,
     constituency: Optional[str] = None,
+    house: Optional[str] = Query(None, description="House: 'Lok Sabha', 'Rajya Sabha', or omitted for All"),
     fy: Optional[str] = Query(None, description="Filter by financial year"),
     project_type: Optional[str] = None,
     status: Optional[str] = None,
@@ -959,6 +966,8 @@ def search_projects(
                 if district and project.district != district:
                     return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
                 if constituency and project.constituency != constituency:
+                    return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
+                if house in ("Lok Sabha", "Rajya Sabha") and project.house != house:
                     return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
                 if fy and project.fy != fy:
                     return {"total": 0, "skip": 0, "limit": limit, "results": [], "hasMore": False}
@@ -1058,6 +1067,8 @@ def search_projects(
         query = query.filter(models.Project.district == district)
     if constituency:
         query = query.filter(models.Project.constituency == constituency)
+    if house in ("Lok Sabha", "Rajya Sabha"):
+        query = query.filter(models.Project.house == house)
     if fy:
         query = query.filter(models.Project.fy == fy)
     if project_type:
@@ -1157,6 +1168,7 @@ def get_project(
             "constituency": project.constituency,
             "project_type": project.project_type,
             "status": project.status,
+            "house": project.house,
             "sanctioned_amount": project.sanctioned_amount or 0.0,
             # Authoritative per-project spend: linked payment-ledger total
             # (project_rec_info). The catalog's column is a zeroed legacy stamp.
@@ -1297,15 +1309,17 @@ def get_project_expenditure_activity_endpoint(
 @app.get("/dashboard/overview", tags=["Dashboard"])
 def dashboard_overview(
     fy: Optional[str] = Query(None, description="Filter by financial year"),
+    house: Optional[str] = Query(None, description="House: 'Lok Sabha', 'Rajya Sabha', or omitted for All"),
     db: Session = Depends(get_db)
 ):
-    cache_key = f"dashboard_overview_{fy or 'all'}"
+    house_norm = house if house in ("Lok Sabha", "Rajya Sabha") else None
+    cache_key = f"dashboard_overview_{fy or 'all'}_{house_norm or 'all'}"
     cached = get_cached(cache_key, ttl_seconds=60)
     if cached is not None:
         return cached
 
-    # Use warmed cache for the common all-FY case
-    if not fy:
+    # Use warmed cache for the common all-FY/all-house case
+    if not fy and not house_norm:
         warmed = get_cached("dashboard_overview_all", ttl_seconds=600)
         if warmed is not None:
             set_cached(cache_key, warmed)
@@ -1313,7 +1327,7 @@ def dashboard_overview(
 
     # Authoritative aggregates (metrics_svc): sanctioned from the project
     # catalog, expenditure/completions from the payment/completions ledgers.
-    result = metrics_svc.portfolio_overview(db, fy=fy)
+    result = metrics_svc.portfolio_overview(db, fy=fy, house=house_norm)
 
     set_cached(cache_key, result)
     return result
@@ -1322,9 +1336,11 @@ def dashboard_overview(
 @app.get("/dashboard/states", tags=["Dashboard"])
 def dashboard_states(
     fy: Optional[str] = Query(None, description="Filter by financial year"),
+    house: Optional[str] = Query(None, description="House: 'Lok Sabha', 'Rajya Sabha', or omitted for All"),
     db: Session = Depends(get_db)
 ):
-    cache_key = f"dashboard_states_{fy or 'all'}"
+    house_norm = house if house in ("Lok Sabha", "Rajya Sabha") else None
+    cache_key = f"dashboard_states_{fy or 'all'}_{house_norm or 'all'}"
     cached = get_cached(cache_key, ttl_seconds=120)
     if cached is not None:
         return cached
@@ -1332,6 +1348,8 @@ def dashboard_states(
     base_q = db.query(models.Project)
     if fy:
         base_q = base_q.filter(models.Project.fy == fy)
+    if house_norm:
+        base_q = base_q.filter(models.Project.house == house_norm)
 
     rows = (
         base_q.with_entities(
@@ -1349,8 +1367,9 @@ def dashboard_states(
     )
 
     # Authoritative expenditure: payment ledger grouped by its own state column
-    # (state labels verified to match the project catalog 1:1).
-    ledger_by_state = metrics_svc.state_ledger_map(db, fy=fy)
+    # (state labels verified to match the project catalog 1:1). House-scoped
+    # via the ledger's own house column when requested.
+    ledger_by_state = metrics_svc.state_ledger_map(db, fy=fy, house=house_norm)
     # MP+IDA-verified project linkage, deduplicated by work key — the
     # attributable subset of the ledger (the remainder cannot be verifiably
     # joined to catalog projects; surfaced so the UI can disclose the gap).
@@ -1383,6 +1402,33 @@ def dashboard_states(
             "unattributed_expenditure": round(spent - work_verified, 2),
         })
 
+    set_cached(cache_key, result)
+    return result
+
+
+@app.get("/dashboard/house", tags=["Dashboard"])
+def dashboard_house(
+    house: str = Query("Rajya Sabha", description="House: 'Rajya Sabha' or 'Lok Sabha'"),
+    fy: Optional[str] = Query(None, description="Filter by financial year"),
+    db: Session = Depends(get_db)
+):
+    """Official eSAKSHI-style per-house dashboard metrics.
+
+    Mirrors the official MPLADS dashboard's per-house summary (allocated,
+    expenditure, utilization, expenditure rate, MPs, completed/pending
+    works, ongoing-work payments) from the authoritative ledgers, with the
+    metric definitions documented in metrics_svc.house_dashboard.
+    """
+    house_norm = house.strip()
+    if house_norm not in ("Rajya Sabha", "Lok Sabha"):
+        raise HTTPException(status_code=422, detail="house must be 'Rajya Sabha' or 'Lok Sabha'")
+
+    cache_key = f"dashboard_house_{house_norm}_{fy or 'all'}"
+    cached = get_cached(cache_key, ttl_seconds=120)
+    if cached is not None:
+        return cached
+
+    result = metrics_svc.house_dashboard(db, house=house_norm, fy=fy)
     set_cached(cache_key, result)
     return result
 
@@ -1424,9 +1470,11 @@ def dashboard_mps(
 @app.get("/dashboard/anomalies-summary", tags=["Dashboard"])
 def anomalies_summary(
     fy: Optional[str] = Query(None, description="Filter by financial year"),
+    house: Optional[str] = Query(None, description="House: 'Lok Sabha', 'Rajya Sabha', or omitted for All"),
     db: Session = Depends(get_db)
 ):
-    cache_key = f"anomalies_summary_{fy or 'all'}"
+    house_norm = house if house in ("Lok Sabha", "Rajya Sabha") else None
+    cache_key = f"anomalies_summary_{fy or 'all'}_{house_norm or 'all'}"
     cached = get_cached(cache_key, ttl_seconds=300)
     if cached is not None:
         return cached
@@ -1441,6 +1489,8 @@ def anomalies_summary(
         )
         if fy:
             base_q = base_q.filter(models.Project.fy == fy)
+        if house_norm:
+            base_q = base_q.filter(models.Project.house == house_norm)
         rows = base_q.group_by(models.RiskScore.risk_level).all()
 
         level_map = {"high": 0, "medium": 0, "low": 0}
@@ -1449,9 +1499,12 @@ def anomalies_summary(
             if key in level_map:
                 level_map[key] = row.cnt
 
-        total_checked = db.query(func.count(models.Project.id)).filter(
-            models.Project.fy == fy if fy else True
-        ).scalar() or 0
+        total_q = db.query(func.count(models.Project.id))
+        if fy:
+            total_q = total_q.filter(models.Project.fy == fy)
+        if house_norm:
+            total_q = total_q.filter(models.Project.house == house_norm)
+        total_checked = total_q.scalar() or 0
 
         result = {
             "total_projects_checked": total_checked,
@@ -1467,6 +1520,8 @@ def anomalies_summary(
     base_q = db.query(models.Project)
     if fy:
         base_q = base_q.filter(models.Project.fy == fy)
+    if house_norm:
+        base_q = base_q.filter(models.Project.house == house_norm)
 
     # Single pass with CASE WHEN to count all categories at once.
     # Spend conditions use the authoritative linked expenditure
@@ -1515,6 +1570,7 @@ def refresh_anomalies_summary():
 @app.get("/dashboard/early-warning", tags=["Dashboard"])
 def dashboard_early_warning(
     fy: Optional[str] = Query(None, description="Filter by financial year"),
+    house: Optional[str] = Query(None, description="House: 'Lok Sabha', 'Rajya Sabha', or omitted for All"),
     db: Session = Depends(get_db),
 ):
     """Portfolio early-warning summary + FY trends — all SQL-side aggregates.
@@ -1530,13 +1586,17 @@ def dashboard_early_warning(
     Bands overlap by design (watch = pre-risk leading indicator).
     Trends use the fy column and expenditure dates already in the dataset.
     """
-    cache_key = f"early_warning_{fy or 'all'}"
+    house_norm = house if house in ("Lok Sabha", "Rajya Sabha") else None
+    cache_key = f"early_warning_{fy or 'all'}_{house_norm or 'all'}"
     cached = get_cached(cache_key, ttl_seconds=300)
     if cached is not None:
         return cached
 
     fy_filter = "AND p.fy = :fy" if fy else ""
+    house_filter = "AND p.house = :house" if house_norm else ""
     params = {"fy": fy} if fy else {}
+    if house_norm:
+        params["house"] = house_norm
 
     # ── 1. Warning bands (single pass over projects LEFT JOIN risk) ──
     # Spend-with-no-progress uses the derived project_rec_info linkage
@@ -1560,7 +1620,7 @@ def dashboard_early_warning(
         FROM projects p
         LEFT JOIN risk_scores rs ON rs.project_id = p.id
         LEFT JOIN project_rec_info pri ON pri.project_id = p.id
-        WHERE 1=1 {fy_filter}
+        WHERE 1=1 {fy_filter} {house_filter}
     """), params).one()
 
     total = int(bands.total or 0)
@@ -1573,20 +1633,22 @@ def dashboard_early_warning(
     #       sanctioned by catalog fy; expenditure + completions from the
     #       payment/completions ledgers grouped by payment/completion-date FY.
     #       Same numbers power the FY tables everywhere; no other aggregation. ──
-    trend_rows = metrics_svc.fy_trends(db)
+    trend_rows = metrics_svc.fy_trends(db, house=house_norm)
 
     # ── 3. Monthly expenditure trend from the expenditure ledger (dates exist
     #       there; project rows don't carry spend dates). Compact: ≤ 24 rows. ──
-    monthly = db.execute(text("""
+    monthly_sql = """
         SELECT substr(e.expenditure_date, 1, 7) AS ym,
                COALESCE(SUM(e.expenditure_amount), 0) AS amount,
                COUNT(*) AS tx
         FROM expenditures e
         WHERE e.expenditure_date IS NOT NULL AND length(e.expenditure_date) >= 7
+          {house_filter}
         GROUP BY substr(e.expenditure_date, 1, 7)
         ORDER BY ym
         LIMIT 36
-    """)).fetchall()
+    """.format(house_filter="AND e.house = :house" if house_norm else "")
+    monthly = db.execute(text(monthly_sql), params).fetchall()
 
     # ── 4. Top early-warning states (most critical+early projects) ──
     hot_states = db.execute(text(f"""
@@ -1595,7 +1657,7 @@ def dashboard_early_warning(
                COUNT(*) AS total
         FROM projects p
         LEFT JOIN risk_scores rs ON rs.project_id = p.id
-        WHERE p.state IS NOT NULL {fy_filter}
+        WHERE p.state IS NOT NULL {fy_filter} {house_filter}
         GROUP BY p.state
         ORDER BY flagged DESC, total DESC
         LIMIT 8
@@ -2503,6 +2565,7 @@ def detect_anomalies(
     risk_level: Optional[str] = None,
     state: Optional[str] = None,
     constituency: Optional[str] = None,
+    house: Optional[str] = Query(None, description="House: 'Lok Sabha', 'Rajya Sabha', or omitted for All"),
     fy: Optional[str] = Query(None, description="Filter by financial year"),
     q: Optional[str] = Query(None, description="Search by project name or ID"),
     sort_by: Optional[str] = Query(None, description="Sort: risk_score, sanctioned_amount, expenditure, completion_percentage, project_name, state, id"),
@@ -2525,6 +2588,8 @@ def detect_anomalies(
             query = query.filter(models.Project.state == state)
         if constituency:
             query = query.filter(models.Project.constituency == constituency)
+        if house in ("Lok Sabha", "Rajya Sabha"):
+            query = query.filter(models.Project.house == house)
         if fy:
             query = query.filter(models.Project.fy == fy)
         if risk_level:
@@ -2872,9 +2937,11 @@ def get_ai_insights(db: Session = Depends(get_db)):
 @app.get("/ai/narrative-insights", tags=["AI Operations"])
 def narrative_insights(
     fy: Optional[str] = Query(None, description="Filter by financial year"),
+    house: Optional[str] = Query(None, description="House: 'Lok Sabha', 'Rajya Sabha', or omitted for All"),
     db: Session = Depends(get_db),
 ):
-    cache_key = f"narrative_insights_{fy or 'all'}"
+    house_norm = house if house in ("Lok Sabha", "Rajya Sabha") else None
+    cache_key = f"narrative_insights_{fy or 'all'}_{house_norm or 'all'}"
     cached = get_cached(cache_key, ttl_seconds=120)
     if cached is not None:
         return cached
@@ -2882,11 +2949,13 @@ def narrative_insights(
     base_q = db.query(models.Project)
     if fy:
         base_q = base_q.filter(models.Project.fy == fy)
+    if house_norm:
+        base_q = base_q.filter(models.Project.house == house_norm)
 
     insights = []
     # Authoritative aggregates: sanctioned from the catalog, expenditure and
     # completions from the payment/completions ledgers (metrics_svc).
-    stats = metrics_svc.portfolio_overview(db, fy=fy)
+    stats = metrics_svc.portfolio_overview(db, fy=fy, house=house_norm)
 
     total_projects = int(stats["total_projects"] or 0)
     sanctioned = float(stats["total_sanctioned_amount"] or 0)
@@ -3052,10 +3121,12 @@ def state_insights(
 @app.get("/dashboard/state-intelligence", tags=["Dashboard"])
 def state_intelligence(
     fy: Optional[str] = Query(None, description="Filter by financial year"),
+    house: Optional[str] = Query(None, description="House: 'Lok Sabha', 'Rajya Sabha', or omitted for All"),
     db: Session = Depends(get_db)
 ):
     """Return detailed analytics for all states."""
-    cache_key = f"state_intelligence_{fy or 'all'}"
+    house_norm = house if house in ("Lok Sabha", "Rajya Sabha") else None
+    cache_key = f"state_intelligence_{fy or 'all'}_{house_norm or 'all'}"
     cached = get_cached(cache_key, ttl_seconds=120)
     if cached is not None:
         return cached
@@ -3063,6 +3134,8 @@ def state_intelligence(
     base_q = db.query(models.Project).filter(models.Project.state.isnot(None), models.Project.state != "")
     if fy:
         base_q = base_q.filter(models.Project.fy == fy)
+    if house_norm:
+        base_q = base_q.filter(models.Project.house == house_norm)
 
     # Main state stats query (expenditure merged from the payment ledger below)
     rows = (
@@ -3092,12 +3165,15 @@ def state_intelligence(
     )
     if fy:
         hr_q = hr_q.filter(models.Project.fy == fy)
+    if house_norm:
+        hr_q = hr_q.filter(models.Project.house == house_norm)
     high_risk_rows = hr_q.group_by(models.Project.state).all()
     risk_map = {r.state: r for r in high_risk_rows}
 
     # Authoritative expenditure: payment ledger grouped by its own state column
-    # (state labels verified to match the project catalog 1:1).
-    ledger_by_state = metrics_svc.state_ledger_map(db, fy=fy)
+    # (state labels verified to match the project catalog 1:1). House-scoped
+    # via the ledger's own house column when requested.
+    ledger_by_state = metrics_svc.state_ledger_map(db, fy=fy, house=house_norm)
     # MP+IDA-verified project linkage, deduplicated by work key — disclosed
     # alongside so the state total is never confused with the project-attributable
     # subset (the gap is a dataset linkage limitation, not hidden data).
@@ -3171,6 +3247,7 @@ def expenditure_reconciliation(
 @app.get("/audit-priority/summary", tags=["Anomaly Detection"])
 def audit_priority_summary(
     fy: Optional[str] = Query(None),
+    house: Optional[str] = Query(None, description="House: 'Lok Sabha', 'Rajya Sabha', or omitted for All"),
     db: Session = Depends(get_db),
 ):
     """
@@ -3185,6 +3262,8 @@ def audit_priority_summary(
     ).filter(models.RiskScore.risk_score > 0)
     if fy:
         base = base.filter(models.Project.fy == fy)
+    if house in ("Lok Sabha", "Rajya Sabha"):
+        base = base.filter(models.Project.house == house)
 
     total = base.count()
     high = base.filter(models.RiskScore.risk_level == "High").count()
@@ -3243,6 +3322,7 @@ def audit_priority(
     constituency: Optional[str] = None,
     fy: Optional[str] = Query(None, description="Filter by financial year"),
     risk_level: Optional[str] = None,
+    house: Optional[str] = Query(None, description="House: 'Lok Sabha', 'Rajya Sabha', or omitted for All"),
     tier: Optional[str] = Query(None, description="Audit priority tier: P1 | P2 | P3 | P4"),
     q: Optional[str] = None,
     sort_by: Optional[str] = Query(None),
@@ -3270,6 +3350,8 @@ def audit_priority(
         query = query.filter(models.Project.constituency == constituency)
     if fy:
         query = query.filter(models.Project.fy == fy)
+    if house in ("Lok Sabha", "Rajya Sabha"):
+        query = query.filter(models.Project.house == house)
     if risk_level:
         query = query.filter(models.RiskScore.risk_level.ilike(risk_level))
     if tier:
@@ -3712,6 +3794,11 @@ def get_similar_projects(
         .filter(models.Project.sanctioned_amount >= low_range)
         .filter(models.Project.sanctioned_amount <= high_range)
     )
+    # House-aware "Project Twins": when the anchor's house is known, twins
+    # come only from the same house (LS and RS works differ in scale and
+    # funding structure). Unattributed anchors keep the wider net.
+    if getattr(project, "house", None) in ("Lok Sabha", "Rajya Sabha"):
+        query = query.filter(models.Project.house == project.house)
 
     similar = query.limit(limit).all()
 
@@ -4084,12 +4171,14 @@ def export_report(
     fy: Optional[str] = Query(None, description="Filter by financial year"),
     status: Optional[str] = Query(None),
     risk_level: Optional[str] = Query(None),
+    house: Optional[str] = Query(None, description="House: 'Lok Sabha', 'Rajya Sabha', or omitted for All"),
     sort_by: Optional[str] = Query(None),
     sort_dir: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
     """Generate a CSV report server-side using the full dataset."""
     _constituency = constituency or district  # backward compat
+    _house = house if house in ("Lok Sabha", "Rajya Sabha") else None
     # Build query based on report type
     if report_type == "Anomaly Summary Report" and risk_level:
         query = (
@@ -4102,6 +4191,8 @@ def export_report(
             query = query.filter(models.Project.constituency == _constituency)
         if fy:
             query = query.filter(models.Project.fy == fy)
+        if _house:
+            query = query.filter(models.Project.house == _house)
         if risk_level:
             query = query.filter(models.RiskScore.risk_level.ilike(risk_level))
 
@@ -4145,6 +4236,8 @@ def export_report(
         query = query.filter(models.Project.fy == fy)
     if status:
         query = query.filter(models.Project.status.ilike(status))
+    if _house:
+        query = query.filter(models.Project.house == _house)
 
     if sort_by:
         query = apply_sort(query, sort_by, sort_dir)
@@ -4200,10 +4293,12 @@ def export_report_count(
     fy: Optional[str] = Query(None, description="Filter by financial year"),
     status: Optional[str] = Query(None),
     risk_level: Optional[str] = Query(None),
+    house: Optional[str] = Query(None, description="House: 'Lok Sabha', 'Rajya Sabha', or omitted for All"),
     db: Session = Depends(get_db)
 ):
     """Return the count of records that would be exported."""
     _constituency = constituency or district  # backward compat
+    _house = house if house in ("Lok Sabha", "Rajya Sabha") else None
     if report_type == "Anomaly Summary Report" and risk_level:
         query = (
             db.query(func.count(models.RiskScore.id))
@@ -4215,6 +4310,8 @@ def export_report_count(
             query = query.filter(models.Project.constituency == _constituency)
         if fy:
             query = query.filter(models.Project.fy == fy)
+        if _house:
+            query = query.filter(models.Project.house == _house)
         if risk_level:
             query = query.filter(models.RiskScore.risk_level.ilike(risk_level))
         total = query.scalar() or 0
@@ -4228,6 +4325,8 @@ def export_report_count(
             query = query.filter(models.Project.fy == fy)
         if status:
             query = query.filter(models.Project.status.ilike(status))
+        if _house:
+            query = query.filter(models.Project.house == _house)
         total = query.scalar() or 0
 
     return {"total_records": total}

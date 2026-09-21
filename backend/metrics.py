@@ -66,16 +66,25 @@ def _fy_expr(col):
     )
 
 
-def ledger_totals(db: Session) -> Dict[str, Any]:
-    """Portfolio-wide expenditure + completed totals from the ledgers."""
-    exp = db.query(
+def ledger_totals(db: Session, house: Optional[str] = None) -> Dict[str, Any]:
+    """Portfolio-wide expenditure + completed totals from the ledgers,
+    optionally scoped to one house (ledgers carry a house column).
+    Completed counts/amounts count only snapshot rows (source='esakshi')
+    so they match the official metric set; the expenditure ledger is
+    already an exact snapshot partition (no legacy rows exist there)."""
+    exp_q = db.query(
         func.coalesce(func.sum(models.Expenditure.expenditure_amount), 0.0).label("amount"),
         func.count(models.Expenditure.id).label("transactions"),
-    ).one()
-    comp = db.query(
+    )
+    comp_q = db.query(
         func.coalesce(func.sum(models.CompletedWork.final_amount), 0.0).label("amount"),
         func.count(models.CompletedWork.id).label("works"),
-    ).one()
+    ).filter(models.CompletedWork.source == "esakshi")
+    if house:
+        exp_q = exp_q.filter(models.Expenditure.house == house)
+        comp_q = comp_q.filter(models.CompletedWork.house == house)
+    exp = exp_q.one()
+    comp = comp_q.one()
     return {
         "total_expenditure": float(exp.amount or 0),
         "expenditure_transactions": int(exp.transactions or 0),
@@ -85,10 +94,14 @@ def ledger_totals(db: Session) -> Dict[str, Any]:
 
 
 def ledger_totals_scoped(
-    db: Session, state: Optional[str] = None, fy: Optional[str] = None
+    db: Session,
+    state: Optional[str] = None,
+    fy: Optional[str] = None,
+    house: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Ledger totals, optionally scoped by state (ledger's own state
-    column) and/or financial year (payment/completion date, Indian FY)."""
+    column), financial year (payment/completion date, Indian FY) and/or
+    house (ledger's own house column)."""
     exp_q = db.query(
         func.coalesce(func.sum(models.Expenditure.expenditure_amount), 0.0).label("amount"),
         func.count(models.Expenditure.id).label("transactions"),
@@ -97,16 +110,20 @@ def ledger_totals_scoped(
         exp_q = exp_q.filter(models.Expenditure.state == state)
     if fy:
         exp_q = exp_q.filter(_fy_expr(models.Expenditure.expenditure_date) == fy)
+    if house:
+        exp_q = exp_q.filter(models.Expenditure.house == house)
     exp = exp_q.one()
 
     comp_q = db.query(
         func.coalesce(func.sum(models.CompletedWork.final_amount), 0.0).label("amount"),
         func.count(models.CompletedWork.id).label("works"),
-    )
+    ).filter(models.CompletedWork.source == "esakshi")
     if state:
         comp_q = comp_q.filter(models.CompletedWork.state == state)
     if fy:
         comp_q = comp_q.filter(_fy_expr(models.CompletedWork.completed_date) == fy)
+    if house:
+        comp_q = comp_q.filter(models.CompletedWork.house == house)
     comp = comp_q.one()
 
     return {
@@ -117,15 +134,171 @@ def ledger_totals_scoped(
     }
 
 
-def portfolio_overview(db: Session, fy: Optional[str] = None) -> Dict[str, Any]:
+def house_dashboard(db: Session, house: str, fy: Optional[str] = None) -> Dict[str, Any]:
+    """Official eSAKSHI-style per-house dashboard metrics.
+
+    Reference-first: the `reference_dashboard_metrics` table holds the
+    official eSAKSHI values for the snapshot date as backend data (RS
+    transcribed from the official dashboard, LS derived from the same
+    batch's CSVs). When an FY filter is absent AND the reference row for
+    this house exists, those values are returned verbatim with provenance
+    so the UI always matches the official snapshot. With an FY filter (or
+    a missing reference row) the metrics are COMPUTED from the snapshot
+    partitions (source='esakshi' rows only — legacy GitHub-provider and
+    dropped works are excluded), with the same definitions:
+
+    - total_allocated       SUM(mp_summaries.allocated_amount) for the house
+                            — "total funds allocated to MPs".
+    - total_expenditure     SUM(expenditures.expenditure_amount) for the house
+                            — official definition: "total vendor payments
+                            released against completed/ongoing works".
+    - fund_utilization      recommended_amount / allocated — official caption:
+                            "share of allocation recommended by MPs".
+    - expenditure_rate      expenditure / allocated — official caption:
+                            "vendor expenditure recorded as a share of
+                            allocation".
+    - total_mps             COUNT(mp_summaries rows) for the house.
+    - works_completed       COUNT(completed_works rows) for the house.
+    - completed_work_value  SUM(completed_works.final_amount).
+    - works_pending         recommended_works rows − completed_works rows
+                            (the official portal's pending = recommended −
+                            completed; our two ledgers share no work keys, so
+                            per-work netting is impossible — see README).
+    - ongoing_payments      expenditure − completed value — official caption:
+                            "vendor expenditure linked to works not yet marked
+                            complete".
+
+    FY note: the ledgers carry absolute payment/completion dates, not MP
+    tenure; an FY filter scopes payments by Indian FY of the payment date.
+    """
+    # ── Reference-first path (no FY filter): serve the stored snapshot. ──
+    if not fy:
+        try:
+            ref = db.execute(
+                text("SELECT * FROM reference_dashboard_metrics WHERE house = :h"),
+                {"h": house},
+            ).mappings().first()
+        except Exception:
+            ref = None
+        if ref:
+            return {
+                "house": house,
+                "total_allocated": float(ref["total_allocated"] or 0),
+                "total_expenditure": float(ref["total_expenditure"] or 0),
+                "expenditure_transactions": None,
+                "fund_utilization_percentage": float(ref["fund_utilization_percentage"] or 0),
+                "expenditure_rate_percentage": float(ref["expenditure_rate_percentage"] or 0),
+                "total_mps": int(ref["total_mps"] or 0),
+                "works_completed": int(ref["works_completed"] or 0),
+                "completed_work_value": float(ref["completed_work_value"] or 0),
+                "works_recommended": None,
+                "recommended_amount": None,
+                "works_pending": int(ref["works_pending"] or 0),
+                "ongoing_work_payments": float(ref["ongoing_work_payments"] or 0),
+                "data_snapshot": {
+                    "last_payment_date": None,
+                    "last_completion_date": None,
+                    "last_recommendation_date": None,
+                    "source": ref["source"],
+                    "label": ref["snapshot_label"],
+                    "reference": True,
+                },
+            }
+
+    # ── Computed path (FY-filtered or missing reference row). ──
+    alloc = (
+        db.query(func.coalesce(func.sum(models.MPSummary.allocated_amount), 0.0))
+        .filter(models.MPSummary.house == house)
+        .scalar()
+    ) or 0.0
+    mps = (
+        db.query(func.count(models.MPSummary.id))
+        .filter(models.MPSummary.house == house)
+        .scalar()
+    ) or 0
+
+    exp_q = db.query(
+        func.coalesce(func.sum(models.Expenditure.expenditure_amount), 0.0),
+        func.count(models.Expenditure.id),
+    ).filter(models.Expenditure.house == house)
+    rec_q = db.query(
+        func.coalesce(func.sum(models.RecommendedWork.recommended_amount), 0.0),
+        func.count(models.RecommendedWork.id),
+    ).filter(models.RecommendedWork.house == house, models.RecommendedWork.source == "esakshi")
+    comp_q = db.query(
+        func.coalesce(func.sum(models.CompletedWork.final_amount), 0.0),
+        func.count(models.CompletedWork.id),
+    ).filter(models.CompletedWork.house == house, models.CompletedWork.source == "esakshi")
+
+    if fy:
+        exp_q = exp_q.filter(_fy_expr(models.Expenditure.expenditure_date) == fy)
+        rec_q = rec_q.filter(_fy_expr(models.RecommendedWork.recommendation_date) == fy)
+        comp_q = comp_q.filter(_fy_expr(models.CompletedWork.completed_date) == fy)
+
+    exp_amt, exp_n = exp_q.one()
+    rec_amt, rec_n = rec_q.one()
+    comp_amt, comp_n = comp_q.one()
+
+    exp_amt = float(exp_amt or 0)
+    rec_amt = float(rec_amt or 0)
+    comp_amt = float(comp_amt or 0)
+
+    fund_utilization = (rec_amt / alloc * 100) if alloc > 0 else 0.0
+    expenditure_rate = (exp_amt / alloc * 100) if alloc > 0 else 0.0
+
+    # Dataset snapshot dates (max observed event per ledger, house-scoped).
+    last_payment = (
+        db.query(func.max(models.Expenditure.expenditure_date))
+        .filter(models.Expenditure.house == house)
+        .scalar()
+    )
+    last_completion = (
+        db.query(func.max(models.CompletedWork.completed_date))
+        .filter(models.CompletedWork.house == house)
+        .scalar()
+    )
+    last_recommendation = (
+        db.query(func.max(models.RecommendedWork.recommendation_date))
+        .filter(models.RecommendedWork.house == house, models.RecommendedWork.source == "esakshi")
+        .scalar()
+    )
+
+    return {
+        "house": house,
+        "total_allocated": alloc,
+        "total_expenditure": exp_amt,
+        "expenditure_transactions": int(exp_n or 0),
+        "fund_utilization_percentage": round(fund_utilization, 2),
+        "expenditure_rate_percentage": round(expenditure_rate, 2),
+        "total_mps": int(mps),
+        "works_completed": int(comp_n or 0),
+        "completed_work_value": comp_amt,
+        "works_recommended": int(rec_n or 0),
+        "recommended_amount": rec_amt,
+        "works_pending": max(int(rec_n or 0) - int(comp_n or 0), 0),
+        "ongoing_work_payments": max(exp_amt - comp_amt, 0.0),
+        "data_snapshot": {
+            "last_payment_date": last_payment,
+            "last_completion_date": last_completion,
+            "last_recommendation_date": last_recommendation,
+            "source": "MPLADS eSAKSHI dataset import (batch snapshot, not a live feed)",
+            "reference": False,
+        },
+    }
+
+
+def portfolio_overview(
+    db: Session, fy: Optional[str] = None, house: Optional[str] = None
+) -> Dict[str, Any]:
     """The canonical dashboard-overview payload.
 
-    projects       = project catalog rows (optionally FY-filtered by the
-                     catalog's own fy column)
+    projects       = project catalog rows (optionally FY/house-filtered by
+                     the catalog's own fy/house columns; house NULL rows are
+                     excluded only when a specific house is requested)
     sanctioned     = SUM(projects.sanctioned_amount) — real recorded values
-    expenditure    = SUM from the payment ledger (FY-scoped by payment
-                     date when a FY filter is given, unscoped otherwise
-                     because ledger rows cannot be joined to projects)
+    expenditure    = SUM from the payment ledger (house-scoped via the
+                     ledger's own house column; FY-scoped by payment date
+                     when a FY filter is given)
     completed      = count from the completions ledger (same scoping rule)
     utilization    = expenditure / sanctioned * 100 (unrounded)
     """
@@ -140,12 +313,16 @@ def portfolio_overview(db: Session, fy: Optional[str] = None) -> Dict[str, Any]:
     )
     if fy:
         q = q.filter(models.Project.fy == fy)
+    if house in ("Lok Sabha", "Rajya Sabha"):
+        q = q.filter(models.Project.house == house)
     stats = q.one()
 
-    total_mps = db.query(func.count(models.MPSummary.id)).scalar() or 0
+    mp_q = db.query(func.count(models.MPSummary.id))
+    if house in ("Lok Sabha", "Rajya Sabha"):
+        mp_q = mp_q.filter(models.MPSummary.house == house)
+    total_mps = mp_q.scalar() or 0
 
-    scoped = fy is not None
-    led = ledger_totals_scoped(db, fy=fy) if scoped else ledger_totals(db)
+    led = ledger_totals_scoped(db, fy=fy, house=house)
 
     total_sanctioned = float(stats.total_sanctioned or 0)
     total_expenditure = float(led["total_expenditure"])
@@ -165,8 +342,9 @@ def portfolio_overview(db: Session, fy: Optional[str] = None) -> Dict[str, Any]:
         "total_mps": total_mps,
         "total_states": int(stats.total_states or 0),
         "recommended_works": int(stats.recommended_works or 0),
-        "expenditure_scope": "fy_payment_date" if scoped else "full_ledger",
-        "completed_scope": "fy_completion_date" if scoped else "full_ledger",
+        "expenditure_scope": "ledger_direct",
+        "completed_scope": "ledger_direct",
+        "house": house if house in ("Lok Sabha", "Rajya Sabha") else "All",
     }
 
 
@@ -435,9 +613,12 @@ def state_expenditure_reconciliation(db: Session, fy: Optional[str] = None) -> D
     }
 
 
-def state_ledger_map(db: Session, fy: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+def state_ledger_map(
+    db: Session, fy: Optional[str] = None, house: Optional[str] = None
+) -> Dict[str, Dict[str, Any]]:
     """state -> ledger totals (expenditure by the ledger's own state column,
-    completions by the completions ledger's state column)."""
+    completions by the completions ledger's state column), optionally
+    house-scoped via each ledger's own house column."""
     out: Dict[str, Dict[str, Any]] = {}
 
     eq = db.query(
@@ -447,6 +628,8 @@ def state_ledger_map(db: Session, fy: Optional[str] = None) -> Dict[str, Dict[st
     )
     if fy:
         eq = eq.filter(_fy_expr(models.Expenditure.expenditure_date) == fy)
+    if house in ("Lok Sabha", "Rajya Sabha"):
+        eq = eq.filter(models.Expenditure.house == house)
     for r in eq.group_by("g").all():
         entry = out.setdefault(
             r.g or "Unknown",
@@ -462,6 +645,8 @@ def state_ledger_map(db: Session, fy: Optional[str] = None) -> Dict[str, Dict[st
     )
     if fy:
         cq = cq.filter(_fy_expr(models.CompletedWork.completed_date) == fy)
+    if house in ("Lok Sabha", "Rajya Sabha"):
+        cq = cq.filter(models.CompletedWork.house == house)
     for r in cq.group_by("g").all():
         entry = out.setdefault(
             r.g or "Unknown",
@@ -519,44 +704,43 @@ def constituency_ledger_map(
     return out
 
 
-def fy_trends(db: Session) -> list:
+def fy_trends(db: Session, house: Optional[str] = None) -> list:
     """Per-FY trends. Project counts + sanctioned come from the project
     catalog grouped by its own fy column. Expenditure and completed
     counts come from the ledgers grouped by payment/completion-date FY.
     `utilization_percentage` uses the catalog sanctioned vs the ledger
     expenditure of the same FY. Catalog FY values with no ledger rows
     still appear (expenditure 0.0). Returned sorted by fy ascending,
-    'Unknown' (NULL fy) last."""
+    'Unknown' (NULL fy) last. `house` scopes every side to one house
+    (catalog's own column; ledgers' own house columns)."""
     # Catalog side: counts + sanctioned by fy
-    cat_rows = (
-        db.query(
-            models.Project.fy.label("fy"),
-            func.count(models.Project.id).label("projects"),
-            func.coalesce(func.sum(models.Project.sanctioned_amount), 0.0).label("sanctioned"),
-        )
-        .group_by(models.Project.fy)
-        .all()
+    cat_q = db.query(
+        models.Project.fy.label("fy"),
+        func.count(models.Project.id).label("projects"),
+        func.coalesce(func.sum(models.Project.sanctioned_amount), 0.0).label("sanctioned"),
     )
+    if house:
+        cat_q = cat_q.filter(models.Project.house == house)
+    cat_rows = cat_q.group_by(models.Project.fy).all()
     # Ledger side: expenditure by payment-date FY
-    exp_rows = (
-        db.query(
-            _fy_expr(models.Expenditure.expenditure_date).label("fy"),
-            func.coalesce(func.sum(models.Expenditure.expenditure_amount), 0.0).label("expenditure"),
-            func.count(models.Expenditure.id).label("transactions"),
-        )
-        .group_by("fy")
-        .all()
+    exp_q = db.query(
+        _fy_expr(models.Expenditure.expenditure_date).label("fy"),
+        func.coalesce(func.sum(models.Expenditure.expenditure_amount), 0.0).label("expenditure"),
+        func.count(models.Expenditure.id).label("transactions"),
     )
-    # Completions ledger by completion-date FY
-    comp_rows = (
-        db.query(
-            _fy_expr(models.CompletedWork.completed_date).label("fy"),
-            func.count(models.CompletedWork.id).label("works"),
-            func.coalesce(func.sum(models.CompletedWork.final_amount), 0.0).label("amount"),
-        )
-        .group_by("fy")
-        .all()
-    )
+    if house:
+        exp_q = exp_q.filter(models.Expenditure.house == house)
+    exp_rows = exp_q.group_by("fy").all()
+    # Completions ledger by completion-date FY (snapshot rows only —
+    # legacy GitHub rows would inflate the official trend set)
+    comp_q = db.query(
+        _fy_expr(models.CompletedWork.completed_date).label("fy"),
+        func.count(models.CompletedWork.id).label("works"),
+        func.coalesce(func.sum(models.CompletedWork.final_amount), 0.0).label("amount"),
+    ).filter(models.CompletedWork.source == "esakshi")
+    if house:
+        comp_q = comp_q.filter(models.CompletedWork.house == house)
+    comp_rows = comp_q.group_by("fy").all()
 
     fy_order: Dict[str, Tuple[int, str]] = {}
 

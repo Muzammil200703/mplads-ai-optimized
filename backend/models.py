@@ -115,11 +115,16 @@ class Project(Base):
     completion_percentage = Column(Float, index=True)
     status = Column(String, index=True)
     fy = Column(String, index=True)
+    # House attribution, derived from recommended_works name matches (only
+    # when all matching works agree on one house). NULL = unattributed —
+    # aggregations must treat NULL as unknown, never guess a house.
+    house = Column(String, index=True)
 
     __table_args__ = (
         Index("idx_project_state_dist", "state", "district"),
         Index("idx_project_state_status", "state", "status"),
         Index("idx_proj_fy", "fy"),
+        Index("idx_proj_house", "house"),
     )
 
 
@@ -159,6 +164,11 @@ class RecommendedWork(Base):
     recommendation_date = Column(String)
     has_images = Column(Boolean)
     ida = Column(String)
+    # Row provenance: 'esakshi' = part of the official snapshot batch,
+    # 'github_legacy' = supplementary GitHub-provider row (NULL work_id) or
+    # a work dropped from the current eSAKSHI view. Official-metric
+    # aggregations count only 'esakshi' rows.
+    source = Column(String)
 
 
 class Expenditure(Base):
@@ -193,6 +203,8 @@ class CompletedWork(Base):
     has_images = Column(Boolean)
     average_rating = Column(Float)
     ida = Column(String)
+    # Row provenance — see RecommendedWork.source.
+    source = Column(String)
 
 
 class RiskScore(Base):

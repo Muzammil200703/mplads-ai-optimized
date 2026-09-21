@@ -423,9 +423,9 @@ NAV_TARGETS = {
 
 # Every param key the client will consume, per action type.
 ACTION_PARAM_KEYS = {
-    "navigate": {"state", "constituency", "status", "risk_level", "tier", "fy", "keyword"},
+    "navigate": {"state", "constituency", "status", "risk_level", "tier", "fy", "keyword", "house"},
     "open_project": set(),
-    "filter_projects": {"state", "constituency", "status", "fy", "keyword"},
+    "filter_projects": {"state", "constituency", "status", "fy", "keyword", "house"},
     "filter_risk": {"risk_level", "state", "constituency"},
     "clear_filters": set(),
     "refresh_data": set(),
@@ -552,6 +552,18 @@ def _extract_state(question: str) -> Optional[str]:
 
 
 _STATE_NOUN_RE = re.compile(r"\b(projects?|works?|constituencies?)\b", re.I)
+
+_HOUSE_RE = re.compile(r"\b(lok\s+sabha|rajya\s+sabha)\b", re.I)
+
+
+def _extract_house(q: str) -> Optional[str]:
+    """Explicit house mention in a question — "show Lok Sabha projects in
+    Telangana" → "Lok Sabha". Canonical capitalization; None when no house
+    is named (the app-wide default is then All, never a guess)."""
+    m = _HOUSE_RE.search(q or "")
+    if not m:
+        return None
+    return "Lok Sabha" if m.group(1).lower().startswith("lok") else "Rajya Sabha"
 
 
 def _state_noun_candidates(question: str) -> List[str]:
@@ -822,6 +834,7 @@ def _intent_navigate(q: str, ql: str, ctx_project_id: Optional[int], user, db: S
     #    navigation and stay with the data intents; risk screens likewise.
     status_only = _extract_status(ql)
     fy_only = _canonical_fy(ql, db)
+    house_only = _extract_house(ql)
     # "Who recommended this project?" / "when was it recommended?" are context
     # questions containing a status word — never the Projects status filter.
     if re.search(r"\b(who|whom|whose|when|where|why)\b", ql):
@@ -839,6 +852,8 @@ def _intent_navigate(q: str, ql: str, ctx_project_id: Optional[int], user, db: S
         state_only = _canonical_state(ql, db)
         if state_only:
             params["state"] = state_only
+        if house_only:
+            params["house"] = house_only
         scope = " · ".join(params.values())
         return (f"Filtering Projects to {scope}…",
                 [ActionOut(label=f"Projects · {scope}", action="navigate", target="Projects",
@@ -896,11 +911,12 @@ def _intent_navigate(q: str, ql: str, ctx_project_id: Optional[int], user, db: S
     #    for in one sentence. State names resolve canonically against the DB
     #    so the filter can never silently match nothing.
     state_f = _canonical_state(ql, db)
+    house_f = _extract_house(ql)
     tier_f = _extract_tier(ql)
     status_f = _extract_status(ql)
     fy_f = _canonical_fy(ql, db)
     risk_f = re.search(r"\b(high|medium|low)\b", ql) and re.search(r"\brisk\b", ql)
-    has_filters = any([state_f, fy_f, status_f, risk_f, tier_f])
+    has_filters = any([state_f, fy_f, status_f, risk_f, tier_f, house_f])
 
     for pat, page, guard in NAV_PAGES:
         if re.search(pat, ql):
@@ -920,6 +936,8 @@ def _intent_navigate(q: str, ql: str, ctx_project_id: Optional[int], user, db: S
                 if page == "Projects":
                     if state_f:
                         params["state"] = state_f
+                    if house_f:
+                        params["house"] = house_f
                     if status_f:
                         params["status"] = status_f
                     if fy_f:
@@ -1592,7 +1610,14 @@ def _intent_project_lookup(
         if not (ctx_project_id and re.search(r"\b(its?|this\s+project|this\s+one|that\s+project|that\s+one)\b", ql)) \
                 and not _DATA_SCREEN_RE.search(ql):
             state_f = _canonical_state(ql, db)
+            house_f = _extract_house(q)
             term = _extract_search_term(q)
+            if house_f and term:
+                # Strip the house mention from the search term —
+                # "lok sabha school projects" searches for "school".
+                term = re.sub(r"\b(lok|rajya)\s+sabha\b", "", term, flags=re.I).strip(" ,.-")
+                if len(term) < 4:
+                    term = ""
             if state_f and term:
                 # Strip the resolved state (and its preposition) from the
                 # search term — "projects in Telangana" has no name component.
@@ -1600,21 +1625,29 @@ def _intent_project_lookup(
                 term = re.sub(r"\b(in|from|at|across)\s*$", "", term, flags=re.I).strip(" ,.-")
                 if len(term) < 4:
                     term = ""
-            if state_f and not term:
-                # Pure state filter request — "find projects in Telangana",
-                # "show projects in Telangana".
-                return (f"Showing projects in **{state_f}**.",
-                        [ActionOut(label=f"Projects · {state_f}", action="navigate", target="Projects",
-                                   params={"state": state_f}, auto=True)],
-                        None, {"page": "Projects", "filters": {"state": state_f}})
+            nav_filters = {}
+            if state_f:
+                nav_filters["state"] = state_f
+            if house_f:
+                nav_filters["house"] = house_f
+            if (state_f or house_f) and not term:
+                # Pure filter request — "find projects in Telangana",
+                # "show Lok Sabha projects", "show Lok Sabha projects in Telangana".
+                scope = " ".join(x for x in ([house_f, f"in {state_f}"] if state_f else [house_f]) if x)
+                return (f"Showing {scope} projects.".replace("  ", " "),
+                        [ActionOut(label=f"Projects · {scope}", action="navigate", target="Projects",
+                                   params=nav_filters, auto=True)],
+                        None, {"page": "Projects", "filters": nav_filters})
             if term:
-                rows = (
+                rows_q = (
                     db.query(models.Project)
                     .filter(models.Project.project_name.ilike(f"%{term}%"))
-                    .order_by(models.Project.id)
-                    .limit(6)
-                    .all()
                 )
+                if house_f:
+                    # House named → restrict matches to that house's rows;
+                    # unattributed rows are excluded rather than guessed.
+                    rows_q = rows_q.filter(models.Project.house == house_f)
+                rows = rows_q.order_by(models.Project.id).limit(6).all()
                 if len(rows) == 1:
                     p = rows[0]
                     risk = db.query(models.RiskScore).filter(models.RiskScore.project_id == p.id).first()
@@ -1879,7 +1912,8 @@ def _intent_analytics(q: str, ql: str, user, db: Session):
     if re.search(r"overall utilization|utilization.{0,15}(portfolio|overall|total)|spent overall|sanctioned overall|overall sanctioned|how much has been spent|how much has been sanctioned|total.{0,12}(spent|expenditure|sanctioned)|overall completion|average completion|\bavg\b.{0,12}completion", ql):
         if not allowed:
             return _guest()
-        ov = _metrics.portfolio_overview(db)
+        house = _extract_house(ql)
+        ov = _metrics.portfolio_overview(db, house=house)
         lines = [
             f"• Recorded expenditure (payment ledger): {_fmt_money(ov['total_expenditure'])}",
             f"• Sanctioned (project catalog): {_fmt_money(ov['total_sanctioned_amount'])}",
@@ -1887,7 +1921,8 @@ def _intent_analytics(q: str, ql: str, user, db: Session):
             f"• Completed works (completions ledger): {ov['completed_projects']:,}",
             f"• Average catalog completion: {ov['average_completion_percentage']:.1f}%",
         ]
-        return ("**Portfolio money & progress** (same authoritative aggregates the dashboard uses):\n" + "\n".join(lines), [
+        scope = f" — {house}" if house else ""
+        return (f"**Portfolio money & progress{scope}** (same authoritative aggregates the dashboard uses):\n" + "\n".join(lines), [
             ActionOut(label="Open Overview", action="navigate", target="Overview"),
             ActionOut(label="Open State Intelligence", action="navigate", target="State Intelligence"),
         ])
@@ -2003,6 +2038,7 @@ def _intent_portfolio_stats(q: str, user, db: Session):
     if not re.search(r"how many|total.{0,12}projects|portfolio.{0,12}(size|overview|stats)|project count", ql):
         return None
     state = _extract_state(q)
+    house = _extract_house(q)
     base = db.query(models.Project)
     if state:
         # match against the real state list (case-insensitive contains both ways)
@@ -2015,12 +2051,18 @@ def _intent_portfolio_stats(q: str, user, db: Session):
         label = match
     else:
         label = "the whole portfolio"
+    if house:
+        # House named → count and sum only that house's catalog rows.
+        base = base.filter(models.Project.house == house)
+        label = f"{label} · {house}"
     # Authoritative aggregates (metrics_svc): catalog sanctioned/counts +
     # ledger expenditure/completions. For a state scope the ledgers are
     # filtered by their own state column (labels match the catalog 1:1).
     import metrics as _metrics
     if state:
-        led = _metrics.ledger_totals_scoped(db, state=match)
+        led = _metrics.ledger_totals_scoped(db, state=match, house=house)
+    elif house:
+        led = _metrics.ledger_totals(db, house=house)
     else:
         led = _metrics.ledger_totals(db)
     n, sanc = base.with_entities(
@@ -2114,6 +2156,7 @@ def _intent_high_risk(ql: str, user, db: Session):
                     ActionOut(label="Open State Intelligence", action="navigate", target="State Intelligence"),
                 ])
     state = _canonical_state(ql, db)
+    house = _extract_house(ql)
     q = (
         db.query(models.Project, models.RiskScore)
         .join(models.RiskScore, models.RiskScore.project_id == models.Project.id)
@@ -2121,14 +2164,19 @@ def _intent_high_risk(ql: str, user, db: Session):
     )
     if state:
         q = q.filter(models.Project.state == state)
+    if house:
+        q = q.filter(models.Project.house == house)
     rows = q.order_by(models.RiskScore.risk_score.desc()).limit(6).all()
     if not rows:
-        scope = f" in {state.title()}" if state else ""
+        scope_parts = [f" in {state.title()}" if state else "", f" ({house})" if house else ""]
+        scope = "".join(scope_parts)
         # Even with no flagged rows, hand the user the filtered Risk Center /
         # Audit Priority views — the assistant acts, it doesn't dead-end.
         rc_params = {"risk_level": "High"}
         if state:
             rc_params["state"] = state
+        if house:
+            rc_params["house"] = house
         return (f"No high-risk projects are currently flagged in the risk data{scope}. "
                 "Opening the Risk Center with the High-risk filter so you can double-check.",
                 [ActionOut(label="Risk Center · High risk" + (f" · {state}" if state else ""),
@@ -2139,8 +2187,10 @@ def _intent_high_risk(ql: str, user, db: Session):
     count_q = db.query(func.count(models.RiskScore.id)).filter(models.RiskScore.risk_level.ilike("high"))
     if state:
         count_q = count_q.join(models.Project, models.Project.id == models.RiskScore.project_id).filter(models.Project.state == state)
+    if house:
+        count_q = count_q.join(models.Project, models.Project.id == models.RiskScore.project_id).filter(models.Project.house == house)
     count = count_q.scalar() or 0
-    scope = f" in {state.title()}" if state else ""
+    scope = ((f" in {state.title()}" if state else "") + (f" ({house})" if house else ""))
     answer = (
         f"{count:,} projects{scope} are flagged **high risk**. Top 6 by score:\n{lines}\n\n"
         "A high score is a review priority, not proof of wrongdoing."

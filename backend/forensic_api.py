@@ -651,6 +651,11 @@ def _find_twins(
 
     base = db.query(models.Project).filter(models.Project.id != project.id)
 
+    # House-aware twins: restrict to the anchor's house when known so LS and
+    # RS works are never cross-compared (different entitlement structures).
+    if getattr(project, "house", None) in ("Lok Sabha", "Rajya Sabha"):
+        base = base.filter(models.Project.house == project.house)
+
     # Indexed narrowing first, then weighted scoring in Python over the
     # limited candidate set.
     if type_norm and project.project_type:

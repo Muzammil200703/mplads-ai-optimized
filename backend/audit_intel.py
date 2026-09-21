@@ -727,6 +727,13 @@ def peer_benchmark(
         base = base.filter(models.Project.constituency == project.constituency)
     elif scope_norm == "state" and (project.state or "").strip():
         base = base.filter(models.Project.state == project.state)
+    # House-aware peer groups: when the anchor project's house is known,
+    # compare only against same-house peers (LS and RS works differ in scale
+    # and structure — cross-house averages would distort benchmarks). When
+    # the anchor's house is unattributed, keep the previous behavior so
+    # unknown rows still get a peer group.
+    if getattr(project, "house", None) in ("Lok Sabha", "Rajya Sabha"):
+        base = base.filter(models.Project.house == project.house)
     if type_filter:
         base = base.filter(models.Project.project_type == type_filter)
     if band != "all":

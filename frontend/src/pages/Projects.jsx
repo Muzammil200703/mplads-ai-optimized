@@ -77,6 +77,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
   const [keyword, setKeyword] = useState("")
   const [state, setState] = useState("")
   const [constituency, setConstituency] = useState("")
+  const [house, setHouse] = useState("")
   const [status, setStatus] = useState("")
   const [sortBy, setSortBy] = useState("")
   const [sortDir, setSortDir] = useState("desc")
@@ -116,6 +117,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
       if (drillDownParams.constituency) setConstituency(drillDownParams.constituency)
       if (drillDownParams.status) setStatus(drillDownParams.status)
       if (drillDownParams.keyword) setKeyword(drillDownParams.keyword)
+      if (drillDownParams.house) setHouse(drillDownParams.house)
       setCurrentPage(1)
       if (onClearDrillDown) onClearDrillDown()
     }
@@ -180,6 +182,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
           q: keyword.trim(),
           state: state || undefined,
           constituency: constituency || undefined,
+          house: house || undefined,
           fy: fy || undefined,
           status: status || undefined,
           sort_by: sortBy || undefined,
@@ -199,6 +202,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
           getProjects({
             state: state || undefined,
             constituency: constituency || undefined,
+            house: house || undefined,
             fy: fy || undefined,
             status: status || undefined,
             sort_by: sortBy || undefined,
@@ -209,6 +213,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
           searchProjects({
             state: state || undefined,
             constituency: constituency || undefined,
+            house: house || undefined,
             fy: fy || undefined,
             status: status || undefined,
             limit: 1,
@@ -223,7 +228,7 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
     } finally {
       setLoading(false)
     }
-  }, [keyword, state, constituency, fy, status, currentPage, sortBy, sortDir])
+  }, [keyword, state, constituency, house, fy, status, currentPage, sortBy, sortDir])
 
   useEffect(() => {
     fetchProjectsData()
@@ -358,6 +363,24 @@ const Projects = memo(function Projects({ projectSearchQuery, onClearProjectSear
                     {c}
                   </option>
                 ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-gray-200">
+                House
+              </label>
+              <select
+                value={house}
+                onChange={(e) => {
+                  setHouse(e.target.value)
+                  setCurrentPage(1)
+                }}
+                className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#0a0a0c] dark:text-white"
+              >
+                <option value="">All Houses</option>
+                <option value="Lok Sabha">Lok Sabha</option>
+                <option value="Rajya Sabha">Rajya Sabha</option>
               </select>
             </div>
 

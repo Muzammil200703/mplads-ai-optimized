@@ -37,6 +37,63 @@ function cacheInvalidate(prefix) {
   }
 }
 
+// ═══════════════ BACKEND CONNECTION STATUS (single source of truth) ═══════════════
+// Every request that goes through the shared transport reports into this bus.
+//   • Any successful HTTP exchange (2xx) marks the backend reachable —
+//     including a retry that succeeds after a cold start — and records the
+//     time of that success.
+//   • A failure marks it unreachable ONLY when there is no fresh success:
+//     either nothing has ever succeeded (initial contact failed) or every
+//     request has been failing for longer than SUCCESS_GRACE_MS. This keeps a
+//     partial failure (one optional endpoint down while the page's other
+//     requests succeed) from ever raising the global "backend unreachable"
+//     banner, while a genuine sustained outage still shows it.
+// Consumers subscribe via onBackendStatus() instead of each page keeping its
+// own private "is the server up" boolean, so the state can never contradict
+// itself across pages and a success anywhere clears a stale failure without
+// a page refresh.
+const SUCCESS_GRACE_MS = 15000
+let _backendReachable = null // null = not yet probed by any request
+let _lastSuccessAt = 0
+const _backendStatusListeners = new Set()
+
+function _reportBackendStatus(reachable) {
+  if (reachable) {
+    _lastSuccessAt = Date.now()
+    if (_backendReachable !== true) {
+      _backendReachable = true
+      _emitBackendStatus()
+    }
+  } else {
+    // Drop the failure while a confirmed reachable state is still fresh —
+    // the failed endpoint surfaces its own section-level error instead.
+    if (_backendReachable === true && Date.now() - _lastSuccessAt < SUCCESS_GRACE_MS) return
+    if (_backendReachable !== false) {
+      _backendReachable = false
+      _emitBackendStatus()
+    }
+  }
+}
+
+function _emitBackendStatus() {
+  for (const listener of _backendStatusListeners) {
+    try {
+      listener(_backendReachable)
+    } catch { /* listener errors never break the transport */ }
+  }
+}
+
+/** Subscribe to backend connectivity changes. Returns an unsubscribe fn. */
+export function onBackendStatus(listener) {
+  _backendStatusListeners.add(listener)
+  return () => _backendStatusListeners.delete(listener)
+}
+
+/** Current confirmed connectivity without subscribing. */
+export function getBackendStatus() {
+  return _backendReachable
+}
+
 // ═══════════════ REQUEST TRANSPORT ═══════════════
 // Render's free tier can 503/429 briefly while the instance wakes up or when
 // a cold-start burst hits the platform edge. Transient failures are retried
@@ -83,7 +140,15 @@ async function request(endpoint, options = {}, _attempt = 0) {
       await delay(TRANSIENT_BASE_DELAY_MS * (_attempt + 1))
       return request(endpoint, options, _attempt + 1)
     }
+    _reportBackendStatus(false)
     throw networkError
+  }
+
+  // Any successful HTTP exchange proves the backend is up. This runs before
+  // the retry check so that even the intermediate 2xx of a request whose
+  // caller still throws elsewhere marks connectivity truthfully.
+  if (response.ok) {
+    _reportBackendStatus(true)
   }
 
   if (response.status === 401 && getToken()) {
@@ -109,6 +174,14 @@ async function request(endpoint, options = {}, _attempt = 0) {
           : JSON.stringify(errJson.detail)
       }
     } catch { /* ignore JSON parse errors */ }
+    // Exhausted retries on transient statuses (503/429/502/504) mean the
+    // backend really did not answer — report degraded. Non-transient 4xx/5xx
+    // (401/404/422…) come from a *reachable* server and must not flip the
+    // global connectivity state; the failed endpoint surfaces its own error
+    // in its section.
+    if (TRANSIENT_STATUS.has(response.status)) {
+      _reportBackendStatus(false)
+    }
     throw new Error(errorDetail)
   }
 
@@ -163,6 +236,16 @@ async function cachedGet(key, ttlMs, fetcher) {
 
 export async function healthCheck() {
   return request("/health")
+}
+
+/**
+ * Official eSAKSHI-style per-house dashboard metrics (allocated, expenditure,
+ * fund utilization, expenditure rate, MPs, completed/pending works,
+ * ongoing-work payments) + dataset snapshot dates.
+ */
+export async function getDashboardHouse(house, fy) {
+  const qs = buildQuery({ house, fy })
+  return request(`/dashboard/house${qs}`)
 }
 
 export async function getStates() {

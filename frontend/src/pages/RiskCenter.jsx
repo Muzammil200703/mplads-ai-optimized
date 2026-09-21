@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, memo } from "react"
-import { getAnomalies, getAnomaliesSummary, getStates, getConstituencies, getProjectDetail, getAnomalyAnalytics, getRiskExplanation, healthCheck } from "../services/api"
+import { getAnomalies, getAnomaliesSummary, getStates, getConstituencies, getProjectDetail, getAnomalyAnalytics, getRiskExplanation, healthCheck, onBackendStatus } from "../services/api"
 import { TableRowsSkeleton, CardsSkeleton, MobileCardsSkeleton } from "../components/Skeletons"
 import { formatMoney, formatNumber } from "../utils/format"
 import RecTimelineBlock from "../components/RecTimelineBlock"
@@ -182,6 +182,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
   const [filterState, setFilterState] = useState("")
   const [filterConstituency, setFilterConstituency] = useState("")
   const [filterSeverity, setFilterSeverity] = useState("")
+  const [filterHouse, setFilterHouse] = useState("")
   const [searchQuery, setSearchQuery] = useState("")
   const [sortBy, setSortBy] = useState("risk_score")
   const [sortDir, setSortDir] = useState("desc")
@@ -215,7 +216,9 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
 
   // A reachable API with an empty SQLite schema must not read as “zero
   // anomalies”. This check makes the data-readiness contract visible in the
-  // most judge-facing screen.
+  // most judge-facing screen. Connectivity itself is owned by the shared
+  // transport (services/api.js) and re-syncs the dataReady/error state when
+  // the backend comes back — no page refresh needed.
   useEffect(() => {
     healthCheck()
       .then((health) => {
@@ -228,6 +231,20 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
         setError("Audit data service is unavailable. No risk conclusion can be drawn until the dataset is restored.")
       })
   }, [])
+
+  // Shared-transport subscription: a successful request anywhere in the app
+  // means the backend is alive again, so a previous "service unavailable"
+  // verdict from this page is stale and is cleared immediately.
+  useEffect(() => onBackendStatus((reachable) => {
+    if (reachable) {
+      setDataReady((prev) => (prev === false ? null : prev))
+      setError((prev) => (
+        prev === "Audit data service is unavailable. No risk conclusion can be drawn until the dataset is restored." ||
+        prev === "Unable to load anomaly data. Check backend connection."
+          ? "" : prev
+      ))
+    }
+  }), [])
 
   // Load constituencies when state changes
   useEffect(() => {
@@ -267,6 +284,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
       }
       if (filterState) params.state = filterState
       if (filterConstituency) params.constituency = filterConstituency
+      if (filterHouse) params.house = filterHouse
       if (fy) params.fy = fy
       if (filterSeverity) params.risk_level = filterSeverity
       if (searchQuery.trim()) params.q = searchQuery.trim()
@@ -281,13 +299,13 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
     } finally {
       setLoading(false)
     }
-  }, [filterState, filterConstituency, fy, filterSeverity, searchQuery, currentPage, sortBy, sortDir, dataReady])
+  }, [filterState, filterConstituency, filterHouse, fy, filterSeverity, searchQuery, currentPage, sortBy, sortDir, dataReady])
 
   useEffect(() => { fetchAnomalies() }, [fetchAnomalies])
 
   // Reset filters
   const handleReset = () => {
-    setFilterState(""); setFilterConstituency(""); setFilterSeverity("")
+    setFilterState(""); setFilterConstituency(""); setFilterSeverity(""); setFilterHouse("")
     setSortBy("risk_score"); setSortDir("desc"); setSearchQuery(""); setCurrentPage(1)
   }
 
@@ -479,6 +497,15 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                 <option value="Medium">Medium Risk</option>
                 <option value="Low">Low Risk</option>
                 <option value="None">No Risk</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-[0.625rem] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">House</label>
+              <select value={filterHouse} onChange={(e) => { setFilterHouse(e.target.value); setCurrentPage(1) }}
+                className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#0a0a0c] dark:text-white">
+                <option value="">All Houses</option>
+                <option value="Lok Sabha">Lok Sabha</option>
+                <option value="Rajya Sabha">Rajya Sabha</option>
               </select>
             </div>
             <div>

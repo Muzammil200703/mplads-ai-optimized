@@ -13,6 +13,7 @@ function Reports() {
   const [selectedState, setSelectedState] = useState("")
   const [selectedConstituency, setSelectedConstituency] = useState("")
   const [selectedRiskLevel, setSelectedRiskLevel] = useState("")
+  const [selectedHouse, setSelectedHouse] = useState("")
   const [sortBy, setSortBy] = useState("")
   const [sortDir, setSortDir] = useState("desc")
   const [exportCount, setExportCount] = useState(null)
@@ -41,6 +42,7 @@ function Reports() {
         if (selectedState) params.set("state", selectedState)
         if (selectedConstituency) params.set("constituency", selectedConstituency)
         if (selectedRiskLevel) params.set("risk_level", selectedRiskLevel)
+        if (selectedHouse) params.set("house", selectedHouse)
 
         const r = await fetch(`${API_URL}/export/report-count?${params.toString()}`)
         if (r.ok) {
@@ -52,7 +54,7 @@ function Reports() {
       }
     }
     fetchCount()
-  }, [reportType, selectedState, selectedConstituency, selectedRiskLevel])
+  }, [reportType, selectedState, selectedConstituency, selectedRiskLevel, selectedHouse])
 
   const handleExport = async () => {
     try {
@@ -65,6 +67,7 @@ function Reports() {
       if (selectedState) params.set("state", selectedState)
       if (selectedConstituency) params.set("constituency", selectedConstituency)
       if (selectedRiskLevel && reportType === "Anomaly Summary Report") params.set("risk_level", selectedRiskLevel)
+      if (selectedHouse) params.set("house", selectedHouse)
       if (sortBy) {
         params.set("sort_by", sortBy)
         params.set("sort_dir", sortDir)
@@ -179,6 +182,15 @@ function Reports() {
                     <option>Anomaly Summary Report</option>
                     <option>Regional Risk Report</option>
                     <option>Financial Utilization Report</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[0.6875rem] font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">House Scope</label>
+                  <select value={selectedHouse} onChange={(e) => setSelectedHouse(e.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#0a0a0c] dark:text-white">
+                    <option value="">All Houses</option>
+                    <option value="Lok Sabha">Lok Sabha</option>
+                    <option value="Rajya Sabha">Rajya Sabha</option>
                   </select>
                 </div>
 

@@ -5,7 +5,10 @@ import {
   getDashboardStates,
   getAnomaliesSummary,
   getEarlyWarning,
+  getDashboardHouse,
   healthCheck,
+  onBackendStatus,
+  getBackendStatus,
 } from "../services/api"
 import { formatCrore, formatNumber } from "../utils/format"
 
@@ -18,9 +21,33 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
   const [ewExpanded, setEwExpanded] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
-  const [backendConnected, setBackendConnected] = useState(false)
+  // Backend connectivity is owned by the shared transport (services/api.js):
+  // every request reports success/failure there, so this page's indicator can
+  // never contradict other pages, and a success anywhere instantly clears a
+  // stale "unreachable" state without a page refresh.
+  const [backendConnected, setBackendConnected] = useState(getBackendStatus())
+  useEffect(() => onBackendStatus(setBackendConnected), [])
   const [dataReady, setDataReady] = useState(true)
   const [overviewMissing, setOverviewMissing] = useState(false)
+
+  // Official eSAKSHI-style per-house dashboard (metric definitions mirror the
+  // official MPLADS dashboard; backend derives everything from the ledgers).
+  // `house` also scopes the page-level portfolio cards, anomalies summary and
+  // early-warning panels — one selector, one consistent snapshot everywhere.
+  // "All" is the unfiltered portfolio (no house constraint anywhere).
+  const [house, setHouse] = useState("All")
+  const [houseStats, setHouseStats] = useState(null)
+  useEffect(() => {
+    let cancelled = false
+    if (house === "All") {
+      setHouseStats(null)
+      return
+    }
+    getDashboardHouse(house, fy || undefined)
+      .then((d) => { if (!cancelled) setHouseStats(d) })
+      .catch(() => { if (!cancelled) setHouseStats(null) })
+    return () => { cancelled = true }
+  }, [house, fy])
 
   useEffect(() => {
     async function loadData() {
@@ -30,13 +57,14 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
         setOverviewMissing(false)
 
         const fyParams = fy ? { fy } : {}
+        const houseParam = house !== "All" ? { house } : {}
         const [healthRes, ovRes, narrRes, statesRes, anomRes, ewRes] = await Promise.allSettled([
           healthCheck(),
-          getDashboardOverview(fyParams),
+          getDashboardOverview({ ...fyParams, ...houseParam }),
           getAINarrativeInsights(fyParams),
-          getDashboardStates(fyParams),
-          getAnomaliesSummary(fyParams),
-          getEarlyWarning(fyParams),
+          getDashboardStates({ ...fyParams, ...houseParam }),
+          getAnomaliesSummary({ ...fyParams, ...houseParam }),
+          getEarlyWarning({ ...fyParams, ...houseParam }),
         ])
 
         const projectCount = healthRes.status === "fulfilled"
@@ -47,15 +75,14 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
 
         if (datasetMissing) {
           setDataReady(false)
-          setBackendConnected(false)
           setOverview(null)
           setError(
             "Audit data is not loaded in this deployment. Results are intentionally withheld so an empty database is never mistaken for a clean audit outcome."
           )
         } else if (healthRes.status === "fulfilled") {
           // Health answered — the backend is reachable and its dataset is
-          // loaded. Connectivity must not depend on the overview call.
-          setBackendConnected(true)
+          // loaded. Connectivity itself is tracked by the shared transport
+          // (onBackendStatus above), so no local flag is set here.
           setDataReady(true)
         }
 
@@ -94,33 +121,24 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
           setEarlyWarning(ewRes.value)
         }
 
-        // Connectivity failure is NOT a missing dataset. The "Audit dataset
-        // unavailable" card must appear only when the backend itself reports
-        // an empty database (Git-LFS pointer checked out instead of the file).
-        // A sleeping/waking Render instance gets the retry banner on the normal
-        // page instead — a cold start must never be labelled a deployment fault.
-        // (datasetMissing is derived from the same health result above.)
-        if (
-          (healthRes.status === "rejected" ||
-            (ovRes.status === "rejected" && statesRes.status === "rejected")) &&
-          !datasetMissing
-        ) {
-          setBackendConnected(false)
-          setError(
-            "Backend is unreachable right now. On the free hosting tier the server sleeps when idle and takes about a minute to wake — please retry in a moment. If this keeps happening, the backend URL may be down or misconfigured."
-          )
-        }
+        // Connectivity is NOT decided here anymore. The old logic flipped a
+        // page-local "unreachable" flag whenever health (or overview+states)
+        // failed — even while sibling requests succeeded — and never cleared
+        // it after the backend woke up, leaving a stale banner over live data.
+        // Now: successful requests mark the backend reachable in the shared
+        // transport; exhausted failures mark it degraded only if no newer
+        // success exists (race-guarded). The red banner below renders purely
+        // from that shared state, so a wake-up clears it automatically.
       } catch (err) {
         console.error("Overview error:", err)
         setError("Error loading dashboard metrics.")
-        setBackendConnected(false)
       } finally {
         setLoading(false)
       }
     }
 
     loadData()
-  }, [fy])
+  }, [fy, house])
 
   // Assistant control plane: "refresh data" replays the page's own load
   // cycle — no parallel fetch path.
@@ -130,16 +148,17 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
         try {
           setLoading(true)
           const fyParams = fy ? { fy } : {}
-          const ovRes = await getDashboardOverview(fyParams)
+          const houseParam = house !== "All" ? { house } : {}
+          const ovRes = await getDashboardOverview({ ...fyParams, ...houseParam })
           if (ovRes && ovRes.total_projects != null) {
             setOverview(ovRes)
             setOverviewMissing(false)
           }
-          const statesRes = await getDashboardStates(fyParams)
+          const statesRes = await getDashboardStates({ ...fyParams, ...houseParam })
           if (Array.isArray(statesRes)) setStateData(statesRes)
-          const anomRes = await getAnomaliesSummary(fyParams)
+          const anomRes = await getAnomaliesSummary({ ...fyParams, ...houseParam })
           if (anomRes) setAnomaliesSummary(anomRes)
-          const ewRes = await getEarlyWarning(fyParams)
+          const ewRes = await getEarlyWarning({ ...fyParams, ...houseParam })
           if (ewRes) setEarlyWarning(ewRes)
         } catch {
           // Failures surface through the normal error banners on next load.
@@ -151,7 +170,7 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
     }
     window.addEventListener("assistant:refresh-data", handler)
     return () => window.removeEventListener("assistant:refresh-data", handler)
-  }, [fy])
+  }, [fy, house])
 
   const pageClasses = darkMode
     ? "bg-[#0a0a0c] text-[#f3f4f6]"
@@ -230,8 +249,20 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
         </div>
       </div>
 
-      {/* ERROR NOTICE */}
-      {error && (
+      {/* ERROR NOTICE — two distinct failure classes, never conflated:
+          1) GLOBAL BACKEND UNREACHABLE — the shared transport confirms every
+             request is failing (no success since the failure). Red banner.
+             A later success anywhere clears it without a page refresh.
+          2) REQUEST-LEVEL failures (one endpoint rejected while others
+             succeeded) — amber partial notice, page stays usable. */}
+      {backendConnected === false && (
+        <div className="mb-6 rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm font-semibold text-red-600 dark:text-red-400">
+          ⚠ Backend is unreachable right now. On the free hosting tier the server sleeps when idle and takes about a
+          minute to wake — please retry in a moment. If this keeps happening, the backend URL may be down or
+          misconfigured.
+        </div>
+      )}
+      {backendConnected !== false && error && (
         <div className="mb-6 rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm font-semibold text-red-600 dark:text-red-400">
           ⚠ {error}
         </div>
@@ -400,6 +431,82 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
           )}
         </div>
       )}
+
+      {/* HOUSE DASHBOARD — official eSAKSHI metric set (allocated,
+          expenditure, utilization, expenditure rate, MPs, completed/pending
+          works, ongoing-work payments). Backend-derived from the ledgers;
+          the metric definitions match the official MPLADS dashboard. */}
+      <div className={`mb-7 rounded-xl border p-5 shadow-sm ${cardClasses}`}>
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h3 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider">
+              🏛 House Dashboard
+            </h3>
+            <p className={`mt-0.5 text-xs ${mutedText}`}>
+              Official eSAKSHI metric set, computed from the imported dataset snapshot.
+            </p>
+          </div>
+          <div className="flex items-center gap-1 rounded-lg border border-gray-200 p-1 dark:border-gray-700">
+            {["All", "Rajya Sabha", "Lok Sabha"].map((h) => (
+              <button
+                key={h}
+                onClick={() => setHouse(h)}
+                className={`rounded-md px-3 py-1.5 text-xs font-bold transition ${
+                  house === h
+                    ? "bg-blue-600 text-white shadow-sm"
+                    : "text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800"
+                }`}
+              >
+                {h}
+              </button>
+            ))}
+          </div>
+        </div>
+        {house !== "All" && houseStats ? (
+          <>
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              {[
+                { label: "Total Allocated", value: `₹${formatCrore(houseStats.total_allocated)} Cr`, sub: "Total funds allocated to MPs" },
+                { label: "Total Expenditure", value: `₹${formatCrore(houseStats.total_expenditure)} Cr`, sub: houseStats.expenditure_transactions != null ? `Vendor payments · ${formatNumber(houseStats.expenditure_transactions)} transactions` : "Vendor payments recorded" },
+                { label: "Fund Utilization", value: `${houseStats.fund_utilization_percentage}%`, sub: "Share of allocation recommended by MPs" },
+                { label: "Expenditure Rate", value: `${houseStats.expenditure_rate_percentage}%`, sub: "Vendor expenditure as a share of allocation" },
+                { label: "Total MPs", value: formatNumber(houseStats.total_mps), sub: " MPs in the system" },
+                { label: "Works Completed", value: `${formatNumber(houseStats.works_completed)} (₹${formatCrore(houseStats.completed_work_value)} Cr)`, sub: "Completed works and their value" },
+                { label: "Works Pending", value: formatNumber(houseStats.works_pending), sub: "Recommended works not yet in the completions ledger" },
+                { label: "Ongoing-Work Payments", value: `₹${formatCrore(houseStats.ongoing_work_payments)} Cr`, sub: "Vendor payments linked to works not yet marked complete" },
+              ].map((m) => (
+                <div key={m.label} className="rounded-lg border border-gray-100 bg-white/60 p-3 dark:border-gray-700/60 dark:bg-white/5">
+                  <p className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">{m.label}</p>
+                  <p className="mt-1 font-mono text-base font-bold text-gray-900 dark:text-white">{m.value}</p>
+                  <p className="mt-0.5 text-[0.625rem] leading-snug text-gray-400">{m.sub}</p>
+                </div>
+              ))}
+            </div>
+            {houseStats.data_snapshot && (
+              <p className={`mt-3 text-[0.625rem] leading-snug ${mutedText}`}>
+                {houseStats.data_snapshot.reference
+                  ? <>
+                      Reference: {houseStats.data_snapshot.label}. Metric definitions match the official eSAKSHI dashboard; underlying data is a batch import, not a live feed.
+                    </>
+                  : <>
+                      Data snapshot: batch import through{" "}
+                      {houseStats.data_snapshot.last_payment_date
+                        ? new Date(houseStats.data_snapshot.last_payment_date).toLocaleDateString("en-IN", { month: "long", year: "numeric" })
+                        : "—"}
+                      . Batch snapshot, not a live feed — the official eSAKSHI portal updates in real time, so figures drift as new payments are recorded there.
+                    </>
+                }
+              </p>
+            )}
+          </>
+        ) : house === "All" ? (
+          <p className={`text-xs ${mutedText}`}>
+            Official eSAKSHI metrics are defined per house — select <b>Rajya Sabha</b> or <b>Lok Sabha</b> for that view. The cards below combine both houses (plus a small set of works whose house is not recorded in the source data) under the project-monitoring metric definitions.
+          </p>
+        ) : (
+          <p className={`text-xs ${mutedText}`}>House metrics could not be loaded.</p>
+        )}
+      </div>
 
       {/* CORE STAT CARDS */}
       <div className="grid grid-cols-1 gap-4 sm:gap-5 md:grid-cols-2 xl:grid-cols-4">

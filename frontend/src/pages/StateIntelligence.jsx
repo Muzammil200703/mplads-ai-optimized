@@ -6,6 +6,7 @@ const StateIntelligence = memo(function StateIntelligence({ onNavigateToProjects
   const [states, setStates] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
+  const [house, setHouse] = useState("")
   const [sortBy, setSortBy] = useState("total_projects")
   const [sortDir, setSortDir] = useState("desc")
   const [searchTerm, setSearchTerm] = useState("")
@@ -20,7 +21,7 @@ const StateIntelligence = memo(function StateIntelligence({ onNavigateToProjects
     async function load() {
       try {
         setLoading(true)
-        const data = await getStateIntelligence(fy ? { fy } : {})
+        const data = await getStateIntelligence({ fy: fy || undefined, house: house || undefined })
         if (Array.isArray(data)) setStates(data)
       } catch (err) {
         console.error("State intelligence error:", err)
@@ -30,7 +31,7 @@ const StateIntelligence = memo(function StateIntelligence({ onNavigateToProjects
       }
     }
     load()
-  }, [fy])
+  }, [fy, house])
 
   const filteredStates = useMemo(() => {
     let result = [...states]
@@ -116,12 +117,24 @@ const StateIntelligence = memo(function StateIntelligence({ onNavigateToProjects
               Comprehensive analytics across <strong>{states.length}</strong> states and union territories.
             </p>
           </div>
-          <input
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Search state..."
-            className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 sm:w-64 dark:border-gray-600 dark:bg-[#17181c] dark:text-white"
-          />
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+            <select
+              value={house}
+              onChange={(e) => setHouse(e.target.value)}
+              className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 dark:border-gray-600 dark:bg-[#17181c] dark:text-white"
+              title="Filter states by House"
+            >
+              <option value="">All Houses</option>
+              <option value="Lok Sabha">Lok Sabha</option>
+              <option value="Rajya Sabha">Rajya Sabha</option>
+            </select>
+            <input
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Search state..."
+              className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 sm:w-64 dark:border-gray-600 dark:bg-[#17181c] dark:text-white"
+            />
+          </div>
         </div>
 
         {error && (

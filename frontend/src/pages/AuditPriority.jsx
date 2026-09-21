@@ -84,6 +84,7 @@ const AuditPriority = memo(function AuditPriority({ fy, drillDownParams, onClear
   const [searchQuery, setSearchQuery] = useState("")
   const [sortBy, setSortBy] = useState("audit_priority")
   const [sortDir, setSortDir] = useState("asc")
+  const [filterHouse, setFilterHouse] = useState("")
   const [currentPage, setCurrentPage] = useState(1)
   const [expanded, setExpanded] = useState(null)
   const rowsPerPage = 20
@@ -106,8 +107,9 @@ const AuditPriority = memo(function AuditPriority({ fy, drillDownParams, onClear
   useEffect(() => {
     const params = {}
     if (fy) params.fy = fy
+    if (filterHouse) params.house = filterHouse
     getAuditPrioritySummary(params).then((s) => { if (s) setSummary(s) }).catch(() => {})
-  }, [fy])
+  }, [fy, filterHouse])
 
   /* ── Fetch priorities ── */
   const fetchData = useCallback(async () => {
@@ -123,6 +125,7 @@ const AuditPriority = memo(function AuditPriority({ fy, drillDownParams, onClear
       if (fy) params.fy = fy
       if (filterSeverity) params.risk_level = filterSeverity
       if (filterTier) params.tier = filterTier
+      if (filterHouse) params.house = filterHouse
       if (searchQuery.trim()) params.q = searchQuery.trim()
       if (sortBy) { params.sort_by = sortBy; params.sort_dir = sortDir }
 
@@ -135,12 +138,12 @@ const AuditPriority = memo(function AuditPriority({ fy, drillDownParams, onClear
     } finally {
       setLoading(false)
     }
-  }, [filterState, filterConstituency, fy, filterSeverity, filterTier, searchQuery, currentPage, sortBy, sortDir])
+  }, [filterState, filterConstituency, fy, filterSeverity, filterTier, filterHouse, searchQuery, currentPage, sortBy, sortDir])
 
   useEffect(() => { fetchData() }, [fetchData])
 
   const handleReset = () => {
-    setFilterState(""); setFilterConstituency(""); setFilterSeverity(""); setFilterTier("")
+    setFilterState(""); setFilterConstituency(""); setFilterSeverity(""); setFilterTier(""); setFilterHouse("")
     setSearchQuery(""); setSortBy("audit_priority"); setSortDir("asc")
     setCurrentPage(1)
   }
@@ -251,6 +254,15 @@ const AuditPriority = memo(function AuditPriority({ fy, drillDownParams, onClear
                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); fetchData() } }}
                 placeholder="Project name or ID..."
                 className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#0a0a0c] dark:text-white" />
+            </div>
+            <div>
+              <label className="block text-[0.625rem] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">House</label>
+              <select value={filterHouse} onChange={(e) => { setFilterHouse(e.target.value); setCurrentPage(1) }}
+                className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-2xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-[#0a0a0c] dark:text-white">
+                <option value="">All Houses</option>
+                <option value="Lok Sabha">Lok Sabha</option>
+                <option value="Rajya Sabha">Rajya Sabha</option>
+              </select>
             </div>
             <div>
               <label className="block text-[0.625rem] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Priority Tier</label>
