@@ -1,3 +1,4 @@
+from fastapi.middleware.cors import CORSMiddleware
 import os
 import time
 import threading
@@ -378,7 +379,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="MPLADS AI API",
-    description="High-performance AI-powered MPLADS monitoring, anomaly detection, and analytics system",
+        description="High-performance AI-powered MPLADS monitoring, anomaly detection, and analytics system",
     version="2.0.0",
     lifespan=lifespan
 )
