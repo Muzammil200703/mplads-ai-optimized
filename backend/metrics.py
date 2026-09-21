@@ -1,22 +1,22 @@
-﻿"""
+"""
 Authoritative financial-aggregation service
 ===========================================
 
 Single source of truth for every "Total Expenditure" / utilization /
 completed-works number in the application.
 
-Why this exists ΓÇö the data model has THREE independent datasets:
+Why this exists — the data model has THREE independent datasets:
 
-  projects            ΓÇö recommended-works catalog (sanctioned amounts,
+  projects            — recommended-works catalog (sanctioned amounts,
                         status, FY, completion% as recorded by the
                         recommending authority). Its per-project
                         `expenditure` column is a LEGACY field: only 4
                         seed/test rows carry a value, so aggregating it
-                        systematically under-reports spend as ~Γé╣0.
-  expenditures        ΓÇö the payment ledger: 106,263 dated transactions,
-                        Γé╣391.87 Cr avg-scale rows, totaling Γé╣3,918.73 Cr.
+                        systematically under-reports spend as ~₹0.
+  expenditures        — the payment ledger: 106,263 dated transactions,
+                        ₹391.87 Cr avg-scale rows, totaling ₹3,918.73 Cr.
                         This is the ONLY authoritative expenditure source.
-  completed_works     ΓÇö the completions ledger: 43,173 works with final
+  completed_works     — the completions ledger: 43,173 works with final
                         amounts and completion dates. This is the ONLY
                         authoritative completed-works source.
 
@@ -25,7 +25,7 @@ descriptions; they do NOT join reliably to individual project rows
 (verified: only 62/6,315 distinct ledger keys match any project key).
 So portfolio aggregates are computed FROM THE LEDGERS DIRECTLY, and
 `fy`-scoped queries attribute ledger rows to financial years by
-payment/completion date using the standard Indian FY (AprΓÇôMar).
+payment/completion date using the standard Indian FY (Apr–Mar).
 The FY values stored on project rows come from the same recommendation
 dataset and are used unchanged for project-scoped metrics (counts,
 sanctioned).
@@ -122,7 +122,7 @@ def portfolio_overview(db: Session, fy: Optional[str] = None) -> Dict[str, Any]:
 
     projects       = project catalog rows (optionally FY-filtered by the
                      catalog's own fy column)
-    sanctioned     = SUM(projects.sanctioned_amount) ΓÇö real recorded values
+    sanctioned     = SUM(projects.sanctioned_amount) — real recorded values
     expenditure    = SUM from the payment ledger (FY-scoped by payment
                      date when a FY filter is given, unscoped otherwise
                      because ledger rows cannot be joined to projects)
@@ -211,7 +211,7 @@ def project_expenditure_map(db: Session) -> Dict[int, float]:
 
     The catalog's per-project `expenditure` column is a legacy stamp that
     was zeroed by a documented startup repair after it was proven to be
-    group-aggregate duplication of this same ledger ΓÇö never aggregate it.
+    group-aggregate duplication of this same ledger — never aggregate it.
     """
     import rec_info as _recinfo
     conn = db.connection().connection  # raw sqlite3 connection
