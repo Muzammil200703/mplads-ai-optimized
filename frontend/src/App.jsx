@@ -29,6 +29,7 @@ const Landing = lazy(() => import("./pages/Landing"))
 
 // Lazy-load page components — only the active page is loaded
 const Overview = lazy(() => import("./pages/Overview"))
+const Leaderboard = lazy(() => import("./pages/Leaderboard"))
 const Projects = lazy(() => import("./pages/Projects"))
 const RiskCenter = lazy(() => import("./pages/RiskCenter"))
 const Reports = lazy(() => import("./pages/Reports"))
@@ -169,10 +170,14 @@ function AppShell() {
   ScrollManager()
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [darkMode, setDarkMode] = useState(false)
-  // Branch flow: land on the public Landing page; #signin deep-links to sign-in
-  const [currentPage, setCurrentPage] = useState(
-    () => (typeof window !== "undefined" && window.location.hash === "#signin" ? "Sign in" : "Landing")
-  )
+  // Default to main Overview dashboard so all options (Reports, Leaderboard, etc.) are immediately visible
+  const [currentPage, setCurrentPage] = useState(() => {
+    if (typeof window !== "undefined") {
+      if (window.location.hash === "#signin") return "Sign in"
+      if (window.location.hash === "#landing") return "Landing"
+    }
+    return "Overview"
+  })
   // Global search — independent from project search
   const [globalSearchQuery, setGlobalSearchQuery] = useState("")
   // Project search — only set when navigating to Projects
@@ -184,6 +189,7 @@ function AppShell() {
   // Start closed: the drawer must never cover page content on load — it opens
   // via the menu button (or Ctrl+B) and closes on navigate/backdrop.
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false)
+  const [assistantOpen, setAssistantOpen] = useState(false)
 
   const handleNavigate = (page) => {
     setCurrentPage(page)
@@ -340,6 +346,7 @@ function AppShell() {
       { key: "Vendor Network", el: <VendorNetwork /> },
       { key: "Ground Truth Verification", el: <VerifyPortal /> },
       { key: "Reports", el: <Reports fy={selectedFY} /> },
+      { key: "Leaderboard", el: <Leaderboard darkMode={darkMode} /> },
       { key: "State Intelligence", el: <StateIntelligence onNavigateToProjects={(state) => handleDrillDown("Projects", { state })} fy={selectedFY} /> },
       { key: "Audit Priority", el: <AuditPriority fy={selectedFY} drillDownParams={drillDownParams} onClearDrillDown={() => setDrillDownParams(null)} /> },
       { key: "Compare Projects", el: <CompareProjects fy={selectedFY} /> },
@@ -370,10 +377,11 @@ function AppShell() {
     )
   }
 
-  // Keep hash in sync so refresh/sign-in returns to the auth page when intended
+  // Keep hash in sync so refresh returns to auth or landing page when intended
   useEffect(() => {
     if (currentPage === "Sign in") window.location.hash = "signin"
-    else if (window.location.hash === "#signin") window.location.hash = ""
+    else if (currentPage === "Landing") window.location.hash = "landing"
+    else if (window.location.hash === "#signin" || window.location.hash === "#landing") window.location.hash = ""
   }, [currentPage])
 
   // After successful sign-in/sign-up, leave the auth page
@@ -396,9 +404,9 @@ function AppShell() {
         <AssistantWidget currentPage={currentPage} />
       </Suspense>
     )
-  }
+}
 
-  return (
+return (
     <div
       className={`h-[100dvh] overflow-hidden ${
         darkMode
@@ -421,6 +429,7 @@ function AppShell() {
         isMobile={isMobile}
         isOpen={mobileDrawerOpen}
         onClose={closeMobileDrawer}
+        onSupportClick={() => setAssistantOpen(true)}
       />
 
       <TopBar
@@ -449,12 +458,12 @@ function AppShell() {
         onNavigate={handleNavigate}
         onOpenProject={openProjectFromWorkspace}
         onExecuteAction={executeAssistant}
+        open={assistantOpen}
+        onOpenChange={setAssistantOpen}
       />
     </div>
   )
-}
-
-function App() {
+}function App() {
   return (
     <AuthProvider>
       <AppShell />
@@ -463,3 +472,4 @@ function App() {
 }
 
 export default App
+    

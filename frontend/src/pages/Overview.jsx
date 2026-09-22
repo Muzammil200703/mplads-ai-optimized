@@ -73,7 +73,14 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
         const hasData = healthRes.status === "fulfilled" && healthRes.value?.data_ready !== false && projectCount > 0
         const datasetMissing = healthRes.status === "fulfilled" && !hasData
 
-        if (datasetMissing) {
+        if (hasData) {
+          // A successful health check is authoritative proof of reachability —
+          // clear any stale unreachable banner immediately. Ongoing
+          // connectivity continues to be tracked by the shared transport
+          // (onBackendStatus above).
+          setBackendConnected(true)
+          setDataReady(true)
+        } else if (datasetMissing) {
           setDataReady(false)
           setOverview(null)
           setError(

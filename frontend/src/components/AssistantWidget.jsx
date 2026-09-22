@@ -112,9 +112,35 @@ function AnswerBody({ text }) {
   )
 }
 
-export default function AssistantWidget({ currentPage, contextProjectId, contextProjectName, onNavigate, onOpenProject, onExecuteAction }) {
+export default function AssistantWidget({
+  currentPage,
+  contextProjectId,
+  contextProjectName,
+  onNavigate,
+  onOpenProject,
+  onExecuteAction,
+  open: controlledOpen,
+  onOpenChange,
+}) {
   const { user } = useAuth()
-  const [open, setOpen] = useState(false)
+
+  // Controlled when the app passes open/onOpenChange (e.g. header/support
+  // entry points), uncontrolled otherwise — the floating button keeps working
+  // standalone.
+  const [internalOpen, setInternalOpen] = useState(false)
+
+  const open = controlledOpen ?? internalOpen
+
+  const setOpen = (next) => {
+    const value = typeof next === "function" ? next(open) : next
+
+    if (controlledOpen !== undefined) {
+      onOpenChange?.(value)
+    } else {
+      setInternalOpen(value)
+    }
+  }
+
   const [messages, setMessages] = useState([]) // {role, text, actions?, exec?, ts}
   const [input, setInput] = useState("")
   const [busy, setBusy] = useState(false)
