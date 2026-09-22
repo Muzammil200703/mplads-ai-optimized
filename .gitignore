@@ -9,3 +9,7 @@ __pycache__/
 *.db-shm
 *.db-wal
 *.db-journal
+
+# Temporary DB backups (local safety copies only — never commit; the live
+# backend/mplads.db is intentionally tracked via Git LFS)
+*backup*.db
