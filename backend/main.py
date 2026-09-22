@@ -1410,7 +1410,7 @@ def dashboard_states(
 
 @app.get("/dashboard/house", tags=["Dashboard"])
 def dashboard_house(
-    house: str = Query("Rajya Sabha", description="House: 'Rajya Sabha' or 'Lok Sabha'"),
+    house: str = Query("Rajya Sabha", description="House: 'Rajya Sabha', 'Lok Sabha', or 'All'"),
     fy: Optional[str] = Query(None, description="Filter by financial year"),
     db: Session = Depends(get_db)
 ):
@@ -1420,10 +1420,12 @@ def dashboard_house(
     expenditure, utilization, expenditure rate, MPs, completed/pending
     works, ongoing-work payments) from the authoritative ledgers, with the
     metric definitions documented in metrics_svc.house_dashboard.
+    house='All' combines the two per-house reference snapshots (disjoint
+    populations — amounts summed, rates recomputed allocation-weighted).
     """
     house_norm = house.strip()
-    if house_norm not in ("Rajya Sabha", "Lok Sabha"):
-        raise HTTPException(status_code=422, detail="house must be 'Rajya Sabha' or 'Lok Sabha'")
+    if house_norm not in ("All", "Rajya Sabha", "Lok Sabha"):
+        raise HTTPException(status_code=422, detail="house must be 'All', 'Rajya Sabha' or 'Lok Sabha'")
 
     cache_key = f"dashboard_house_{house_norm}_{fy or 'all'}"
     cached = get_cached(cache_key, ttl_seconds=120)

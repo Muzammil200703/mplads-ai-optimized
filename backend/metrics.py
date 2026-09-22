@@ -134,6 +134,16 @@ def ledger_totals_scoped(
     }
 
 
+def _total_project_amount(db: Session, house: Optional[str] = None) -> float:
+    """Sum of sanctioned amounts across the project catalog (house-scoped;
+    None = All). This is the project-monitoring "Total Project Amount" —
+    distinct from the official "Total Allocated" (MP entitlements)."""
+    q = db.query(func.coalesce(func.sum(models.Project.sanctioned_amount), 0.0))
+    if house:
+        q = q.filter(models.Project.house == house)
+    return float(q.scalar() or 0.0)
+
+
 def house_dashboard(db: Session, house: str, fy: Optional[str] = None) -> Dict[str, Any]:
     """Official eSAKSHI-style per-house dashboard metrics.
 
@@ -172,63 +182,87 @@ def house_dashboard(db: Session, house: str, fy: Optional[str] = None) -> Dict[s
     tenure; an FY filter scopes payments by Indian FY of the payment date.
     """
     # ── Reference-first path (no FY filter): serve the stored snapshot. ──
+    # "All" combines the two per-house reference rows: amounts and counts are
+    # summed (the houses are disjoint populations — no double-counting), the
+    # two percentage rates are recomputed allocation-weighted (a simple mean
+    # would be wrong), and pending/ongoing sums follow their definitions.
     if not fy:
         try:
-            ref = db.execute(
-                text("SELECT * FROM reference_dashboard_metrics WHERE house = :h"),
-                {"h": house},
-            ).mappings().first()
+            if house == "All":
+                refs = db.execute(text("SELECT * FROM reference_dashboard_metrics")).mappings().all()
+            else:
+                ref = db.execute(
+                    text("SELECT * FROM reference_dashboard_metrics WHERE house = :h"),
+                    {"h": house},
+                ).mappings().first()
+                refs = [ref] if ref else []
         except Exception:
-            ref = None
-        if ref:
+            refs = []
+        if refs:
+            alloc = sum(float(r["total_allocated"] or 0) for r in refs)
+            exp_amt = sum(float(r["total_expenditure"] or 0) for r in refs)
             return {
                 "house": house,
-                "total_allocated": float(ref["total_allocated"] or 0),
-                "total_expenditure": float(ref["total_expenditure"] or 0),
+                "total_allocated": alloc,
+                "total_expenditure": exp_amt,
                 "expenditure_transactions": None,
-                "fund_utilization_percentage": float(ref["fund_utilization_percentage"] or 0),
-                "expenditure_rate_percentage": float(ref["expenditure_rate_percentage"] or 0),
-                "total_mps": int(ref["total_mps"] or 0),
-                "works_completed": int(ref["works_completed"] or 0),
-                "completed_work_value": float(ref["completed_work_value"] or 0),
+                "fund_utilization_percentage": (
+                    round(sum(float(r["fund_utilization_percentage"] or 0) * float(r["total_allocated"] or 0) for r in refs) / alloc, 2)
+                    if alloc > 0 else 0.0
+                ),
+                "expenditure_rate_percentage": (
+                    round(sum(float(r["expenditure_rate_percentage"] or 0) * float(r["total_allocated"] or 0) for r in refs) / alloc, 2)
+                    if alloc > 0 else 0.0
+                ),
+                "total_mps": sum(int(r["total_mps"] or 0) for r in refs),
+                "works_completed": sum(int(r["works_completed"] or 0) for r in refs),
+                "completed_work_value": sum(float(r["completed_work_value"] or 0) for r in refs),
                 "works_recommended": None,
                 "recommended_amount": None,
-                "works_pending": int(ref["works_pending"] or 0),
-                "ongoing_work_payments": float(ref["ongoing_work_payments"] or 0),
+                "works_pending": sum(int(r["works_pending"] or 0) for r in refs),
+                "ongoing_work_payments": sum(float(r["ongoing_work_payments"] or 0) for r in refs),
+                "total_project_amount": _total_project_amount(db, None if house == "All" else house),
                 "data_snapshot": {
                     "last_payment_date": None,
                     "last_completion_date": None,
                     "last_recommendation_date": None,
-                    "source": ref["source"],
-                    "label": ref["snapshot_label"],
+                    "source": "; ".join(sorted({str(r["source"]) for r in refs})),
+                    "label": (
+                        "Combined Rajya Sabha + Lok Sabha official eSAKSHI snapshot"
+                        if house == "All" else refs[0]["snapshot_label"]
+                    ),
                     "reference": True,
                 },
             }
 
     # ── Computed path (FY-filtered or missing reference row). ──
-    alloc = (
-        db.query(func.coalesce(func.sum(models.MPSummary.allocated_amount), 0.0))
-        .filter(models.MPSummary.house == house)
-        .scalar()
-    ) or 0.0
-    mps = (
-        db.query(func.count(models.MPSummary.id))
-        .filter(models.MPSummary.house == house)
-        .scalar()
-    ) or 0
+    # house == "All" removes the house constraint instead of filtering for a
+    # literal 'All' value; ledgers carry only 'Lok Sabha'/'Rajya Sabha'.
+    house_scope = None if house == "All" else house
+    alloc_q = db.query(func.coalesce(func.sum(models.MPSummary.allocated_amount), 0.0))
+    mps_q = db.query(func.count(models.MPSummary.id))
+    if house_scope:
+        alloc_q = alloc_q.filter(models.MPSummary.house == house_scope)
+        mps_q = mps_q.filter(models.MPSummary.house == house_scope)
+    alloc = alloc_q.scalar() or 0.0
+    mps = mps_q.scalar() or 0
 
     exp_q = db.query(
         func.coalesce(func.sum(models.Expenditure.expenditure_amount), 0.0),
         func.count(models.Expenditure.id),
-    ).filter(models.Expenditure.house == house)
+    )
     rec_q = db.query(
         func.coalesce(func.sum(models.RecommendedWork.recommended_amount), 0.0),
         func.count(models.RecommendedWork.id),
-    ).filter(models.RecommendedWork.house == house, models.RecommendedWork.source == "esakshi")
+    ).filter(models.RecommendedWork.source == "esakshi")
     comp_q = db.query(
         func.coalesce(func.sum(models.CompletedWork.final_amount), 0.0),
         func.count(models.CompletedWork.id),
-    ).filter(models.CompletedWork.house == house, models.CompletedWork.source == "esakshi")
+    ).filter(models.CompletedWork.source == "esakshi")
+    if house_scope:
+        exp_q = exp_q.filter(models.Expenditure.house == house_scope)
+        rec_q = rec_q.filter(models.RecommendedWork.house == house_scope)
+        comp_q = comp_q.filter(models.CompletedWork.house == house_scope)
 
     if fy:
         exp_q = exp_q.filter(_fy_expr(models.Expenditure.expenditure_date) == fy)
@@ -247,21 +281,18 @@ def house_dashboard(db: Session, house: str, fy: Optional[str] = None) -> Dict[s
     expenditure_rate = (exp_amt / alloc * 100) if alloc > 0 else 0.0
 
     # Dataset snapshot dates (max observed event per ledger, house-scoped).
-    last_payment = (
-        db.query(func.max(models.Expenditure.expenditure_date))
-        .filter(models.Expenditure.house == house)
-        .scalar()
-    )
-    last_completion = (
-        db.query(func.max(models.CompletedWork.completed_date))
-        .filter(models.CompletedWork.house == house)
-        .scalar()
-    )
-    last_recommendation = (
-        db.query(func.max(models.RecommendedWork.recommendation_date))
-        .filter(models.RecommendedWork.house == house, models.RecommendedWork.source == "esakshi")
-        .scalar()
-    )
+    last_payment_q = db.query(func.max(models.Expenditure.expenditure_date))
+    last_completion_q = db.query(func.max(models.CompletedWork.completed_date))
+    last_recommendation_q = db.query(
+        func.max(models.RecommendedWork.recommendation_date)
+    ).filter(models.RecommendedWork.source == "esakshi")
+    if house_scope:
+        last_payment_q = last_payment_q.filter(models.Expenditure.house == house_scope)
+        last_completion_q = last_completion_q.filter(models.CompletedWork.house == house_scope)
+        last_recommendation_q = last_recommendation_q.filter(models.RecommendedWork.house == house_scope)
+    last_payment = last_payment_q.scalar()
+    last_completion = last_completion_q.scalar()
+    last_recommendation = last_recommendation_q.scalar()
 
     return {
         "house": house,
@@ -277,6 +308,7 @@ def house_dashboard(db: Session, house: str, fy: Optional[str] = None) -> Dict[s
         "recommended_amount": rec_amt,
         "works_pending": max(int(rec_n or 0) - int(comp_n or 0), 0),
         "ongoing_work_payments": max(exp_amt - comp_amt, 0.0),
+        "total_project_amount": _total_project_amount(db, None if house == "All" else house),
         "data_snapshot": {
             "last_payment_date": last_payment,
             "last_completion_date": last_completion,

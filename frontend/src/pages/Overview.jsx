@@ -39,10 +39,9 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
   const [houseStats, setHouseStats] = useState(null)
   useEffect(() => {
     let cancelled = false
-    if (house === "All") {
-      setHouseStats(null)
-      return
-    }
+    // "All" resolves too: the backend combines the two per-house reference
+    // snapshots (amounts summed — houses are disjoint — rates recomputed
+    // allocation-weighted), so every scope gets the same metric grid.
     getDashboardHouse(house, fy || undefined)
       .then((d) => { if (!cancelled) setHouseStats(d) })
       .catch(() => { if (!cancelled) setHouseStats(null) })
@@ -61,7 +60,7 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
         const [healthRes, ovRes, narrRes, statesRes, anomRes, ewRes] = await Promise.allSettled([
           healthCheck(),
           getDashboardOverview({ ...fyParams, ...houseParam }),
-          getAINarrativeInsights(fyParams),
+          getAINarrativeInsights({ ...fyParams, ...houseParam }),
           getDashboardStates({ ...fyParams, ...houseParam }),
           getAnomaliesSummary({ ...fyParams, ...houseParam }),
           getEarlyWarning({ ...fyParams, ...houseParam }),
@@ -161,6 +160,8 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
             setOverview(ovRes)
             setOverviewMissing(false)
           }
+          const narrRes = await getAINarrativeInsights({ ...fyParams, ...houseParam }).catch(() => null)
+          if (narrRes?.insights) setNarratives(narrRes.insights)
           const statesRes = await getDashboardStates({ ...fyParams, ...houseParam })
           if (Array.isArray(statesRes)) setStateData(statesRes)
           const anomRes = await getAnomaliesSummary({ ...fyParams, ...houseParam })
@@ -469,7 +470,7 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
             ))}
           </div>
         </div>
-        {house !== "All" && houseStats ? (
+        {houseStats ? (
           <>
             <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
               {[
@@ -481,6 +482,7 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
                 { label: "Works Completed", value: `${formatNumber(houseStats.works_completed)} (₹${formatCrore(houseStats.completed_work_value)} Cr)`, sub: "Completed works and their value" },
                 { label: "Works Pending", value: formatNumber(houseStats.works_pending), sub: "Recommended works not yet in the completions ledger" },
                 { label: "Ongoing-Work Payments", value: `₹${formatCrore(houseStats.ongoing_work_payments)} Cr`, sub: "Vendor payments linked to works not yet marked complete" },
+                { label: "Total Project Amount", value: houseStats.total_project_amount != null ? `₹${formatCrore(houseStats.total_project_amount)} Cr` : "—", sub: "Sanctioned amounts across monitored works" },
               ].map((m) => (
                 <div key={m.label} className="rounded-lg border border-gray-100 bg-white/60 p-3 dark:border-gray-700/60 dark:bg-white/5">
                   <p className="text-[0.625rem] font-bold uppercase tracking-wider text-gray-400">{m.label}</p>
@@ -506,10 +508,6 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
               </p>
             )}
           </>
-        ) : house === "All" ? (
-          <p className={`text-xs ${mutedText}`}>
-            Official eSAKSHI metrics are defined per house — select <b>Rajya Sabha</b> or <b>Lok Sabha</b> for that view. The cards below combine both houses (plus a small set of works whose house is not recorded in the source data) under the project-monitoring metric definitions.
-          </p>
         ) : (
           <p className={`text-xs ${mutedText}`}>House metrics could not be loaded.</p>
         )}
@@ -548,7 +546,7 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
               <p className={`text-[0.6875rem] font-bold uppercase tracking-wider ${mutedText}`}>
-                Sanctioned Allocation
+                Total Project Amount
               </p>
               <h2 className="mt-2.5 text-2xl sm:text-3xl font-bold font-mono tracking-tight">
                 ₹{formatCrore(sanctionedAmount)} <span className="text-sm sm:text-base font-sans text-gray-400 font-normal">Cr</span>
@@ -625,7 +623,7 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
               </p>
             </div>
             <span className="flex-shrink-0 rounded-lg bg-gray-100 px-2.5 py-1 font-mono text-[0.6875rem] font-bold text-gray-600 dark:bg-gray-800 dark:text-gray-300">
-              {stateData.length} States
+              {stateData.length} States · {house}
             </span>
           </div>
 
