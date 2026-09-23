@@ -20,12 +20,13 @@ const NAV_PAGES = new Set([
   "Overview", "Projects", "Risk Center", "AI Audit Center", "Vendor Network",
   "Ground Truth Verification", "Reports", "State Intelligence", "Audit Priority",
   "Compare Projects", "FAQ", "Vendor Intelligence", "Settings", "Saved Projects",
+  "MP Intelligence",
   "My Investigations", "My Audit Cases", "My Verifications", "My District",
   "Inquiries", "Evidence Queue", "Administration",
 ])
 
 const PARAM_KEYS = {
-  navigate: new Set(["state", "constituency", "status", "risk_level", "tier", "fy", "keyword"]),
+  navigate: new Set(["state", "constituency", "status", "risk_level", "tier", "fy", "keyword", "house", "mp_id"]),
   open_project: new Set([]),
   clear_filters: new Set([]),
   refresh_data: new Set([]),

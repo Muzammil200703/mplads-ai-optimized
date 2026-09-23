@@ -357,6 +357,17 @@ export async function getDashboardProjectTypes() {
   return request("/dashboard/project-types")
 }
 
+/* ── MP Intelligence: MP-level work/financial views (All/LS/RS) ── */
+export async function getMPIntelligence(params = {}) {
+  return cachedGet(`mpi_${buildQuery(params)}`, 60000, () =>
+    request(`/mp-intelligence${buildQuery(params)}`))
+}
+
+export async function getMPIntelligenceDetail(mpId, worksLimit = 400) {
+  return cachedGet(`mpi_detail_${mpId}_${worksLimit}`, 120000, () =>
+    request(`/mp-intelligence/${mpId}?works_limit=${worksLimit}`))
+}
+
 export async function getAnomaliesSummary(params = {}) {
   const cacheKey = `anom_summary_${buildQuery(params)}`
   const cached = cacheGet(cacheKey, 120000) // 2 min cache

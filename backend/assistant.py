@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 
 import auth
 import models
+import mp_assistant
 
 router = APIRouter(prefix="/assistant", tags=["AI Assistant"])
 
@@ -417,13 +418,14 @@ NAV_TARGETS = {
     "Overview", "Projects", "Risk Center", "AI Audit Center", "Vendor Network",
     "Ground Truth Verification", "Reports", "State Intelligence", "Audit Priority",
     "Compare Projects", "FAQ", "Vendor Intelligence", "Settings", "Saved Projects",
+    "MP Intelligence",
     "My Investigations", "My Audit Cases", "My Verifications", "My District",
     "Inquiries", "Evidence Queue", "Administration",
 }
 
 # Every param key the client will consume, per action type.
 ACTION_PARAM_KEYS = {
-    "navigate": {"state", "constituency", "status", "risk_level", "tier", "fy", "keyword", "house"},
+    "navigate": {"state", "constituency", "status", "risk_level", "tier", "fy", "keyword", "house", "mp_id"},
     "open_project": set(),
     "filter_projects": {"state", "constituency", "status", "fy", "keyword", "house"},
     "filter_risk": {"risk_level", "state", "constituency"},
@@ -2475,6 +2477,7 @@ PAGE_HELP = {
     "Projects": "The Projects page lists every monitored project. Use the search box and filters (state, constituency, district, status, type, FY) to narrow the list; click a project to open its full detail drawer.",
     "Risk Center": "The Risk Center ranks projects by their 0–100 risk score with the contributing factors (utilization, progress mismatch, delays). It also shows first/latest expenditure dates and the estimated 'Delayed By' duration.",
     "State Intelligence": "State Intelligence compares states/UTs: project counts, sanctioned vs. spent, completion rates. Click a state to drill into its projects.",
+    "MP Intelligence": "MP Intelligence gives a member-level view of MPLADS: sanctioned amounts, expenditure, utilization, completed vs pending works and completion rates for every MP, with Lok Sabha / Rajya Sabha / All scoping. Open an MP for their work-level breakdown.",
     "Reports": "Reports offers exportable summaries of the portfolio for offline analysis and briefings.",
     "AI Audit Center": "The AI Audit Command Center scans for photo fraud, cost outliers, GPS mismatches and delayed SLAs, and ranks projects by a 0–100 audit risk index. Click Inspect on any row for the forensic summary.",
     "Audit Priority": "Audit Priority converts detected risk into a P1–P4 review order so auditors know what to look at first. P1 = investigate immediately.",
@@ -2498,6 +2501,13 @@ PAGE_SUGGESTIONS = {
     "Projects": ["How do I find a project?", "What does High Risk mean?", "What is a project?"],
     "Risk Center": ["What does High Risk mean?", "What is a risk score?", "What is 'Delayed By'?"],
     "State Intelligence": ["Which states have the most projects?", "How many projects are in Karnataka?"],
+    "MP Intelligence": [
+        "How much has this MP spent?",
+        "How many works has this MP completed?",
+        "What is this MP's utilization?",
+        "Show me this MP's pending works",
+        "Show me Rajya Sabha MP statistics",
+    ],
     "Reports": ["What reports can I export?", "What is the purpose of this website?"],
     "AI Audit Center": ["Why was this project flagged?", "Explain the risk score", "What should an auditor check?"],
     "Audit Priority": ["What does P1 mean?", "Why is this project prioritized?", "What is a risk score?"],
@@ -2635,6 +2645,15 @@ def _answer_body(question: str, page: Optional[str], user, db: Session,
         ctx_project_id = _session_get_project(session_id)
     real_page = page if page and not page.startswith("project:") else None
 
+    # "This MP" support: when the user is on the MP Intelligence page with an
+    # MP open, remember it in the session context so questions like "how much
+    # has this MP spent?" resolve without re-typing the name.
+    if page and page.startswith("mp:"):
+        try:
+            _session_set_ctx(session_id, page=page)
+        except Exception:
+            pass
+
     # 0. Page-context questions FIRST — "how does this work" while sitting on
     #    Ground Verification must explain Ground Verification, not something else.
     asks_page_context = bool(re.search(
@@ -2653,6 +2672,12 @@ def _answer_body(question: str, page: Optional[str], user, db: Session,
     #    navigation, then ID-anchored lookups, then role/data analytics.
     discussed_pid: Optional[int] = None
     results = [
+        # MP Intelligence — MP comparisons, house-scoped MP stats, MPs-by-state
+        # lists, per-MP attribute questions. Runs BEFORE generic navigation so
+        # "show me Lok Sabha MPs in Telangana" reaches the MP view; its guards
+        # defer project-scoped questions (any mention of "project") to the
+        # project/context intents below. Identity is MP+House+Constituency.
+        (lambda: mp_assistant.mp_intelligence_intent(question, ql, user, db, session_id=session_id), "data"),
         (lambda: _intent_navigate(question, ql, ctx_project_id, user, db, session_id=session_id), "data"),
         # Two-ID metric comparison before project-context (which bails on two
         # numbers but would otherwise let a session-anchored single project

@@ -115,6 +115,7 @@ function AnswerBody({ text }) {
 export default function AssistantWidget({
   currentPage,
   contextProjectId,
+  contextMpId,
   contextProjectName,
   onNavigate,
   onOpenProject,
@@ -272,7 +273,7 @@ export default function AssistantWidget({
       setLastProjectId(contextProjectId || null)
       convMetaRef.current = { ts: Date.now(), projectId: contextProjectId || null }
       inputRef.current?.focus()
-      const page = contextProjectId ? `project:${contextProjectId}` : currentPage
+      const page = contextProjectId ? `project:${contextProjectId}` : contextMpId ? `mp:${contextMpId}` : currentPage
       if (page) {
         getAssistantSuggestions(page)
           .then((d) => { if (d?.general?.length) setSuggestions(d.general.slice(0, 5)) })
@@ -290,7 +291,7 @@ export default function AssistantWidget({
     // deps intentionally: re-running on currentPage/contextProjectId re-seeds
     // suggestions for the new context; saveNow/roleKey are stable-enough refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, roleKey, currentPage, contextProjectId])
+  }, [open, roleKey, currentPage, contextProjectId, contextMpId])
 
   useEffect(() => {
     if (open && scrollRef.current) {
@@ -309,7 +310,7 @@ export default function AssistantWidget({
       // Project context: live drawer first, then the conversation's own
       // project (restored history keeps asking about the same project).
       const ctxPid = contextProjectId || lastProjectId
-      const page = ctxPid ? `project:${ctxPid}` : currentPage
+      const page = ctxPid ? `project:${ctxPid}` : contextMpId ? `mp:${contextMpId}` : currentPage
       const res = await askAssistant(question, page, sessionRef.current)
       if (res.project_id) {
         setLastProjectId(res.project_id)

@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, memo } from "react"
-import { getAnomalies, getAnomaliesSummary, getStates, getConstituencies, getProjectDetail, getAnomalyAnalytics, getRiskExplanation, healthCheck, onBackendStatus } from "../services/api"
+import { getAnomalies, getAnomaliesSummary, getStates, getConstituencies, getProjectDetail, getAnomalyAnalytics, getRiskExplanation, healthCheck, onBackendStatus, getBackendStatus } from "../services/api"
 import { TableRowsSkeleton, CardsSkeleton, MobileCardsSkeleton } from "../components/Skeletons"
 import { formatMoney, formatNumber } from "../utils/format"
 import RecTimelineBlock from "../components/RecTimelineBlock"
@@ -219,26 +219,66 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
   // most judge-facing screen. Connectivity itself is owned by the shared
   // transport (services/api.js) and re-syncs the dataReady/error state when
   // the backend comes back — no page refresh needed.
-  useEffect(() => {
-    healthCheck()
-      .then((health) => {
-        const ready = health?.data_ready !== false && Number(health?.total_projects || 0) > 0
-        setDataReady(ready)
-        if (!ready) setError("Audit data is not loaded in this deployment. No risk conclusion can be drawn from an empty dataset.")
-      })
-      .catch(() => {
-        setDataReady(false)
-        setError("Audit data service is unavailable. No risk conclusion can be drawn until the dataset is restored.")
-      })
+  //
+  // Race-safety: the health probe can settle `dataReady=false` while the
+  // backend is waking up (Render cold-start 503s) or mid-redeploy, even
+  // though the dataset is fully loaded. That verdict must never outlive the
+  // backend's recovery — the onBackendStatus listener below clears it — and
+  // any successful page fetch immediately re-probes /health (request-aware:
+  // a newer success always wins, never an older failure).
+  const assessHealth = useCallback((health, probeFailed = false) => {
+    const ready = !probeFailed && health?.data_ready !== false && Number(health?.total_projects || 0) > 0
+    setDataReady(ready)
+    if (!ready) {
+      setError(probeFailed
+        ? "Audit data service is unavailable. No risk conclusion can be drawn until the dataset is restored."
+        : "Audit data is not loaded in this deployment. No risk conclusion can be drawn from an empty dataset.")
+    } else {
+      // A successful probe clears BOTH stale verdicts — a banner that
+      // survived the backend's recovery is stale by definition.
+      setError((prev) => (
+        prev === "Audit data is not loaded in this deployment. No risk conclusion can be drawn from an empty dataset." ||
+        prev === "Audit data service is unavailable. No risk conclusion can be drawn until the dataset is restored." ||
+        prev === "Unable to load anomaly data. Check backend connection."
+          ? "" : prev
+      ))
+    }
+    return ready
   }, [])
 
+  // The page's own fetches prove backend reachability (shared transport).
+  // After any success, re-run the health probe once: the fetches arriving
+  // proves the instance is up, so a `dataReady=false` verdict from a probe
+  // that ran against a waking instance is stale and must be re-assessed.
+  useEffect(() => {
+    if (getBackendStatus() !== true) return
+    let cancelled = false
+    const t = setTimeout(() => {
+      healthCheck()
+        .then((h) => { if (!cancelled) assessHealth(h, false) })
+        .catch(() => { if (!cancelled) { /* another newer success wins; leave state */ } })
+    }, 150)
+    return () => { cancelled = true; clearTimeout(t) }
+  }, [assessHealth])
+
+  // Probe /health on mount to distinguish "unreachable" from "empty".
+  useEffect(() => {
+    let cancelled = false
+    healthCheck()
+      .then((health) => { if (!cancelled) assessHealth(health, false) })
+      .catch(() => { if (!cancelled) assessHealth(null, true) })
+    return () => { cancelled = true }
+  }, [assessHealth])
+
   // Shared-transport subscription: a successful request anywhere in the app
-  // means the backend is alive again, so a previous "service unavailable"
-  // verdict from this page is stale and is cleared immediately.
+  // means the backend is alive again, so a previous "service unavailable" OR
+  // "not loaded" verdict from this page is stale and is cleared immediately
+  // (both banners describe a backend state that recovery invalidates).
   useEffect(() => onBackendStatus((reachable) => {
     if (reachable) {
       setDataReady((prev) => (prev === false ? null : prev))
       setError((prev) => (
+        prev === "Audit data is not loaded in this deployment. No risk conclusion can be drawn from an empty dataset." ||
         prev === "Audit data service is unavailable. No risk conclusion can be drawn until the dataset is restored." ||
         prev === "Unable to load anomaly data. Check backend connection."
           ? "" : prev
@@ -252,24 +292,31 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
     getConstituencies(filterState).then((d) => { if (Array.isArray(d)) setConstituencies(d) }).catch(() => {})
   }, [filterState])
 
-  // Load summary
+  // Load summary (house-aware: the header cards must agree with the table)
   useEffect(() => {
     const params = {}
     if (fy) params.fy = fy
+    if (filterHouse) params.house = filterHouse
     getAnomaliesSummary(params).then((s) => { if (s) setSummary(s) }).catch(() => {})
-  }, [fy])
+  }, [fy, filterHouse])
 
   // Load analytics (filter-aware)
   useEffect(() => {
     const params = {}
     if (filterState) params.state = filterState
     if (filterConstituency) params.constituency = filterConstituency
+    if (filterHouse) params.house = filterHouse
     if (fy) params.fy = fy
     getAnomalyAnalytics(params).then((a) => { if (a) setAnalytics(a) }).catch(() => {})
-  }, [filterState, filterConstituency, fy])
+  }, [filterState, filterConstituency, filterHouse, fy])
 
   // Fetch anomalies with server-side filters
   const fetchAnomalies = useCallback(async () => {
+    // While the mount probe is still settling, let the fetch decide: a
+    // successful /anomalies response proves the dataset is live and the
+    // post-success re-probe will confirm readiness. Only a settled
+    // dataReady === false blocks the fetch (and even that is revisited by
+    // the re-probe above once any request succeeds).
     if (dataReady === false) {
       setLoading(false)
       setError("Audit data is not loaded in this deployment. No risk conclusion can be drawn from an empty dataset.")
@@ -293,13 +340,19 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
       const data = await getAnomalies(params)
       setAnomalies(data?.anomalies || [])
       setTotalCount(data?.total_anomalies || 0)
+      // A successful data fetch is authoritative: re-assess readiness so a
+      // stale "not loaded" verdict from a cold-start probe cannot coexist
+      // with rendered rows.
+      healthCheck()
+        .then((h) => assessHealth(h, false))
+        .catch(() => {})
     } catch (err) {
       console.error("Risk center error:", err)
       setError("Unable to load anomaly data. Check backend connection.")
     } finally {
       setLoading(false)
     }
-  }, [filterState, filterConstituency, filterHouse, fy, filterSeverity, searchQuery, currentPage, sortBy, sortDir, dataReady])
+  }, [filterState, filterConstituency, filterHouse, fy, filterSeverity, searchQuery, currentPage, sortBy, sortDir, dataReady, assessHealth])
 
   useEffect(() => { fetchAnomalies() }, [fetchAnomalies])
 

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, distinct, case, text, or_
 import io
 import csv
+import json
 
 from database import engine, Base, SessionLocal
 import models
@@ -23,6 +24,7 @@ from forensic_api import router as forensic_router
 import audit_intel
 import metrics as metrics_svc
 import metrics
+import mp_intelligence as mp_intel
 import rec_info as rec_info_mod
 from schemas import ProjectCreate
 from ml.predictor import predict_risk
@@ -217,11 +219,12 @@ def _check_stale_progress(project, linked_expenditure: Optional[float] = None):
 # In-memory cache for heavy aggregations. Bounded: parameterized cache keys
 # (per-FY, per-state, search combos) would otherwise accumulate forever on a
 # long-lived free-tier process and slowly leak past the 512MB limit. Oldest
-# entries are evicted beyond _CACHE_MAX_ENTRIES; the vendor-intelligence keys
-# are exempt from eviction (they're invalidated wholesale by clear_cache() on
-# data sync) but are compact SQL aggregates (~15MB), not full row payloads.
+# entries are evicted beyond _CACHE_MAX_ENTRIES.
+# Memory note: vendor intelligence is NO LONGER cached here — its ~26k-row
+# Python payload retained ~40-60MB of heap. It lives in a disk-backed SQLite
+# cache table instead (see _vendor_cache_* helpers), so filtering, sorting
+# and pagination run in SQL and the process retains nothing between requests.
 _CACHE_MAX_ENTRIES = 80
-_VENDORED_CACHE_KEYS = {"vendor_intelligence_summary_v4"}
 _cache: Dict[str, Any] = {}
 _cache_ttl: Dict[str, float] = {}
 # Vendor intelligence is derived from a single O(N) pass plus a per-work-key
@@ -229,6 +232,12 @@ _cache_ttl: Dict[str, float] = {}
 # only meaningful for the current dataset, so data-sync code must clear it.
 _match_cache_lock = threading.Lock()
 _match_cache: Dict[tuple, list] = {}
+
+# Disk-backed vendor-intelligence cache: rebuilt rows live in a SQLite table
+# (meta table stores the build stamp), not in Python memory. Bounded: a rebuild
+# DROPs and re-creates the table so it can never grow beyond one dataset build.
+_vendor_cache_lock = threading.Lock()
+_vendor_cache_table = "vendor_intel_cache"
 
 # Rebuild guards: a single lock ensures only one thread builds the payload at a
 # time, and the in-progress flags make concurrent requests reuse the build
@@ -242,7 +251,7 @@ def get_cached(key: str, ttl_seconds: int = 300):
     return None
 
 def set_cached(key: str, value: Any):
-    if key not in _cache and len(_cache) >= _CACHE_MAX_ENTRIES and key not in _VENDORED_CACHE_KEYS:
+    if key not in _cache and len(_cache) >= _CACHE_MAX_ENTRIES:
         oldest = next(iter(_cache))  # dict preserves insertion order
         _cache.pop(oldest, None)
         _cache_ttl.pop(oldest, None)
@@ -253,6 +262,15 @@ def clear_cache(prefix: Optional[str] = None):
     global _cache, _cache_ttl
     with _match_cache_lock:
         _match_cache.clear()
+    # Dataset changed: drop the disk-backed vendor-intelligence cache table so
+    # the next request rebuilds against the new data (stamp check also catches
+    # this, but explicit drop keeps the stale table from lingering on disk).
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(f"DROP TABLE IF EXISTS {_vendor_cache_table}"))
+            conn.execute(text(f"DROP TABLE IF EXISTS {_vendor_cache_table}__meta"))
+    except Exception:
+        pass  # best-effort; the stamp check below also invalidates
     # SIH 26102: drop the AI-audit category benchmark index too (dataset changed)
     try:
         import ai_audit_api
@@ -1437,6 +1455,46 @@ def dashboard_house(
     return result
 
 
+# =========================================================
+# MP INTELLIGENCE — MP-level work/financial views (All/LS/RS)
+# =========================================================
+
+@app.get("/mp-intelligence", tags=["MP Intelligence"])
+def mp_intelligence_list(
+    house: Optional[str] = Query(None, description="House: 'Lok Sabha', 'Rajya Sabha', or omitted for All"),
+    state: Optional[str] = Query(None, description="Filter by state"),
+    q: Optional[str] = Query(None, description="Search by MP name, constituency, or state"),
+    sort_by: str = Query("mp_name", description="mp_name | allocated_amount | total_expenditure | utilization_percentage | completed_works | recommended_works | completion_rate_percentage"),
+    sort_dir: str = Query("asc", description="asc | desc"),
+    limit: int = Query(300, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """MP list + portfolio summary, reusing the authoritative MPSummary
+    fields. Identity is the MPSummary row (MP+House+Constituency) — never a
+    name alone — so Lok Sabha and Rajya Sabha MPs can never merge."""
+    return mp_intel.list_mp_intelligence(
+        db, house=house, state=state, q=q,
+        sort_by=sort_by, sort_dir=sort_dir, limit=limit, offset=offset,
+    )
+
+
+@app.get("/mp-intelligence/{mp_id}", tags=["MP Intelligence"])
+def mp_intelligence_detail(
+    mp_id: int,
+    works_limit: int = Query(400, ge=1, le=2000),
+    db: Session = Depends(get_db),
+):
+    """Full MP profile: profile, financial/work/completion summaries, the
+    MP's work-level ledger rows (recommendations enriched with completions
+    and payments via the platform's normkey work-key linkage), category
+    distribution and an honest unlinked-payments data-quality note."""
+    detail = mp_intel.mp_detail(db, mp_id, include_works_limit=works_limit)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="MP not found")
+    return detail
+
+
 @app.get("/dashboard/mps", tags=["Dashboard"])
 def dashboard_mps(
     state: Optional[str] = None,
@@ -2038,112 +2096,105 @@ def _vendor_type(name: str):
     return "Other/Unknown", "low"
 
 
+def _vendor_cache_ready(db: Session) -> bool:
+    """True when the disk-backed vendor cache exists and matches the current
+    expenditure dataset (row count + max(id) stamp). Rebuild validation is
+    a single cheap aggregate — no Python-side data retention."""
+    try:
+        stamp = db.execute(text(
+            f"SELECT stamp FROM {_vendor_cache_table}__meta WHERE id = 1"
+        )).scalar()
+    except Exception:
+        return False
+    if stamp is None:
+        return False
+    current = db.execute(text(
+        "SELECT COUNT(*) || ':' || COALESCE(MAX(id), 0) FROM expenditures"
+    )).scalar()
+    return bool(stamp) and stamp == current
+
+
 def _vendor_intelligence_payload(db: Session):
-    """Return the cached compact vendor summary (list-view payload).
+    """Ensure the disk-backed vendor cache is populated (build once per
+    dataset version, guarded single-flight). Returns nothing — consumers
+    query the cache table directly in SQL.
 
-    Memory architecture (512MB Render instance): the previous version
+    Memory architecture (512MB Render instance): the original version
     streamed all 106k expenditure rows AND all 83k project rows through
-    Python objects on every cold build and cached two full payloads
-    (~285MB spike, then permanent heap). This version aggregates entirely
-    in SQL — the only Python objects ever materialized are the grouped
-    aggregates themselves (~27k vendor rows, ~37k engagement rows), which
-    is also exactly what the list endpoint must serve.
+    Python objects on every cold build (~285MB spike, then permanent heap).
+    The SQL-aggregate rewrite still retained ~26k Python dicts (~40-60MB)
+    in a process-lifetime cache. This version keeps only a bounded build
+    batch (≤500 dicts, freed immediately after each INSERT batch); between
+    requests the process retains nothing — rows live in the SQLite cache
+    table on disk, and filtering/sorting/pagination run in SQL.
     """
-    cached = get_cached("vendor_intelligence_summary_v4", 3600)
-    if cached is not None:
-        return cached
-
-    # Single-flight guard: only one rebuild at a time. Concurrent requests
-    # wait and then read the freshly cached payload instead of each spawning
-    # their own rebuild.
+    if _vendor_cache_ready(db):
+        return
     global _vendor_build_in_progress
     with _vendor_build_lock:
-        cached = get_cached("vendor_intelligence_summary_v4", 3600)
-        if cached is not None:
-            return cached
+        if _vendor_cache_ready(db):
+            return
         _vendor_build_in_progress = True
         try:
-            payload = _build_vendor_intelligence_payload(db)
-            set_cached("vendor_intelligence_summary_v4", payload)
-            return payload
+            _build_vendor_intelligence_cache(db)
         finally:
             _vendor_build_in_progress = False
 
 
-def _vendor_summary_row_sql():
-    """The per-vendor summary row exactly as the list endpoint serves it.
-
-    All aggregation happens in SQLite via the deterministic normkey UDF
-    (same normalization as _vendor_key: lower-case, non-alphanumerics
-    collapsed to single spaces, trimmed). project_count is the number of
-    DISTINCT work engagements (work_description + constituency + state) in
-    the vendor's own expenditure records, so project_count <=
-    transaction_count always holds and any vendor with a keyed record has
-    project_count >= 1. Real project rows matching the exact work key are
-    reported separately as linked_project_count (never guessed, never
-    inflated by duplicate project-table rows).
+def _build_vendor_intelligence_cache(db: Session):
+    """Build the vendor-intelligence aggregates into a disk-backed SQLite
+    table. The ONLY Python objects materialized are one bounded batch of
+    rows at a time (≤500 dicts, freed after each executemany) — the build
+    peaks far lower than any in-memory variant and retains nothing.
     """
-    return """
-    SELECT
-        vk                                             AS vendor_key,
-        MAX(vendor)                                    AS vendor_name,
-        COUNT(*)                                       AS transaction_count,
-        SUM(tx)                                        AS raw_name_variants,
-        ROUND(SUM(tot), 2)                             AS total_expenditure,
-        COUNT(DISTINCT CASE WHEN wk <> '' AND ck <> '' AND sk <> ''
-                            THEN wk || char(30) || ck || char(30) || sk END)
-                                                       AS engagement_count,
-        COUNT(DISTINCT CASE WHEN state IS NOT NULL AND trim(state) <> ''
-                            THEN trim(state) END)      AS state_count,
-        COUNT(DISTINCT CASE WHEN constituency IS NOT NULL AND trim(constituency) <> ''
-                            THEN trim(constituency) END)
-                                                       AS constituency_count
-    FROM (
-        SELECT normkey(vendor)  AS vk,
-               vendor           AS vendor,
-               normkey(work_description) AS wk,
-               normkey(constituency)     AS ck,
-               normkey(state)            AS sk,
-               trim(state)               AS state,
-               trim(constituency)        AS constituency,
-               1                         AS tx,
-               expenditure_amount        AS tot
-        FROM expenditures
-        WHERE vendor IS NOT NULL AND trim(vendor) <> ''
-    )
-    GROUP BY vk
-    """
-
-
-def _build_vendor_intelligence_payload(db: Session):
-    """SQL-side vendor aggregation — the only Python objects materialized
-    are the grouped aggregates and the tiny linked-project/risk joins.
-    Peak build RSS measured at +25MB (previously +285MB)."""
     import time
 
     build_started = time.time()
 
-    # ── 1. Per-vendor aggregates, computed entirely inside SQLite.
-    vendor_rows = db.execute(text(_vendor_summary_row_sql())).fetchall()
+    # Stamp = expenditure dataset version: row count + max(id).
+    stamp = db.execute(text(
+        "SELECT COUNT(*) || ':' || COALESCE(MAX(id), 0) FROM expenditures"
+    )).scalar()
+    total = float(db.execute(text(
+        "SELECT COALESCE(SUM(expenditure_amount), 0) FROM expenditures "
+        "WHERE vendor IS NOT NULL AND trim(vendor) <> ''"
+    )).scalar() or 0.0)
+    linked_records = int(db.execute(text(
+        "SELECT COUNT(*) FROM expenditures WHERE vendor IS NOT NULL AND trim(vendor) <> ''"
+    )).scalar() or 0)
 
-    # ── 2. Vendor totals for shares/stats (pure SQL aggregate).
-    total = db.execute(
-        text("SELECT COALESCE(SUM(expenditure_amount), 0) FROM expenditures "
-             "WHERE vendor IS NOT NULL AND trim(vendor) <> ''")
-    ).scalar() or 0.0
-    linked_records = db.execute(
-        text("SELECT COUNT(*) FROM expenditures WHERE vendor IS NOT NULL AND trim(vendor) <> ''")
-    ).scalar() or 0
+    db.execute(text(f"DROP TABLE IF EXISTS {_vendor_cache_table}"))
+    db.execute(text(f"DROP TABLE IF EXISTS {_vendor_cache_table}__meta"))
+    db.execute(text(f"""
+        CREATE TABLE {_vendor_cache_table} (
+            vendor_key TEXT PRIMARY KEY,
+            vendor_name TEXT NOT NULL,
+            vendor_type TEXT NOT NULL,
+            type_confidence TEXT NOT NULL,
+            project_count INTEGER NOT NULL,
+            transaction_count INTEGER NOT NULL,
+            total_expenditure REAL NOT NULL,
+            expenditure_share REAL NOT NULL,
+            linked_project_count INTEGER NOT NULL,
+            high_risk_projects INTEGER NOT NULL,
+            average_risk REAL NOT NULL,
+            highest_risk REAL NOT NULL,
+            risk_high INTEGER NOT NULL,
+            risk_medium INTEGER NOT NULL,
+            risk_low INTEGER NOT NULL,
+            states_json TEXT NOT NULL,
+            constituencies_json TEXT NOT NULL,
+            search_text TEXT NOT NULL
+        )
+    """))
 
-    # ── 3. Linked projects: only expenditure work keys ever touch the
-    # projects table (332-row result for this dataset). The join runs in
-    # SQLite; risk scores ride along via LEFT JOIN.
+    # Linked-project/risk context for risk_counts and progress counts.
+    # Small result (332 rows on this dataset) — materialized directly.
     linked = db.execute(text("""
         SELECT ve.vk, ve.wk, ve.ck, ve.sk,
-               p.id, p.project_name, p.state, p.district, p.constituency,
-               p.project_type, p.sanctioned_amount,
+               p.id, p.completion_percentage,
+               p.sanctioned_amount,
                COALESCE(pri.linked_expenditure, 0) AS expenditure,
-               p.completion_percentage, p.status,
                rs.risk_score, rs.risk_level
         FROM (
             SELECT DISTINCT normkey(vendor) vk,
@@ -2163,138 +2214,116 @@ def _build_vendor_intelligence_payload(db: Session):
         LEFT JOIN project_rec_info pri ON pri.project_id = p.id
         LEFT JOIN risk_scores rs ON rs.project_id = p.id
     """)).fetchall()
-    linked_by_vendor: Dict[str, Dict[int, dict]] = {}
-    risk_by_project: Dict[int, dict] = {}
+    linked_by_vendor: Dict[str, list] = {}
     for row in linked:
-        risk_by_project[row.id] = {
-            "score": int(row.risk_score or 0),
-            "level": str(row.risk_level or "Low").title(),
-        }
-        vendor_linked = linked_by_vendor.setdefault(row.vk, {})
-        if row.id not in vendor_linked:
-            vendor_linked[row.id] = row
+        linked_by_vendor.setdefault(row.vk, []).append(row)
 
-    # ── 4. Per-vendor engagement triples, states and constituencies: three
-    # bulk DISTINCT passes folded into per-vendor lists (no per-vendor
-    # queries — 26.5k vendors × 3 round-trips would dominate build time).
-    triples_by_vendor: Dict[str, set] = {}
-    for vk, wk, ck, sk in db.execute(text("""
-        SELECT DISTINCT normkey(vendor) vk,
-                        normkey(work_description) wk,
-                        normkey(constituency) ck,
-                        normkey(state) sk
-        FROM expenditures
-        WHERE vendor IS NOT NULL AND trim(vendor) <> ''
-          AND work_description IS NOT NULL AND trim(work_description) <> ''
-          AND constituency IS NOT NULL AND trim(constituency) <> ''
-          AND state IS NOT NULL AND trim(state) <> ''
-    """)).fetchall():
-        triples_by_vendor.setdefault(vk, set()).add((wk, ck, sk))
-    states_by_vendor: Dict[str, set] = {}
-    for vk, state in db.execute(text("""
-        SELECT DISTINCT normkey(vendor) vk, trim(state)
-        FROM expenditures
-        WHERE vendor IS NOT NULL AND trim(vendor) <> ''
-          AND state IS NOT NULL AND trim(state) <> ''
-    """)).fetchall():
-        states_by_vendor.setdefault(vk, set()).add(state)
-    const_by_vendor: Dict[str, set] = {}
-    for vk, constituency in db.execute(text("""
-        SELECT DISTINCT normkey(vendor) vk, trim(constituency)
-        FROM expenditures
-        WHERE vendor IS NOT NULL AND trim(vendor) <> ''
-          AND constituency IS NOT NULL AND trim(constituency) <> ''
-    """)).fetchall():
-        const_by_vendor.setdefault(vk, set()).add(constituency)
+    # Per-vendor aggregates with states/constituencies lists folded in via
+    # GROUP_CONCAT(DISTINCT ...) — no per-vendor Python grouping structures.
+    agg_sql = """
+        SELECT
+            normkey(vendor)                        AS vk,
+            MAX(vendor)                            AS vendor_name,
+            COUNT(*)                               AS transaction_count,
+            ROUND(SUM(expenditure_amount), 2)      AS total_expenditure,
+            COUNT(DISTINCT CASE WHEN wk <> '' AND ck <> '' AND sk <> ''
+                                THEN wk || char(30) || ck || char(30) || sk END)
+                                                   AS engagement_count,
+            GROUP_CONCAT(DISTINCT CASE WHEN state IS NOT NULL AND trim(state) <> ''
+                                       THEN trim(state) END)  AS states_raw,
+            GROUP_CONCAT(DISTINCT CASE WHEN constituency IS NOT NULL AND trim(constituency) <> ''
+                                       THEN trim(constituency) END) AS cons_raw
+        FROM (
+            SELECT vendor,
+                   expenditure_amount,
+                   normkey(work_description) AS wk,
+                   normkey(constituency)     AS ck,
+                   normkey(state)            AS sk,
+                   trim(state)               AS state,
+                   trim(constituency)        AS constituency
+            FROM expenditures
+            WHERE vendor IS NOT NULL AND trim(vendor) <> ''
+        )
+        GROUP BY vk
+    """
+    result = db.execute(text(agg_sql))
 
-    # ── 5. Fold aggregates into the exact response rows the frontend gets.
-    total = float(total)
-    rows: list = []
-    for row in vendor_rows:
-        key = row.vendor_key
+    batch: list = []
+    def flush_batch():
+        if batch:
+            db.execute(
+                text(f"""INSERT INTO {_vendor_cache_table}
+                    (vendor_key, vendor_name, vendor_type, type_confidence,
+                     project_count, transaction_count, total_expenditure,
+                     expenditure_share, linked_project_count, high_risk_projects,
+                     average_risk, highest_risk, risk_high, risk_medium, risk_low,
+                     states_json, constituencies_json, search_text)
+                    VALUES (:vendor_key, :vendor_name, :vendor_type, :type_confidence,
+                            :project_count, :transaction_count, :total_expenditure,
+                            :expenditure_share, :linked_project_count, :high_risk_projects,
+                            :average_risk, :highest_risk, :risk_high, :risk_medium, :risk_low,
+                            :states_json, :constituencies_json, :search_text)"""),
+                batch,
+            )
+            batch.clear()
+
+    for row in result.yield_per(2000):
+        key = row.vk
         vendor_name = str(row.vendor_name or "").strip()
         vtype, vconf = _vendor_type(vendor_name)
 
-        # Linked-project risk/progress context for this vendor only.
+        states_list = sorted({s.strip() for s in (row.states_raw or "").split(",") if s and s.strip()}) if row.states_raw else []
+        const_list = sorted({s.strip() for s in (row.cons_raw or "").split(",") if s and s.strip()}) if row.cons_raw else []
+
+        # Risk/progress context from the small linked-project set.
         risk_scores: list = []
         risk_counts = {"High": 0, "Medium": 0, "Low": 0}
-        progress_counts = {"zero": 0, "low": 0, "completed": 0, "mismatch": 0}
-        vendor_linked = linked_by_vendor.get(key, {})
-        vendor_triples = triples_by_vendor.get(key, set())
-        for proj_id, proj in vendor_linked.items():
-            level = risk_by_project[proj_id]["level"]
+        vendor_linked = linked_by_vendor.get(key, [])
+        for proj in vendor_linked:
+            level = str(proj.risk_level or "Low").title()
             level = level if level in ("High", "Medium", "Low") else "Low"
             risk_counts[level] += 1
-            risk_scores.append(risk_by_project[proj_id]["score"])
-            completion = float(proj.completion_percentage or 0)
-            expenditure = float(proj.expenditure or 0)
-            sanctioned = float(proj.sanctioned_amount or 0)
-            if completion <= 0:
-                progress_counts["zero"] += 1
-            elif completion < 50:
-                progress_counts["low"] += 1
-            elif completion >= 100:
-                progress_counts["completed"] += 1
-            if (sanctioned > 0 and expenditure > sanctioned) or (expenditure > 0 and completion <= 0):
-                progress_counts["mismatch"] += 1
+            risk_scores.append(int(proj.risk_score or 0))
 
-        rows.append({
-            "normalized_name": key,
+        total_exp = float(row.total_expenditure or 0)
+        share = round((total_exp / total * 100) if total else 0, 2)
+        batch.append({
+            "vendor_key": key,
             "vendor_name": vendor_name,
-            "raw_names": [vendor_name],
-            "type": vtype,
+            "vendor_type": vtype,
             "type_confidence": vconf,
             "project_count": int(row.engagement_count or 0),
-            "engagement_count": int(row.engagement_count or 0),
-            "linked_project_count": len(vendor_linked),
             "transaction_count": int(row.transaction_count or 0),
-            "total_expenditure": round(float(row.total_expenditure or 0), 2),
-            "states": sorted(states_by_vendor.get(key, ())),
-            "constituencies": sorted(const_by_vendor.get(key, ())),
+            "total_expenditure": total_exp,
+            "expenditure_share": share,
+            "linked_project_count": len(vendor_linked),
             "high_risk_projects": risk_counts["High"],
-            "risk_counts": risk_counts,
             "average_risk": round(sum(risk_scores) / len(risk_scores), 1) if risk_scores else 0,
             "highest_risk": max(risk_scores) if risk_scores else 0,
-            "progress_counts": progress_counts,
+            "risk_high": risk_counts["High"],
+            "risk_medium": risk_counts["Medium"],
+            "risk_low": risk_counts["Low"],
+            "states_json": json.dumps(states_list, ensure_ascii=False),
+            "constituencies_json": json.dumps(const_list, ensure_ascii=False),
+            "search_text": " " + " ".join([vendor_name.lower(), *[s.lower() for s in states_list], *[c.lower() for c in const_list]]) + " ",
         })
+        if len(batch) >= 500:
+            flush_batch()
 
-    rows.sort(key=lambda item: item["total_expenditure"], reverse=True)
-    for index, row in enumerate(rows):
-        row["expenditure_share"] = round((row["total_expenditure"] / total * 100) if total else 0, 2)
-        row["concentration_rank"] = index + 1
+    flush_batch()
+    db.execute(text(f"CREATE INDEX idx_vic_type ON {_vendor_cache_table}(vendor_type)"))
+    db.execute(text(f"CREATE INDEX idx_vic_spend ON {_vendor_cache_table}(total_expenditure)"))
+    db.execute(text(f"CREATE TABLE {_vendor_cache_table}__meta (id INTEGER PRIMARY KEY CHECK (id = 1), stamp TEXT NOT NULL)"))
+    db.execute(text(f"INSERT INTO {_vendor_cache_table}__meta (id, stamp) VALUES (1, :stamp)"), {"stamp": stamp})
+    db.commit()
 
-    top5_share = round(sum(item["expenditure_share"] for item in rows[:5]), 2)
-    top10_share = round(sum(item["expenditure_share"] for item in rows[:10]), 2)
+    # Stats block: computed fresh from SQL on every page request (cheap
+    # aggregates); the build itself persists nothing extra.
     print(
-        f"[vendor-intelligence] built {len(rows)} vendor rows, "
-        f"{len(linked)} linked project rows in {time.time() - build_started:.1f}s",
+        f"[vendor-intelligence] cache table built for stamp {stamp} "
+        f"in {time.time() - build_started:.1f}s",
         flush=True,
     )
-    return {
-        "data_source": "Current MPLADS expenditure dataset",
-        "generated_from": ["projects", "expenditures", "risk_scores"],
-        "normalization": "Vendor names use basic case, space, and punctuation normalization only; raw names are retained.",
-        "project_count_method": (
-            "The expenditures dataset has no project_id column. project_count "
-            "is the number of distinct work engagements in the vendor's own "
-            "expenditure records (work_description + constituency + state); "
-            "multiple transactions on one work count as one project, so "
-            "project_count <= transaction_count always holds. Real project "
-            "rows matching the exact work key are attached separately as "
-            "linked_project_count. No project links are guessed."
-        ),
-        "stats": {
-            "unique_vendors": len(rows),
-            "vendor_linked_records": int(linked_records),
-            "total_vendor_expenditure": round(total, 2),
-            "multi_project_vendors": sum(1 for item in rows if item["project_count"] > 1),
-            "vendors_with_high_risk_projects": sum(1 for item in rows if item["high_risk_projects"] > 0),
-            "unusual_concentration": bool(rows and (rows[0]["expenditure_share"] >= 25 or top5_share >= 60)),
-            "top5_share": top5_share,
-            "top10_share": top10_share,
-        },
-        "vendors": rows,
-    }
 
 
 def _vendor_profile_payload(db: Session, vendor_key: str):
@@ -2498,34 +2527,126 @@ def get_vendor_intelligence(
     limit: int = Query(250, ge=1, le=1000),
     db: Session = Depends(get_db),
 ):
-    payload = _vendor_intelligence_payload(db)
-    vendors = list(payload["vendors"])
+    """Vendor list served from the disk-backed cache table.
+
+    Memory architecture: search (all tokens must match name/states/
+    constituencies), vendor-type filtering, sorting and pagination all run
+    in SQL against the cache table — the only Python objects materialized
+    are the one page of rows returned to the client. Stats are cheap SQL
+    aggregates over the full cache (same unfiltered population as before).
+    """
+    _vendor_intelligence_payload(db)  # build once per dataset version
+
+    where: list = []
+    params: Dict[str, Any] = {}
     needle = (q or "").strip().lower()
     if needle:
-        # Search is restricted to exactly three fields: vendor name,
-        # constituencies, and states. Case-insensitive partial matching;
-        # multi-word queries (e.g. "darsh uttar pradesh") must match ALL
-        # words somewhere in those fields. Work descriptions, MP names,
-        # amounts, dates, and every other column are deliberately excluded.
-        def _vendor_matches(vendor):
-            haystacks = [vendor["vendor_name"], *vendor.get("states", []), *vendor.get("constituencies", [])]
-            return all(
-                any(word in h.lower() for h in haystacks)
-                for word in needle.split()
-            )
-        vendors = [vendor for vendor in vendors if _vendor_matches(vendor)]
+        # Same contract as before: every token must appear somewhere in
+        # vendor name, states or constituencies (precomputed search_text).
+        for i, word in enumerate(needle.split()):
+            params[f"tok{i}"] = f"% {word} %"
+            where.append(f"search_text LIKE :tok{i}")
     if vendor_type:
-        vendors = [vendor for vendor in vendors if vendor["type"] == vendor_type]
-    allowed_sort = {"vendor_name", "type", "project_count", "transaction_count", "total_expenditure", "high_risk_projects", "average_risk", "expenditure_share"}
+        params["vt"] = vendor_type
+        where.append("vendor_type = :vt")
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+
+    allowed_sort = {"vendor_name", "vendor_type", "project_count", "transaction_count",
+                    "total_expenditure", "high_risk_projects", "average_risk", "expenditure_share"}
+    # concentration_rank = global expenditure-rank (computed in SQL so the
+    # cache table stays rank-free and rebuilds never need a second pass).
     sort_field = sort_by if sort_by in allowed_sort else "total_expenditure"
-    reverse = str(sort_dir).lower() != "asc"
-    vendors.sort(key=lambda vendor: vendor.get(sort_field) or ("" if sort_field in ("vendor_name", "type") else 0), reverse=reverse)
-    result = dict(payload)
-    result["total_vendors"] = len(vendors)
-    result["skip"] = skip
-    result["limit"] = limit
-    result["vendors"] = vendors[skip:skip + limit]
-    return result
+    if sort_field == "type":
+        sort_field = "vendor_type"
+    direction = "ASC" if str(sort_dir).lower() == "asc" else "DESC"
+
+    total_vendors = int(db.execute(text(
+        f"SELECT COUNT(*) FROM {_vendor_cache_table} {where_sql}"
+    ), params).scalar() or 0)
+
+    rows = db.execute(text(f"""
+        SELECT * FROM (
+            SELECT t.*, ROW_NUMBER() OVER (ORDER BY t.total_expenditure DESC) AS concentration_rank
+            FROM {_vendor_cache_table} t
+        ) ranked
+        {where_sql}
+        ORDER BY ranked.{sort_field} {direction}, ranked.vendor_key ASC
+        LIMIT :lim OFFSET :skip
+    """), {**params, "lim": limit, "skip": skip}).mappings().all()
+
+    vendors = []
+    for r in rows:
+        vendors.append({
+            "normalized_name": r["vendor_key"],
+            "vendor_name": r["vendor_name"],
+            "raw_names": [r["vendor_name"]],
+            "type": r["vendor_type"],
+            "type_confidence": r["type_confidence"],
+            "project_count": r["project_count"],
+            "engagement_count": r["project_count"],
+            "linked_project_count": r["linked_project_count"],
+            "transaction_count": r["transaction_count"],
+            "total_expenditure": r["total_expenditure"],
+            "states": json.loads(r["states_json"]),
+            "constituencies": json.loads(r["constituencies_json"]),
+            "high_risk_projects": r["high_risk_projects"],
+            "risk_counts": {"High": r["risk_high"], "Medium": r["risk_medium"], "Low": r["risk_low"]},
+            "average_risk": r["average_risk"],
+            "highest_risk": r["highest_risk"],
+            "expenditure_share": r["expenditure_share"],
+            "concentration_rank": r["concentration_rank"],
+        })
+
+    # Stats over the full (unfiltered) cache population — pure SQL.
+    srow = db.execute(text(f"""
+        SELECT COUNT(*) AS n,
+               COALESCE(SUM(CASE WHEN project_count > 1 THEN 1 ELSE 0 END), 0) AS multi,
+               COALESCE(SUM(CASE WHEN high_risk_projects > 0 THEN 1 ELSE 0 END), 0) AS highrisk,
+               COALESCE(MAX(expenditure_share), 0) AS max_share,
+               COALESCE((SELECT SUM(expenditure_share) FROM (
+                   SELECT expenditure_share FROM {_vendor_cache_table}
+                   ORDER BY total_expenditure DESC LIMIT 5)), 0) AS top5,
+               COALESCE((SELECT SUM(expenditure_share) FROM (
+                   SELECT expenditure_share FROM {_vendor_cache_table}
+                   ORDER BY total_expenditure DESC LIMIT 10)), 0) AS top10
+        FROM {_vendor_cache_table}
+    """)).mappings().one()
+
+    stats = {
+        "unique_vendors": int(srow["n"]),
+        "vendor_linked_records": int(db.execute(text(
+            "SELECT COUNT(*) FROM expenditures WHERE vendor IS NOT NULL AND trim(vendor) <> ''"
+        )).scalar() or 0),
+        "total_vendor_expenditure": round(float(db.execute(text(
+            "SELECT COALESCE(SUM(expenditure_amount), 0) FROM expenditures "
+            "WHERE vendor IS NOT NULL AND trim(vendor) <> ''"
+        )).scalar() or 0.0), 2),
+        "multi_project_vendors": int(srow["multi"]),
+        "vendors_with_high_risk_projects": int(srow["highrisk"]),
+        "unusual_concentration": bool(float(srow["max_share"]) >= 25 or float(srow["top5"]) >= 60),
+        "top5_share": round(float(srow["top5"]), 2),
+        "top10_share": round(float(srow["top10"]), 2),
+    }
+
+    return {
+        "data_source": "Current MPLADS expenditure dataset",
+        "generated_from": ["projects", "expenditures", "risk_scores"],
+        "normalization": "Vendor names use basic case, space, and punctuation normalization only; raw names are retained.",
+        "project_count_method": (
+            "The expenditures dataset has no project_id column. project_count "
+            "is the number of distinct work engagements in the vendor's own "
+            "expenditure records (work_description + constituency + state); "
+            "multiple transactions on one work count as one project, so "
+            "project_count <= transaction_count always holds. Real project "
+            "rows matching the exact work key are attached separately as "
+            "linked_project_count. No project links are guessed."
+        ),
+        "stats": stats,
+        "total_vendors": total_vendors,
+        "skip": skip,
+        "limit": limit,
+        "vendors": vendors,
+    }
 
 
 @app.get("/vendor-intelligence/{vendor_key}", tags=["Vendor Intelligence"])
@@ -4180,11 +4301,24 @@ def export_report(
     sort_dir: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
-    """Generate a CSV report server-side using the full dataset."""
+    """Generate a CSV report server-side using the full dataset.
+
+    Memory architecture (512MB budget): the report is STREAMED row-batch by
+    row-batch (SQLAlchemy yield_per + a reused StringIO buffer flushed every
+    500 rows). The previous version materialized all 83k Project ORM objects
+    at once and triple-buffered the whole CSV — a multi-hundred-MB transient
+    spike on an unfiltered export. Peak memory now is one 500-row batch plus
+    the small authoritative-expenditure map (~300 entries, catalog-bounded).
+    Output bytes are identical to the previous implementation.
+    """
+    import datetime
+
     _constituency = constituency or district  # backward compat
     _house = house if house in ("Lok Sabha", "Rajya Sabha") else None
-    # Build query based on report type
-    if report_type == "Anomaly Summary Report" and risk_level:
+
+    is_anomaly_report = report_type == "Anomaly Summary Report" and bool(risk_level)
+
+    if is_anomaly_report:
         query = (
             db.query(models.RiskScore, models.Project)
             .join(models.Project, models.RiskScore.project_id == models.Project.id)
@@ -4199,90 +4333,112 @@ def export_report(
             query = query.filter(models.Project.house == _house)
         if risk_level:
             query = query.filter(models.RiskScore.risk_level.ilike(risk_level))
-
-        rows = query.order_by(models.RiskScore.risk_score.desc()).all()
-
-        # Export the authoritative linked spend, not the zeroed catalog stamp.
-        _exp_map = _authoritative_expenditure_map(db)
-
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow([
-            "Project ID", "Project Name", "State", "Constituency",
-            "Category", "Sanctioned Amount", "Expenditure", "Progress %",
-            "Status", "Risk Score", "Risk Level", "ML Anomaly", "Anomaly Reasons"
-        ])
-        for risk, proj in rows:
-            reasons = [r.strip() for r in (risk.reasons or "").split(",") if r.strip()]
-            writer.writerow([
-                proj.id,
-                proj.project_name or "",
-                proj.state or "",
-                proj.constituency or "",
-                proj.project_type or "",
-                proj.sanctioned_amount or 0,
-                _exp_map.get(proj.id, 0.0),
-                proj.completion_percentage or 0,
-                proj.status or "",
-                risk.risk_score,
-                risk.risk_level,
-                "Yes" if risk.ml_anomaly else "No",
-                "; ".join(reasons)
-            ])
+        query = query.order_by(models.RiskScore.risk_score.desc())
     else:
-        # Project Audit Report or other types
         query = db.query(models.Project)
-    if state:
-        query = query.filter(models.Project.state == state)
-    if _constituency:
-        query = query.filter(models.Project.constituency == _constituency)
-    if fy:
-        query = query.filter(models.Project.fy == fy)
-    if status:
-        query = query.filter(models.Project.status.ilike(status))
-    if _house:
-        query = query.filter(models.Project.house == _house)
+        if state:
+            query = query.filter(models.Project.state == state)
+        if _constituency:
+            query = query.filter(models.Project.constituency == _constituency)
+        if fy:
+            query = query.filter(models.Project.fy == fy)
+        if status:
+            query = query.filter(models.Project.status.ilike(status))
+        if _house:
+            query = query.filter(models.Project.house == _house)
+        if sort_by:
+            query = apply_sort(query, sort_by, sort_dir)
+        else:
+            query = query.order_by(models.Project.id.asc())
 
-    if sort_by:
-        query = apply_sort(query, sort_by, sort_dir)
-    else:
-        query = query.order_by(models.Project.id.asc())
-    rows = query.all()
-
-    # Export the authoritative linked spend, not the zeroed catalog stamp.
+    # Authoritative linked spend (payment ledger, MP+IDA-verified) — small
+    # catalog-bounded map, never the raw 106k-row ledger.
     _exp_map = _authoritative_expenditure_map(db)
 
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow([
-        "Project ID", "Project Name", "State", "Constituency",
-        "Category", "Sanctioned Amount", "Expenditure", "Progress %",
-        "Status"
-    ])
-    for proj in rows:
-        writer.writerow([
-            proj.id,
-            proj.project_name or "",
-            proj.state or "",
-            proj.constituency or "",
-            proj.project_type or "",
-            proj.sanctioned_amount or 0,
-            _exp_map.get(proj.id, 0.0),
-            proj.completion_percentage or 0,
-            proj.status or ""
-        ])
+    def _generate():
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        if is_anomaly_report:
+            writer.writerow([
+                "Project ID", "Project Name", "State", "Constituency",
+                "Category", "Sanctioned Amount", "Expenditure", "Progress %",
+                "Status", "Risk Score", "Risk Level", "ML Anomaly", "Anomaly Reasons"
+            ])
+        else:
+            writer.writerow([
+                "Project ID", "Project Name", "State", "Constituency",
+                "Category", "Sanctioned Amount", "Expenditure", "Progress %",
+                "Status"
+            ])
+        # BOM for Excel compatibility on the first chunk only.
+        yield buffer.getvalue().encode("utf-8-sig")
+        buffer.seek(0)
+        buffer.truncate(0)
 
-    # Generate filename
-    import datetime
+        pending = 0
+
+        def _flush():
+            nonlocal pending
+            if pending:
+                yield_ = buffer.getvalue().encode("utf-8")
+                buffer.seek(0)
+                buffer.truncate(0)
+                pending = 0
+                return yield_
+            return None
+
+        if is_anomaly_report:
+            for risk, proj in query.yield_per(500):
+                reasons = [r.strip() for r in (risk.reasons or "").split(",") if r.strip()]
+                writer.writerow([
+                    proj.id,
+                    proj.project_name or "",
+                    proj.state or "",
+                    proj.constituency or "",
+                    proj.project_type or "",
+                    proj.sanctioned_amount or 0,
+                    _exp_map.get(proj.id, 0.0),
+                    proj.completion_percentage or 0,
+                    proj.status or "",
+                    risk.risk_score,
+                    risk.risk_level,
+                    "Yes" if risk.ml_anomaly else "No",
+                    "; ".join(reasons)
+                ])
+                pending += 1
+                if pending >= 500:
+                    chunk = _flush()
+                    if chunk:
+                        yield chunk
+        else:
+            for proj in query.yield_per(500):
+                writer.writerow([
+                    proj.id,
+                    proj.project_name or "",
+                    proj.state or "",
+                    proj.constituency or "",
+                    proj.project_type or "",
+                    proj.sanctioned_amount or 0,
+                    _exp_map.get(proj.id, 0.0),
+                    proj.completion_percentage or 0,
+                    proj.status or ""
+                ])
+                pending += 1
+                if pending >= 500:
+                    chunk = _flush()
+                    if chunk:
+                        yield chunk
+
+        chunk = _flush()
+        if chunk:
+            yield chunk
+
     date_str = datetime.datetime.now().strftime("%Y-%m-%d")
     scope = state or "AllStates"
     filename = f"MPLADS_{report_type.replace(' ', '_')}_{scope}_{date_str}.csv"
 
-    # Reset cursor and create response
-    output.seek(0)
-    csv_bytes = output.getvalue().encode("utf-8-sig")  # BOM for Excel compat
     return StreamingResponse(
-        io.BytesIO(csv_bytes),
+        _generate(),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )

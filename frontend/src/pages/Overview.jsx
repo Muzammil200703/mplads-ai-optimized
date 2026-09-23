@@ -478,7 +478,7 @@ const Overview = memo(function Overview({ darkMode, onDrillDown, fy }) {
                 { label: "Total Expenditure", value: `₹${formatCrore(houseStats.total_expenditure)} Cr`, sub: houseStats.expenditure_transactions != null ? `Vendor payments · ${formatNumber(houseStats.expenditure_transactions)} transactions` : "Vendor payments recorded" },
                 { label: "Fund Utilization", value: `${houseStats.fund_utilization_percentage}%`, sub: "Share of allocation recommended by MPs" },
                 { label: "Expenditure Rate", value: `${houseStats.expenditure_rate_percentage}%`, sub: "Vendor expenditure as a share of allocation" },
-                { label: "Total MPs", value: formatNumber(houseStats.total_mps), sub: " MPs in the system" },
+                { label: "Total MPs", value: formatNumber(houseStats.total_mps), sub: houseStats.data_snapshot?.reference ? "Official eSAKSHI roster" : " MPs in the system" },
                 { label: "Works Completed", value: `${formatNumber(houseStats.works_completed)} (₹${formatCrore(houseStats.completed_work_value)} Cr)`, sub: "Completed works and their value" },
                 { label: "Works Pending", value: formatNumber(houseStats.works_pending), sub: "Recommended works not yet in the completions ledger" },
                 { label: "Ongoing-Work Payments", value: `₹${formatCrore(houseStats.ongoing_work_payments)} Cr`, sub: "Vendor payments linked to works not yet marked complete" },
