@@ -664,7 +664,7 @@ const RiskCenter = memo(function RiskCenter({ drillDownParams, onClearDrillDown,
                           )}
                         </td>
                         <td className="px-4 py-2.5 text-xs">
-                          <p className="font-semibold">{a.state || "N/A"}</p>
+                          <p className="font-semibold">{a.state || "N/A"}{a.house && <span className="ml-1.5 rounded bg-gray-100 px-1.5 py-px text-[0.5625rem] font-bold uppercase tracking-wide text-gray-500 dark:bg-[#232329] dark:text-gray-400" title={`House: ${a.house}`}>{a.house === "Lok Sabha" ? "LS" : a.house === "Rajya Sabha" ? "RS" : ""}</span>}</p>
                           <p className="text-gray-500">{a.constituency || "N/A"}</p>
                         </td>
                         <td className="px-4 py-2.5 text-right font-mono text-xs tabular-nums">{formatMoney(a.sanctioned_amount)}</td>

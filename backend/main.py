@@ -2776,6 +2776,7 @@ def detect_anomalies(
                 "state": proj.state,
                 "district": proj.district,
                 "constituency": proj.constituency,
+                "house": proj.house,
                 "project_type": proj.project_type,
                 "sanctioned_amount": proj.sanctioned_amount or 0.0,
                 # Authoritative linked payment-ledger spend (rec batch below).
@@ -2850,6 +2851,7 @@ def detect_anomalies(
                 "state": proj.state,
                 "district": proj.district,
                 "constituency": proj.constituency,
+                "house": proj.house,
                 "project_type": proj.project_type,
                 "sanctioned_amount": proj.sanctioned_amount or 0.0,
                 "expenditure": float((rec_map_fallback.get(proj.id) or {}).get("linked_expenditure") or 0.0),
@@ -3566,6 +3568,7 @@ def audit_priority(
             "state": proj.state,
             "district": proj.district,
             "constituency": proj.constituency,
+            "house": proj.house,
             "project_type": proj.project_type,
             "fy": proj.fy,
             "sanctioned_amount": proj.sanctioned_amount or 0.0,

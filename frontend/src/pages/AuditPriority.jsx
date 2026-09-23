@@ -406,7 +406,7 @@ const AuditPriority = memo(function AuditPriority({ fy, drillDownParams, onClear
                               )}
                             </div>
                             <h3 className="mt-1 truncate font-semibold text-sm text-gray-900 dark:text-white" title={p.project_name}>{p.project_name || "Unnamed"}</h3>
-                            <p className="text-[0.6875rem] text-gray-500">{p.state || "N/A"}{p.constituency ? ` — ${p.constituency}` : ""}</p>
+                            <p className="text-[0.6875rem] text-gray-500">{p.state || "N/A"}{p.constituency ? ` — ${p.constituency}` : ""}{p.house ? ` · ${p.house === "Lok Sabha" ? "Lok Sabha" : p.house === "Rajya Sabha" ? "Rajya Sabha" : p.house}` : ""}</p>
 
                             {/* Why Prioritized Chips */}
                             {visibleReasons.length > 0 && (
